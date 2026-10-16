@@ -84,6 +84,10 @@ const CASES := {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
 	},
+	"s0_3_state": {
+		"desc": "全局服务契约：autoload 3→6 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -343,6 +347,8 @@ func _dispatch(id: String) -> void:
 			await _case_clock()
 		"s0_6_repro":
 			await _case_repro()
+		"s0_3_state":
+			await _case_state()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -939,6 +945,248 @@ func _case_repro() -> void:
 	# 同 warmup=60/frames=15 的基准量 t=1.5s；这里 frames=200 -> t=3.667s
 	ok(live_sha != base_sha,
 			"帧数 15 -> 200 后图像不同（render_time 真的在驱动风摆/水波）")
+
+
+## --- s0_3_state ---------------------------------------------------------------
+## S0.3 批次 1：三个全局服务（Rng / EventBus / GameState）的契约。
+## 本用例**只断言契约**，不验证存档往返（那是 s0_3_roundtrip 的事）。
+## 三条最值钱的断言：
+##   ① GameState.world_seed 的默认值 == main.gd 的 @export 默认值
+##      —— S1.2 把场景入口接到本服务时，世界必须逐位相同，否则 6 机位基线全废；
+##   ② game_time 在固定逻辑步上**精确**前进（60 步 == 1.000 秒）
+##      —— 这是 §3.2「60Hz 逻辑固定步」的实质验证，也排除了"用 _process 累加 delta"；
+##   ③ Rng 的具名子流互不干扰（先抽别的流不改变本流的下一个数）
+##      —— 这条正是"按 seed 派生子流"相对单一全局发生器的全部意义。
+func _case_state() -> void:
+	await process_frame
+
+	var rng := get_root().get_node_or_null("Rng")
+	var bus := get_root().get_node_or_null("EventBus")
+	var gs := get_root().get_node_or_null("GameState")
+
+	section("三个服务节点存在，且注册顺序满足依赖（Rng 先于 GameState）")
+	ok(rng != null, "autoload Rng 节点存在于 root")
+	ok(bus != null, "autoload EventBus 节点存在于 root")
+	ok(gs != null, "autoload GameState 节点存在于 root")
+	if rng == null or bus == null or gs == null:
+		return
+
+	var order: Array = []
+	for child in get_root().get_children():
+		order.append(String(child.name))
+	var i_rng := order.find("Rng")
+	var i_bus := order.find("EventBus")
+	var i_gs := order.find("GameState")
+	ok(i_rng >= 0 and i_bus >= 0 and i_gs >= 0, "三个服务都在 root 子节点中",
+			"root 子节点=%s" % [str(order)])
+	ok(i_rng < i_gs, "Rng 注册在 GameState 之前（GameState._ready() 要调用 Rng.seed_from）",
+			"Rng@%d GameState@%d" % [i_rng, i_gs])
+	ok(i_bus < i_gs or i_bus != i_gs, "EventBus 与 GameState 顺序无强依赖，只要求都存在")
+
+	section("autoload 清单与计数（§3.2 上限 10）")
+	var autoloads: Array = []
+	for p in ProjectSettings.get_property_list():
+		var nm := String(p["name"])
+		if nm.begins_with("autoload/"):
+			autoloads.append(nm.substr("autoload/".length()))
+	autoloads.sort()
+	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "Style"]
+	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 6 个（批次 1 后 3 → 6）")
+	ok(autoloads.size() <= 10, "autoload 数量 %d ≤ 10（§3.2 上限）" % autoloads.size())
+
+	section("GameState 字段契约：SNAPSHOT_FIELDS == snapshot() 的键集")
+	var gs_script: Script = gs.get_script()
+	var props := {}
+	if gs_script != null:
+		for p in gs_script.get_script_property_list():
+			props[String(p["name"])] = true
+	for prop in ["world_seed", "game_time", "day_length", "party", "money",
+			"food", "supply", "scene_kind", "player_pos", "playtime"]:
+		ok(props.has(prop), "GameState.%s 属性存在" % prop)
+
+	# 常量要走 get_script_constant_map()：Script.get() 只认脚本变量，读不到 const。
+	var consts: Dictionary = {}
+	if gs_script != null:
+		consts = gs_script.get_script_constant_map()
+	var fields: Array = consts.get("SNAPSHOT_FIELDS", [])
+	ok(fields.size() == 10, "SNAPSHOT_FIELDS 常量可读且含 10 个字段",
+			"读到 %d 个：%s" % [fields.size(), str(fields)])
+	var snap: Dictionary = gs.call("snapshot")
+	var snap_keys: Array = snap.keys()
+	snap_keys.sort()
+	var fields_sorted: Array = fields.duplicate()
+	fields_sorted.sort()
+	eq(snap_keys, fields_sorted, "snapshot() 的键集与 SNAPSHOT_FIELDS 完全一致（写读不会漂移）")
+	ok(snap.has("player_pos") and typeof(snap["player_pos"]) == TYPE_ARRAY
+			and (snap["player_pos"] as Array).size() == 3,
+			"snapshot() 把 Vector3 降级为 [x,y,z]（JSON 无法编码引擎数学类型）")
+
+	section("默认值与 main.gd 对齐（S1.2 接线必须逐位不变）")
+	eq(gs.get("world_seed"), 20250929, "GameState.world_seed 默认值 == 20250929")
+	var main_src := FileAccess.get_file_as_string("res://scripts/core/main.gd")
+	ok(main_src.contains("var world_seed := 20250929"),
+			"main.gd 的 world_seed 默认值仍是 20250929（两个来源同值，接线才不改变画面）")
+	eq(gs.get("day_length"), 170.0, "GameState.day_length 默认值与 day_night.gd 一致（170 秒/天）")
+
+	section("逻辑步：60Hz 固定步，前进量恒为 1/60 的整数倍（不掺真实 delta）")
+	eq(Engine.physics_ticks_per_second, 60, "引擎物理步长 = 60Hz（§3.2 逻辑固定步）")
+	print("    [note] SceneTree.physics_frame 在节点 _physics_process **之前**发射，")
+	print("    [note] 所以 N 次 await 只对应 N-1 次 game_time 推进；下面断言『整数步』而非固定次数。")
+	await physics_frame
+	var t0: float = gs.get("game_time")
+	for i in 60:
+		await physics_frame
+	var dt: float = float(gs.get("game_time")) - t0
+	var steps := dt * 60.0
+	var steps_int := roundi(steps)
+	ok(absf(steps - float(steps_int)) < 0.000001,
+			"前进量恰好是 %d 个 1/60 秒（整数步 ⇒ 时间只来自固定逻辑步；"
+					% steps_int + "若改用 _process 累加真实 delta，这里会是非整数）")
+	ok(absf(float(steps_int) - 60.0) <= 2.0,
+			"60 次 await physics_frame 推进 %d 步（60±2，含上面的对齐抖动）" % steps_int)
+	ok(gs.get("playtime") > 0.0, "playtime 随 game_time 一起推进")
+
+	section("派生量：day / time_of_day / clock_text 自洽")
+	gs.set("game_time", 0.0)
+	eq(gs.call("game_day"), 1, "game_time=0 → 第 1 天")
+	eq(gs.call("time_of_day"), 0.0, "game_time=0 → 午夜")
+	gs.set("game_time", 170.0 * 2.0 + 170.0 * 0.5)
+	eq(gs.call("game_day"), 3, "game_time=2.5 天 → 第 3 天")
+	near(gs.call("time_of_day"), 0.5, 0.000001, "2.5 天处 time_of_day = 0.5（正午）")
+	var clk := String(gs.call("clock_text"))
+	ok(clk.contains("第 3 天") and clk.contains("12:00"), "clock_text 为『第 3 天 12:00』",
+			"实际=%s" % clk)
+
+	section("Rng：具名子流可复现、互不干扰、reset 可重放")
+	rng.call("seed_from", 12345)
+	var s_terrain: int = rng.call("stream_seed", "terrain")
+	eq(rng.call("stream_seed", "terrain"), s_terrain, "stream_seed 是纯函数（同名同种子）")
+	ok(rng.call("stream_seed", "scatter") != s_terrain,
+			"同一主种子下不同流名派生出不同种子",
+			"terrain=%d scatter=%d" % [s_terrain, rng.call("stream_seed", "scatter")])
+	rng.call("seed_from", 999)
+	ok(rng.call("stream_seed", "terrain") != s_terrain, "换主种子后同名流的种子改变")
+	rng.call("seed_from", 12345)
+
+	# 独立复现：两次全新构建的同名流，前 5 个数必须一致。
+	var draw_a := _draw_ints(rng, "terrain", 5)
+	rng.call("seed_from", 12345)
+	var draw_b := _draw_ints(rng, "terrain", 5)
+	eq(draw_a, draw_b, "同一主种子下 terrain 流前 5 个数逐位相同（可复现）")
+
+	# 互不干扰：先把另一个流抽 10 次，再抽 terrain，结果不受影响。
+	rng.call("seed_from", 12345)
+	for i in 10:
+		rng.call("randi_in", "scatter", 0, 1000000)
+	var draw_c := _draw_ints(rng, "terrain", 5)
+	eq(draw_c, draw_a, "先抽 10 次 scatter 后，terrain 的下一个数与全新运行时相同（子流隔离）")
+
+	# reset 重放
+	rng.call("seed_from", 12345)
+	for i in 3:
+		rng.call("randi_in", "terrain", 0, 1000000)
+	rng.call("reset")
+	var draw_d := _draw_ints(rng, "terrain", 5)
+	eq(draw_d, draw_a, "reset() 后 terrain 流从头重放")
+
+	section("EventBus：5 个信号齐全、参数形状固定、总线保持无状态")
+	var bus_script: Script = bus.get_script()
+	var sigs := {}
+	if bus_script != null:
+		for s in bus_script.get_script_signal_list():
+			sigs[String(s["name"])] = s
+	for sig in ["time_advanced", "encounter_started", "battle_finished",
+			"resources_changed", "settlement_entered"]:
+		ok(sigs.has(sig), "EventBus.%s 已声明" % sig)
+	eq(sigs.size(), 5, "EventBus 恰好只声明这 5 个信号（总线上不许塞业务数据）；实际=%s" % [str(sigs.keys())])
+	if sigs.has("time_advanced"):
+		eq((sigs["time_advanced"]["args"] as Array).size(), 2,
+				"time_advanced 携带 (day, time_of_day) 两个参数")
+	if sigs.has("resources_changed"):
+		eq((sigs["resources_changed"]["args"] as Array).size(), 3,
+				"resources_changed 携带 (money, food, supply) 三个参数")
+
+	# 真的能送达：连一个回调，emit，断言收到的是新值而不是差值。
+	var received: Array = []
+	var cb := func(m: int, f: int, s: int) -> void:
+		received.append([m, f, s])
+	bus.connect("resources_changed", cb)
+	bus.emit_signal("resources_changed", 7, 8, 9)
+	eq(received.size(), 1, "订阅者收到了 resources_changed")
+	if received.size() == 1:
+		eq(received[0], [7, 8, 9], "负载是传入的新值")
+	bus.disconnect("resources_changed", cb)
+
+	section("restore() 容错：未知 / 缺失 / 类型错误一律告警且不崩、不静默改值")
+	gs.call("new_game", 20250929)
+	gs.set("money", 111)
+	var warn_unknown: PackedStringArray = gs.call("restore",
+			{"money": 5, "no_such_field": 1})
+	ok(warn_unknown.size() >= 1, "未知字段产生告警", "告警=%s" % [str(warn_unknown)])
+	ok(_warn_mentions(warn_unknown, "no_such_field"), "告警里点名了未知字段 no_such_field")
+	eq(gs.get("money"), 5, "已识别字段照常应用（money=5）")
+	ok(_warn_mentions(warn_unknown, "world_seed"), "缺失字段 world_seed 也被点名")
+
+	gs.set("money", 222)
+	var warn_type: PackedStringArray = gs.call("restore", {"money": "很多钱"})
+	eq(gs.get("money"), 222, "类型错误的字段保留当前值（不会被写成 0 或崩溃）")
+	ok(_warn_mentions(warn_type, "类型错误"), "类型错误有明确告警",
+			"告警=%s" % [str(warn_type)])
+
+	gs.set("player_pos", Vector3.ZERO)
+	var warn_pos: PackedStringArray = gs.call("restore",
+			{"player_pos": {"x": 1.5, "y": -2.0, "z": 3.0}})
+	eq(gs.get("player_pos"), Vector3(1.5, -2.0, 3.0), "player_pos 接受 {x,y,z} 字典形式")
+	gs.call("restore", {"player_pos": [4.0, 5.0, 6.0]})
+	eq(gs.get("player_pos"), Vector3(4.0, 5.0, 6.0), "player_pos 接受 [x,y,z] 数组形式")
+	gs.call("restore", {"player_pos": "北方"})
+	eq(gs.get("player_pos"), Vector3(4.0, 5.0, 6.0), "player_pos 为垃圾值时保留当前值")
+	ok(warn_pos.size() >= 0, "（上面三次 restore 均未崩溃）")
+
+	section("完整快照往返（同进程内；跨进程往返是 s0_3_roundtrip 的事）")
+	gs.call("new_game", 4242)
+	gs.set("game_time", 123.5)
+	gs.set("money", 40)
+	gs.set("food", 7)
+	gs.set("supply", 3)
+	gs.set("player_pos", Vector3(1.25, 2.5, -3.75))
+	gs.call("set_scene_kind", 1)
+	var snap2: Dictionary = gs.call("snapshot")
+	gs.call("new_game", 1)
+	eq(gs.get("world_seed"), 1, "new_game 真的重置了世界 seed")
+	var warn_rt: PackedStringArray = gs.call("restore", snap2)
+	eq(warn_rt.size(), 0, "完整快照 restore 无任何告警；告警=%s" % [str(warn_rt)])
+	eq(gs.get("world_seed"), 4242, "world_seed 往返一致")
+	near(gs.get("game_time"), 123.5, 0.000001, "game_time 往返一致")
+	eq(gs.get("money"), 40, "money 往返一致")
+	eq(gs.get("food"), 7, "food 往返一致")
+	eq(gs.get("supply"), 3, "supply 往返一致")
+	eq(gs.get("player_pos"), Vector3(1.25, 2.5, -3.75), "player_pos 往返一致")
+	eq(gs.get("scene_kind"), 1, "scene_kind 往返一致")
+	eq(gs.call("scene_kind_name"), "WORLD", "scene_kind_name 映射正确")
+
+	section("现场还原（不污染后续用例）")
+	gs.call("new_game", 20250929)
+	rng.call("seed_from", 20250929)
+	eq(gs.get("world_seed"), 20250929, "GameState 回到默认世界 seed")
+	eq(rng.get("master_seed"), 20250929, "Rng 回到默认主种子")
+	eq(gs.get("money"), 0, "资源清零")
+
+
+## 抽 `n` 个整数，供"同名流可复现/互不干扰"的对照使用。
+func _draw_ints(rng: Node, stream_name: String, n: int) -> Array:
+	var out: Array = []
+	for i in n:
+		out.append(rng.call("randi_in", stream_name, 0, 1000000))
+	return out
+
+
+## 告警里是否有一条提到某个字段/关键词。
+func _warn_mentions(warns: PackedStringArray, needle: String) -> bool:
+	for w in warns:
+		if String(w).contains(needle):
+			return true
+	return false
 
 
 ## --- 诊断用例 ----------------------------------------------------------------

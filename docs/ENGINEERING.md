@@ -4,7 +4,7 @@
 > 与执行陷阱。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录。
 >
 > ⚠️ **本文件尚未完成**：按 `ROADMAP` §5 S0.5，本文件还需补齐**命名规范、信号约定、
-> 数据表格式、autoload 上限（当前 3 / 上限 10）、允许/禁止清单**；S0.5 另产出
+> 数据表格式、autoload 上限（当前 6 / 上限 10）、允许/禁止清单**；S0.5 另产出
 > `docs/ART_PIPELINE.md`（含「新建合规物件」6 步模板与 3 个反例 + 内嵌截图）。
 > 当前内容仅覆盖 S0.1 的交付范围。
 
@@ -15,7 +15,7 @@
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
 | `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做） |
-| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
+| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板）、`ui_slider.gd`（方形滑块） |
@@ -149,7 +149,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ---
 
-## 6. 当前验收基线（S0.1 验收时点）
+## 6. 当前验收基线
+
+### 6.1 S0.1 验收时点（历史记录，勿重复统计）
 
 | 项 | 结果 |
 |---|---|
@@ -158,3 +160,20 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `SCRIPT ERROR` |
 | `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等** |
 | autoload 数量 | 3 / 上限 **10**（`Style` `Capture` `Clock`；上限 2026-10-16 由 6 放宽，见 `ROADMAP` §16） |
+
+### 6.2 S0.3 批次 1 验收时点（autoload 3 → 6，只加服务、未改画面）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **9 用例 / 失败 0 / 跳过 0 / 178 断言全通过** / 退出码 0（41.6s） |
+| headless `tools/verify.gd --all` | 9 用例 / 失败 0 / 跳过 2（`s0_2_baseline`、`s0_6_repro` 需 GPU）/ 退出码 0 |
+| 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `SCRIPT ERROR` / `WARNING` |
+| 新增用例 | `s0_3_state`：72 断言全通过（autoload 清单与注册顺序、`SNAPSHOT_FIELDS` == `snapshot()` 键集、逻辑步整数倍、`Rng` 子流隔离与重放、`EventBus` 5 信号与投递、`restore()` 容错、快照往返） |
+| `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**（新增 3 个 autoload 对渲染零影响） |
+| `C-` 性能（3 次采样极差全部 < 0.1%） | `fps_mean 59.98`（vsync 封顶，非真实上限）/ `ms_per_frame 16.671` / `primitives 219978` / `draw_calls 96` / `memory_static 90.95 MB` / `objects 1774` |
+| `s0_6_repro` | 31/31 通过 —— 两个独立进程仍逐位一致，`GameState._physics_process` 未扰动可复现渲染 |
+| autoload 数量 | **6** / 上限 10（`Style` `Capture` `Clock` `Rng` `EventBus` `GameState`；注册顺序 `Rng` 先于 `GameState`，由 `s0_3_state` 断言） |
+
+> `primitives` 与 `draw_calls` 与 §6.1 完全相同，是"只加服务、未动画面"的第二种独立证据
+> （第一种是 `B-` 6 机位 sha256 全等）。`memory_static` 由 89.1 MB 升至 90.95 MB，
+> 增量即 3 个 autoload 脚本与其节点，属预期。

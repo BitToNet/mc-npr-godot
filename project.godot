@@ -21,13 +21,19 @@ config/icon="res://icon.svg"
 Style="*res://scripts/core/style.gd"
 Capture="*res://scripts/core/capture.gd"
 Clock="*res://scripts/core/render_clock.gd"
+; S0.3 batch 1 — order matters: `GameState._ready()` re-roots `Rng`, so `Rng` must
+; already exist.  `s0_3_state` asserts this sequence rather than trusting it.
+Rng="*res://scripts/core/rng.gd"
+EventBus="*res://scripts/core/event_bus.gd"
+GameState="*res://scripts/core/game_state.gd"
 
 [shader_globals]
 
 ; S0.6 — one injectable time for every animated shader, so a screenshot is
-; byte-reproducible.  Written every frame by scripts/render_clock.gd and read by
-; shaders/toon.gdshader (vegetation sway) and shaders/water.gdshader (waves).
-; Replaces the builtin TIME, which follows real engine time and cannot be frozen.
+; byte-reproducible.  Written every frame by scripts/core/render_clock.gd and read
+; by shaders/common/toon.gdshader (vegetation sway) and
+; shaders/terrain/water.gdshader (waves).  Replaces the builtin TIME, which
+; follows real engine time and cannot be frozen.
 render_time={
 "type": "float",
 "value": 0.0

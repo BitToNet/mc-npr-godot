@@ -179,6 +179,8 @@ Main.rebuild(seed)                             # 世界重建入口
   仍在守卫白名单内（收编会改变随机序列 ⇒ 画面变化，故留到 M1 S1.1 与地形重构一起做）。
 - **Autoload 上限 10 个**（2026-10-16 由 6 放宽，理由与批准见 §16）：`Style` `Capture` `Clock`（既有）
   + `GameState` `EventBus` `Rng` `SaveSystem` `SceneRouter`（S0.3 新增），合计 8；余量 2 个留给 M1–M6。超出需你批准。
+  进度：批次 1 已落地 `Rng` `EventBus` `GameState`（**当前 6 / 10**，注册顺序 `Rng` 先于 `GameState`，
+  由 `s0_3_state` 断言）；批次 2、3 各再 +1 达到 8。
 - **信号命名**：`on_xxx`（按钮）/ `xxx_changed`（状态）/ `xxx_requested`（请求）；
   全局事件总线上的**"已发生事实"信号**用过去式 `<subject>_<past_participle>`
   （`time_advanced` / `encounter_started` / `battle_finished` / `settlement_entered`，S0.3 登记）。
@@ -439,6 +441,10 @@ $P      = "G:\godot_project\mc-npr-godot"
 | **2** | `scripts/core/save_system.gd`（`SaveSystem`，9 槽 / `schema_version` / 原子写 / 脏字段容错 / 无自动存档） | `project.godot` autoload | 6 → 7 | `s0_3_roundtrip`（跨进程）、`s0_3_dirty`、`s0_3_no_autosave` |
 | **3** | `scripts/core/scene_router.gd`（`SceneRouter`）+ `scenes/battle/battle_stub.tscn`（**占位靶子**，M2 替换） | `project.godot` autoload；守卫新增规则 `scene_change_owner`，同步更新 `s0_2_guard` 的类数描述 | 7 → 8 | `s0_3_router`（`goto_battle`→`return_to_world` 节点数 ±0、autoload ≤ 10） |
 | **4** | `scripts/ui/menu_page.gd` + `scripts/ui/save_grid.gd`（含槽卡片），接入 `ESC` 与 `SaveSystem` | `scenes/main.tscn` 挂载菜单（**默认隐藏**） | 8 | `s0_3_slots`、`s0_3_overwrite` + `B-` 截图 4 张 |
+
+**批次落地状态**：批次 1 ✅ 已完成（2026-10-16，提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`；
+实测证据见 §15 台账与 `docs/成果.md`）；
+批次 2 / 3 / 4 待开工。
 
 **验收门禁（每批都跑，不只最后跑一次）**
 - `A-` headless 启动 60 帧 0 条 `ERROR`/`SCRIPT ERROR`（`--quit-after 60`）。
@@ -1428,7 +1434,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 |---|---|---|---|---|
 | S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ✅ 已验收 | 6 批迁移全部完成（批次 1–4 为代码移动，`1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；验收：窗口 `--all` 8 用例 / 152 断言全通过 / 退出码 0，headless 8 用例 0 失败 2 跳过，推送门禁 0 条 ERROR，`B-` 6 机位与迁移前基线**逐位一致（6/6 sha256 全等）**；产出 `docs/ENGINEERING.md` |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
-| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿） |
+| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`；**提交自身无法引用自身哈希**，故此处记 subject，哈希留待批次 2 一并登记）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。批次 2（`SaveSystem`）待开工 |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
 | S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ⏳ 未开始 | — |
 | S0.6 | 可复现渲染时钟（可注入 `u_time`） | S0.2 | ✅ 已验收 | 提交 `457a7d2`（实现）+ `953fd0d`（用例与守卫）；`tools/verify.gd --all` 窗口模式 **8/8 用例、152/152 断言**、退出码 0，headless 6 通过 + 2 跳过、退出码 0。关键证据 `s0_6_repro` 31/31：两独立进程同参数截图 `img_diff` **0 像素 / 0.0000%** 且 sha256 逐位相同（`s0_boot_follow`、`s0_boot_wide`），`--yaw=45→52` 与 `--frames=15→200` 反向对照均判不同；`s0_6_clock` 28/28；修复前同口径实测 1.62%–5.67%。`C-` 三次采样 ms/frame 16.685/16.667/16.667、三角面 219,978、绘制调用 96（vsync 封顶，仅证明未跌破上限）。结论与遗留见 `docs/成果.md` |
@@ -1537,6 +1543,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-16 | `docs/ENGINEERING.md` 新增为**长期工程约定文件**（目录职责、引用规则、迁移映射表、基线哈希、执行陷阱）；§3.2 的目录约定仍是权威定义，本文件为其落地记录 | S0.1 交付物要求「记录目录职责与迁移映射表」；把"哪类文件该放哪 + 移动文件必改哪 4 处 + 5 条陷阱"固化下来，后续 M1–M6 新增模块可直接照做 | 用户（本会话批准执行 S0.1） |
 | 2026-10-16 | **验收标准修改：Autoload 上限 6 → 10**。§3.2 的「Autoload 上限 6 个」改为 10 个；§5 S0.3 的 `A-` 由「autoload 数量 ≤ 6」改为「≤ 10」；§3.2 同时补齐既有 autoload 列表（原漏写 `Clock`，实际为 `Style` `Capture` `Clock` 3 个）；`docs/ENGINEERING.md` §1/§6 与 `docs/成果.md` 同步 | **S0.3 与自身验收标准冲突**：S0.3 要求「autoload ≤ 6」，却要新增 4 个（`GameState` `EventBus` `SceneRouter` `SaveSystem`），现有 3 个 → 共 7 个，必然违反。两条备选：① 合并服务（如 `SceneRouter` 并入 `GameState`、`SaveSystem` 延后）；② 放宽上限。**选 ②**：不为迁就一个数字把职责不同的服务硬塞成"上帝对象"，且 10 留 3 个余量给 M1–M6（含 §3.2 要求的 `Rng` 服务，若日后落为 autoload） | **用户（本会话明确指示"autoload 修改原有验收标准，把上限放宽到 10 个"）** |
 | 2026-10-16 | **S0.3 执行方案登记**（§5 S0.3）：4 批划分（服务 / 存档 / 路由 / UI）与每批的交付物、同批必改项、autoload 计数（3 → 6 → 7 → 8）、新增校验用例；每批验收门禁；**5 个设计决定**（拆 4 批 / 新建 `scenes/battle/battle_stub.tscn` 作路由靶子 / `Rng` 纳入本步但暂不收编既有裸 `randi()` / 存档用例整体换名 `user://saves/` ↔ `saves.bak` 做隔离 / `ESC` 暂停世界但 `Clock` 与 UI 保持 `PROCESS_MODE_ALWAYS`）；**6 条预登记陷阱**；§3.2 的 autoload 列表补入 `Rng`（合计 8）并新增"已发生事实"信号命名族；§15 台账 S0.3 置 `🚧 进行中` | 与本会话对齐后定稿。关键权衡：① `Rng` 越晚收编越贵，但收编既有 `randi()` 会改变地形/植被随机序列 ⇒ 6 机位基线失效，故只建服务、不收编；② 存档测试若走"产品码支持测试保存根"会给发布构建留下旁路，故改用目录整体换名，零产品码改动；③ `get_tree().paused` 会连带停掉 autoload，故须逐节点显式设 `PROCESS_MODE_ALWAYS` | 用户（本会话五问五答，均取推荐项） |
+| 2026-10-16 | **S0.3 批次 1 落地：autoload 3 → 6**。新增 `scripts/core/rng.gd`（`Rng`，FNV-1a 具名子流）、`scripts/core/event_bus.gd`（`EventBus`，5 个过去式事实信号、无状态）、`scripts/core/game_state.gd`（`GameState`，10 个存档字段 + `snapshot()`/`restore()` 容错 + `_physics_process` 固定逻辑步推进游戏时间）；`project.godot` 注册三者且 **`Rng` 先于 `GameState`**（后者 `_ready()` 要调用 `Rng.seed_from`）；§3.2/§5 S0.3/附录 A 的 autoload 计数与描述同步；`docs/ENGINEERING.md` §1/§6 同步。**记录两条负面结论（在 §15 与 `docs/成果.md` 展开）**：① `SceneTree.physics_frame` 在节点 `_physics_process` **之前**发射 ⇒ "N 次 await == N 步"是错的（实测 60 次 await 只推进 59 步），用例改断言"前进量恒为 1/60 的整数倍"；② `Script.get()` 读不到 `const`，读常量须用 `get_script_constant_map()` | 批次 1 是全 4 批里唯一"只加服务、不改画面"的一批，因此它的验收意义在于**证明新增 autoload 对渲染零影响**：`B-` 6 机位 sha256 与 S0.1 迁移前基线全等（6/6），manifest `det=True hz=60.0 t=2.5 frame=150`。`GameState.world_seed` 默认值刻意取 `20250929`（与 `main.gd` 的 `@export` 同值），使 S1.2 把场景入口接到本服务时世界逐位不变 —— 该同值性由 `s0_3_state` 断言守住 | 用户（本会话批准执行 S0.3 批次 1） |
 
 ---
 
@@ -1544,7 +1551,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 
 | 现有文件 | 预计改动 | 发生步骤 |
 |---|---|---|
-| `project.godot` | 新增 4 个 autoload、输入映射、可能的渲染分组 | S0.3、S0.4 |
+| `project.godot` | 新增 5 个 autoload、输入映射、可能的渲染分组 | S0.3、S0.4 |
 | `scripts/main.gd` | 拆分为世界入口 + 保留演示场景为 `scenes/dev/diorama.tscn` | S0.1、S1.2 |
 | `scripts/terrain.gd` | 抽出可复用的高度场/噪声模块，供战略地图与战场共用；**岛屿渲染行为不变** | S1.1、S1.2、S4.1 |
 | `scripts/player.gd` | 保留不动（演示资产）；新增 `actors/` 下的棋子与战斗角色 | S1.3、S2.2 |
