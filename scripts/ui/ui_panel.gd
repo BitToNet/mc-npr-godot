@@ -35,6 +35,11 @@ var _syncing := false
 
 
 func _ready() -> void:
+	# S0.3 batch 4: the save menu pauses the tree, so a HUD that inherited the pause
+	# mode would stop receiving clicks the moment ESC opens the menu (and would also
+	# stop being drawn) — the debug panel is supposed to stay usable.  Same rule as
+	# `Clock` and `menu_page.gd`.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 10
 	_build_font()
 	var root := Control.new()

@@ -108,6 +108,14 @@ const CASES := {
 		"desc": "场景路由：world→battle→world 后世界节点数 ±0 且结构指纹逐条一致；栈深上限与越界显式拒绝；场景被外部换掉后路由栈不再撒谎",
 		"kind": "pure",
 	},
+	"s0_3_slots": {
+		"desc": "存档菜单与九宫格：ESC 暂停契约（世界停、菜单与 Clock 不停）、九卡正文逐个==服务 label、无当前槽位走『保存等同另存为』、空槽位直写、B- 四张截图两轮逐位一致且两两不同",
+		"kind": "headed",
+	},
+	"s0_3_overwrite": {
+		"desc": "覆盖二次确认：整页弹窗先问后写、弹窗期间与取消后旧档 sha256+mtime 逐项不变、确认后才覆盖、ESC 层级（弹窗→宫格→主页→关闭）",
+		"kind": "headed",
+	},
 	"s0_3_probe_write": {
 		"desc": "[打桩] 新游戏 → 存槽 3，供 s0_3_roundtrip 以子进程拉起",
 		"kind": "pure",
@@ -209,6 +217,30 @@ const PROBE_SNAPSHOT_FILE := "_probe_read_snapshot.json"
 ## 狂写子进程自己的统计。`OS.create_process` 下子进程**不继承** stdout（实测：子进程
 ## 的 print 一行都没进父进程日志），所以子进程的话必须落成文件才拿得到。
 const PROBE_LOOP_FILE := "_probe_loop_summary.json"
+
+## -----------------------------------------------------------------------------
+##  S0.3 批次 4（存档菜单 / 九宫格）常量
+## -----------------------------------------------------------------------------
+## 菜单节点名与界面路径。路径是**相对菜单节点**的，包含它自己的 `Root` 包装层
+## （`menu_page.gd` 用一个 `Root` 控件承载整屏 Backdrop，好让点击落在菜单外面时
+## 被它吃掉，不会穿透到调试 HUD 上）。
+const MENU_NODE := "MenuLayer"
+const MENU_PATHS := {
+	"home": "Root/Home/Panel/Col",
+	"save": "Root/Home/Panel/Col/Actions/Save",
+	"save_as": "Root/Home/Panel/Col/Actions/SaveAs",
+	"load": "Root/Home/Panel/Col/Actions/Load",
+	"settings": "Root/Home/Panel/Col/Actions/Settings",
+	"resume": "Root/Home/Panel/Col/Actions/Resume",
+	"status": "Root/Home/Panel/Col/Slot",
+	"grid": "Root/GridPage/Panel/Col/Grid",
+	"grid_hint": "Root/GridPage/Panel/Col/Hint",
+	"back": "Root/GridPage/Panel/Col/Back",
+	"confirm_title": "Root/Confirm/Center/Panel/Col/Title",
+	"confirm_detail": "Root/Confirm/Center/Panel/Col/Detail",
+	"confirm_yes": "Root/Confirm/Center/Panel/Col/Row/Yes",
+	"confirm_no": "Root/Confirm/Center/Panel/Col/Row/No",
+}
 
 ## -----------------------------------------------------------------------------
 ##  运行时状态
@@ -444,6 +476,10 @@ func _dispatch(id: String) -> void:
 			await _case_no_autosave()
 		"s0_3_router":
 			await _case_router()
+		"s0_3_slots":
+			await _case_slots()
+		"s0_3_overwrite":
+			await _case_overwrite()
 		"s0_3_probe_write":
 			await _case_probe_write()
 		"s0_3_probe_read":
@@ -2033,6 +2069,327 @@ func _world_seed_signature() -> String:
 	return " ".join(out)
 
 
+## --- s0_3_slots ---------------------------------------------------------------
+## S0.3 批次 4：存档菜单与九宫格（ROADMAP §5 S0.3，交互契约 §3.5）。
+##
+## 四组最值钱的断言：
+##   ① **暂停契约**（预登记陷阱 1 的实测版）：ESC 打开菜单 ⇒ `paused == true`，
+##      而菜单自己 `can_process()` 仍为真、`Clock` 仍在精确前进。暂停会停掉
+##      autoload 的 `_process` 是引擎语义，不是猜测；修复是给菜单与 Clock 显式
+##      `PROCESS_MODE_ALWAYS`，所以这里必须能观测到两者的差别。
+##   ② **宫格不撒谎**：九张卡片的正文逐个 == `SaveSystem.slot_info(slot).label`。
+##      宫格自己不算、不缓存槽位数据，"显示的和存的是同一件事"才是可证的。
+##   ③ **服务是唯一裁决**：没有当前槽位时点「保存」跳宫格（`save_current()` 的
+##      契约原文就是「保存等同另存为」），菜单不自己发明一句提示。
+##   ④ **B- 四张截图**：两个数据状态（一个档都没有 / 九格全满）× 两轮独立进程，
+##      逐位一致；四张两两不同；每张都非空图。截图状态由**注入的真实输入**达成，
+##      产品码里没有"演示状态"后门；子进程的 `ui_expect` 自证到达了声明的界面，
+##      对不上就以非 0 退出（否则"拍错屏"会变成一张看着正常的 PNG）。
+func _case_slots() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	var clock := get_root().get_node_or_null("Clock")
+	if ss == null or clock == null:
+		ok(false, "SaveSystem / Clock autoload 就位", "ss=%s clock=%s" % [ss, clock])
+		return
+
+	section("环境：user://saves 整体让位（用例只动隔离目录）")
+	# `--all` 里上一个用例可能正停在某个槽位上；本用例要从"全新存档"起步，
+	# 所以自带前置条件而不是依赖进程恰好是新的。
+	_restore_defaults()
+	eq(int(ss.get("current_slot")), 0, "前置条件：这一步从『没有选中槽位』起步")
+	for n in _saves_begin():
+		print("    · ", n)
+	ok(not DirAccess.dir_exists_absolute(SAVES_DIR), "起步是『一个存档都没有』的干净状态")
+
+	section("装配：菜单隐藏挂载、层高于调试 HUD、注册到 group=menu")
+	var main := await _load_main()
+	if main == null:
+		ok(false, "主场景可加载")
+		_saves_end()
+		return
+	var menu := main.get_node_or_null(MENU_NODE)
+	if not ok(menu != null, "main.tscn 挂着 MenuLayer"):
+		main.queue_free()
+		_saves_end()
+		return
+	ok(get_nodes_in_group("menu").size() == 1, "group=menu 恰好一个节点")
+	ok(not bool(menu.call("is_open")), "启动时菜单是关的")
+	ok(not (menu as CanvasLayer).visible, "启动时菜单不可见（否则 B- 六机位基线会被盖住）")
+	var hud := main.get_node_or_null("UI") as CanvasLayer
+	ok(hud != null and (menu as CanvasLayer).layer > hud.layer,
+			"菜单层号高于调试 HUD 层号（遮挡关系靠 layer，不靠节点顺序）")
+	ok(_menu_node(menu, "grid") != null, "宫格组件在树上")
+	ok(_menu_node(menu, "save_as") is Button, "主页五个入口都是可点按钮")
+
+	section("暂停契约：世界停、菜单与 Clock 不停（陷阱 1）")
+	ok(InputMap.has_action("ui_cancel"), "存在内建 ui_cancel（ESC 走它，不改 keymap）")
+	var esc_bound := false
+	for ev in InputMap.action_get_events("ui_cancel"):
+		if ev is InputEventKey:
+			var k := ev as InputEventKey
+			if k.keycode == KEY_ESCAPE or k.physical_keycode == KEY_ESCAPE:
+				esc_bound = true
+	ok(esc_bound, "ui_cancel 绑定到 Escape")
+	await _press_escape()
+	ok(bool(menu.call("is_open")), "ESC 打开菜单")
+	eq(String(menu.call("page_name")), "home", "打开后落在主页")
+	ok(paused, "菜单打开时 get_tree().paused == true")
+	ok(not main.can_process(), "暂停时主场景 can_process() == false（世界真的停了）")
+	ok(menu.can_process(), "暂停时菜单 can_process() == true（否则它连点击都收不到）")
+	ok(clock.can_process(), "暂停时 Clock can_process() == true")
+	# Clock 照走：先切到确定性模式，好让"照走"是可数的而不是"看起来在动"。
+	# 确定性模式下 `t == frame/hz`，所以暂停期间两者的前进量都能逐帧对上。
+	clock.call("set_deterministic", true, 60.0)
+	var f0 := int(clock.get("frame"))
+	var t0 := float(clock.get("t"))
+	var pf0 := Engine.get_process_frames()
+	for i in 30:
+		await process_frame
+	eq(int(clock.get("frame")) - f0, 30, "暂停中 Clock.frame 精确前进 30 帧")
+	near(float(clock.get("t")) - t0, 0.5, 0.0001, "暂停中 Clock.t 精确前进 0.5s（30/60）")
+	eq(Engine.get_process_frames() - pf0, 30, "暂停中主循环仍在出帧（30 帧）")
+	clock.call("set_deterministic", false)
+
+	section("无当前槽位：『保存』按契约跳宫格、『读取』失败不改任何状态")
+	contains(String(menu.call("hint_text")), "ESC", "初始提示语告诉玩家 ESC 的语义")
+	var save_btn := _menu_node(menu, "save") as Button
+	await _click_control(save_btn)
+	eq(String(menu.call("page_name")), "grid", "无当前槽位时『保存』跳宫格")
+	ok(not bool(menu.call("confirm_open")), "此时不该弹覆盖确认（没有旧档可覆盖）")
+	contains(String(menu.call("hint_text")), "保存等同", "提示语引用 save_current() 的契约原文")
+	await _click_control(_menu_node(menu, "back") as Button)
+	eq(String(menu.call("page_name")), "home", "宫格『返回』回主页")
+
+	await _click_control(_menu_node(menu, "load") as Button)
+	eq(String(menu.call("page_name")), "grid", "无当前槽位时『读取』也跳宫格")
+	contains(String(menu.call("hint_text")), "读取", "读取态提示语说明点击语义")
+	await _click_control(_menu_node(menu, _menu_card_path(5)) as Button)
+	contains(String(menu.call("hint_text")), "空槽位", "点空槽位给出『空槽位』理由")
+	eq(int(ss.get("current_slot")), 0, "失败的读取不改当前槽位")
+	eq(_saves_snapshot(SAVES_DIR).size(), 0, "失败的读取不写任何文件")
+	await _click_control(_menu_node(menu, "back") as Button)
+
+	section("空槽位写入：点第 5 格直接写盘，卡片立刻刷新")
+	await _click_control(_menu_node(menu, "save_as") as Button)
+	eq(String(menu.call("page_name")), "grid", "『另存为』进宫格")
+	var body5 := _menu_node(menu, _menu_card_body_path(5)) as Label
+	eq("" if body5 == null else body5.text, "空槽位", "第 5 格点之前是空槽位")
+	await _click_control(_menu_node(menu, _menu_card_path(5)) as Button)
+	ok(FileAccess.file_exists(_slot_file(5)), "slot_5.json 已写出")
+	ok(not bool(menu.call("confirm_open")), "写空槽位不该弹覆盖确认")
+	eq(int(ss.get("current_slot")), 5, "写成功后 current_slot == 5")
+	eq(String(menu.call("page_name")), "home", "写成功后回主页")
+	contains(String(menu.call("hint_text")), "已保存到槽位 5", "提示语点明槽位号")
+	ok(_slot_text_is_complete(FileAccess.get_file_as_string(_slot_file(5))),
+			"写出的存档是完整合法 JSON（schema 1 + game.money）")
+	eq(_saves_snapshot(SAVES_DIR).size(), 1, "只写出一个文件（没有 .tmp 残留）")
+	var info5: Dictionary = ss.call("slot_info", 5)
+	eq("" if body5 == null else body5.text, String(info5.get("label", "")),
+			"第 5 格正文刷新成服务给的 label（宫格不缓存）")
+	ok(not String(info5.get("label", "")).is_empty(), "服务确实给了非空 label")
+	contains(String((_menu_node(menu, "status") as Label).text), "当前槽位：5",
+			"主页状态行显示当前槽位 5")
+
+	section("ESC 层级：宫格 → 主页 → 关闭（并解除暂停）")
+	await _click_control(_menu_node(menu, "save_as") as Button)
+	eq(String(menu.call("page_name")), "grid", "再次进入宫格")
+	await _press_escape()
+	eq(String(menu.call("page_name")), "home", "ESC 从宫格回主页（不直接关菜单）")
+	ok(bool(menu.call("is_open")), "此时菜单仍开着")
+	await _press_escape()
+	ok(not bool(menu.call("is_open")), "第二次 ESC 关闭菜单")
+	ok(not paused, "关闭后解除暂停")
+	ok(not (menu as CanvasLayer).visible, "关闭后不可见")
+	ok(main.can_process(), "关闭后主场景恢复处理")
+
+	section("B- 截图：两个数据状态 × 两轮独立进程")
+	await _shoot_menu_rounds()
+
+	main.queue_free()
+	await process_frame
+	for n in _saves_end():
+		print("    · ", n)
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "saves.bak 已还原、无残留")
+	_restore_defaults()
+
+
+## --- s0_3_overwrite -----------------------------------------------------------
+## S0.3 批次 4 的另一半：**先问后写**。
+##
+## 最值钱的一条是「取消 = 旧档逐位不变」：它同时否掉了两种常见错法 ——
+## 先写后问（写坏了再问，问也没用），以及确认框只是个动画（点了取消文件早换了）。
+## 比较口径用目录快照（每个文件的 sha256 + mtime），整目录逐项相等才算数。
+##
+## 另外订阅 `save_written` 数写入次数：**同一秒内状态没变时，两次存档的字节可以
+## 逐位相同**（`saved_at` 只到秒），所以"文件内容变了"不是一条能站住的断言；
+## 能站住的是"到底发布了几次写入"—— 取消必须 0 次，确认必须 +1。
+func _case_overwrite() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	if ss == null:
+		ok(false, "SaveSystem autoload 就位")
+		return
+	var writes := [0]
+	var on_write := func(_slot: int, _path: String) -> void: writes[0] += 1
+	ss.connect("save_written", on_write)
+
+	section("环境：让位 saves/，先写一个真存档当靶子")
+	_restore_defaults()
+	for n in _saves_begin():
+		print("    · ", n)
+	var main := await _load_main()
+	var menu := main.get_node_or_null(MENU_NODE)
+	if not ok(menu != null, "MenuLayer 在树上"):
+		main.queue_free()
+		_saves_end()
+		return
+	await _press_escape()
+	await _click_control(_menu_node(menu, "save_as") as Button)
+	await _click_control(_menu_node(menu, _menu_card_path(3)) as Button)
+	ok(FileAccess.file_exists(_slot_file(3)), "槽位 3 先写入一次（空槽位无需确认）")
+	var before := _saves_snapshot(SAVES_DIR)
+	var sha_before := String((before.get("slot_3.json", {}) as Dictionary).get("sha256", ""))
+	ok(sha_before != "", "拿到了覆盖前的 sha256 锚点", "sha=%s" % sha_before)
+	eq(writes[0], 1, "空槽位那一次确实发布了写入")
+
+	section("点击已占用槽位：整页弹窗先问，问的时候旧档一个字节都没动")
+	await _click_control(_menu_node(menu, "save_as") as Button)
+	await _click_control(_menu_node(menu, _menu_card_path(3)) as Button)
+	ok(bool(menu.call("confirm_open")), "弹出了覆盖确认")
+	eq(String(menu.call("page_name")), "grid", "弹窗叠在宫格页上（独立整页弹窗，不是行内提示）")
+	var dialog := _saves_snapshot(SAVES_DIR)
+	eq(dialog, before, "弹窗期间 saves/ 逐项不变（先问后写）")
+	contains(String((_menu_node(menu, "confirm_title") as Label).text), "槽位 3",
+			"弹窗标题点明槽位号")
+	contains(String((_menu_node(menu, "confirm_detail") as Label).text),
+			String(ss.call("slot_info", 3).get("label", "")), "弹窗正文引用该档的 label")
+	contains(String((_menu_node(menu, "confirm_detail") as Label).text),
+			String(ss.call("slot_info", 3).get("saved_at", "")), "弹窗正文给出存档时间")
+
+	section("ESC 层级：先取消弹窗，不关菜单")
+	await _press_escape()
+	ok(not bool(menu.call("confirm_open")), "ESC 先取消弹窗")
+	ok(bool(menu.call("is_open")), "菜单仍然开着")
+	eq(String(menu.call("page_name")), "grid", "取消后仍在宫格页（可以改选别格）")
+	eq(_saves_snapshot(SAVES_DIR), before, "取消后 saves/ 逐项不变（sha256 与 mtime 都算）")
+	eq(writes[0], 1, "取消期间一次写入都没发布（先问后写）")
+	contains(String(menu.call("hint_text")), "已取消", "提示语说明是取消")
+
+	section("确认覆盖：只有点了确认才落盘")
+	await _click_control(_menu_node(menu, _menu_card_path(3)) as Button)
+	ok(bool(menu.call("confirm_open")), "再次弹出确认")
+	await _click_control(_menu_node(menu, "confirm_yes") as Button)
+	ok(not bool(menu.call("confirm_open")), "确认后弹窗关闭")
+	eq(String(menu.call("page_name")), "home", "覆盖成功后回主页")
+	contains(String(menu.call("hint_text")), "已覆盖槽位 3", "提示语点明是『覆盖』")
+	var after := _saves_snapshot(SAVES_DIR)
+	eq(writes[0], 2, "确认后确实又发布了一次写入（取消 0 次、确认 +1）")
+	ok(String((after.get("slot_3.json", {}) as Dictionary).get("sha256", "")) != "",
+			"确认后槽位 3 仍是一份存档（同秒内字节可能逐位相同，故不拿哈希当判据）")
+	eq(after.size(), 1, "覆盖只动这一个文件（没有多出 .tmp）")
+	ok(_slot_text_is_complete(FileAccess.get_file_as_string(_slot_file(3))),
+			"覆盖后的存档仍是完整合法 JSON")
+
+	section("主页『保存』：写当前槽位同样先问（服务是唯一裁决，不静默覆盖）")
+	await _click_control(_menu_node(menu, "save") as Button)
+	ok(bool(menu.call("confirm_open")), "『保存』写已占用的当前槽位时先问")
+	eq(String(menu.call("page_name")), "home", "『保存』不跳宫格（当前槽位已选中）")
+	var asked := _saves_snapshot(SAVES_DIR)
+	await _click_control(_menu_node(menu, "confirm_no") as Button)
+	ok(not bool(menu.call("confirm_open")), "『取消（保留旧存档）』关闭弹窗")
+	eq(_saves_snapshot(SAVES_DIR), asked, "取消后旧档逐项不变")
+	eq(writes[0], 2, "『保存』弹窗里取消：写入次数没有增加")
+	await _click_control(_menu_node(menu, "save") as Button)
+	await _click_control(_menu_node(menu, "confirm_yes") as Button)
+	eq(writes[0], 3, "『保存』确认后才多出第 3 次写入")
+	var rewritten := _saves_snapshot(SAVES_DIR)
+	eq(rewritten.size(), 1, "确认后仍然只有一个文件")
+	ok(String((rewritten.get("slot_3.json", {}) as Dictionary).get("sha256", "")) != "",
+			"当前槽位被重写成一个完整存档")
+	contains(String(menu.call("hint_text")), "已覆盖槽位 3", "提示语仍是覆盖槽位 3")
+
+	main.queue_free()
+	ss.disconnect("save_written", on_write)
+	await process_frame
+	for n in _saves_end():
+		print("    · ", n)
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "saves.bak 已还原、无残留")
+	_restore_defaults()
+
+
+## 四张 B- 截图：空状态两轮 + 满状态两轮（各跑一个独立窗口进程）。
+## 每轮先 `ui_expect` 自证到达声明的界面（子进程退出码 0 就是这条证据），
+## 再由父进程做「两轮同图逐位一致」「四张两两不同」「每张非空图」三件事。
+func _shoot_menu_rounds() -> void:
+	var base := _opt_out.path_join("menu_shots")
+	DirAccess.make_dir_recursive_absolute(base)
+	var shots: Dictionary = {}
+	var names: Array = []
+	for label in ["a", "b"]:
+		# 状态一：一个存档都没有
+		_clear_saves_files()
+		var empty_dir := base.path_join("empty_" + label)
+		var empty_code := _shoot_menu_case("s0_3_menu_empty", empty_dir, 2)
+		eq(empty_code, 0, "空状态批次 %s：退出码 0（含两次 ui_expect 自证）" % label)
+		# 状态二：九格全满（fixture 的时间全部写死，否则像素会跟着墙上时钟变）
+		_write_fixture_slots()
+		var full_dir := base.path_join("full_" + label)
+		var full_code := _shoot_menu_case("s0_3_menu_full", full_dir, 2)
+		eq(full_code, 0, "满状态批次 %s：退出码 0（含两次 ui_expect 自证）" % label)
+		for spec in [["01_menu_home", empty_dir], ["02_grid_empty", empty_dir],
+				["03_grid_full", full_dir], ["04_overwrite_confirm", full_dir]]:
+			var name := String(spec[0])
+			var path := String(spec[1]).path_join(name + ".png")
+			shots["%s/%s" % [name, label]] = {"path": path, "sha": FileAccess.get_sha256(path)}
+			if label == "a":
+				names.append(name)
+
+	var idiff := load("res://tools/img_diff.gd")
+	for name in names:
+		var a: Dictionary = shots["%s/a" % name]
+		var b: Dictionary = shots["%s/b" % name]
+		var st := _png_stats(String(a["path"]))
+		ok(bool(st["ok"]), "%s 能解码" % name, String(st["reason"]))
+		eq(int(st["width"]), 1600, "%s 宽 1600" % name)
+		eq(int(st["height"]), 900, "%s 高 900" % name)
+		ge(float(st["mean"]), 0.02, "%s 不是空图（平均亮度 %.4f）" % [name, float(st["mean"])])
+		eq(String(a["sha"]), String(b["sha"]), "%s 两轮 sha256 逐位一致" % name)
+		var r: Dictionary = idiff.diff(String(a["path"]), String(b["path"]), 0)
+		eq(int(r.get("changed_pixels", -1)), 0, "%s 两轮差异像素 0（严格 channel=0）" % name)
+		print("    · B- %s sha256=%s" % [name, String(a["sha"])])
+	for i in names.size():
+		for j in range(i + 1, names.size()):
+			var ra: Dictionary = shots["%s/a" % names[i]]
+			var rb: Dictionary = shots["%s/a" % names[j]]
+			var d: Dictionary = idiff.diff(String(ra["path"]), String(rb["path"]))
+			ok(float(d.get("ratio_pct", 0.0)) > 0.0, "%s 与 %s 不是同一张图（%.2f%% 不同）"
+					% [names[i], names[j], float(d.get("ratio_pct", 0.0))])
+
+
+## 跑一个菜单截图批次：窗口模式（截图必须有真 GPU），并核对清单与自证行。
+func _shoot_menu_case(case_name: String, out_dir: String, expect_shots: int) -> int:
+	var out: Array = []
+	var code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--shots", "--case=" + case_name, "--warmup=60", "--frames=15",
+		"--out=" + out_dir,
+	]), out)
+	var flat := _flatten_lines(out)
+	var expect_ok := 0
+	for line in flat:
+		if String(line).contains("ui_expect ok"):
+			expect_ok += 1
+	eq(expect_ok, expect_shots, "%s：%d 次 ui_expect 全部 ok" % [case_name, expect_shots])
+	var man := _read_json(out_dir.path_join(case_name + ".json"))
+	if not ok(not man.is_empty(), "%s 写出了清单" % case_name):
+		return code
+	var shots: Array = man.get("shots", [])
+	eq(shots.size(), expect_shots, "%s 清单里有 %d 张图" % [case_name, expect_shots])
+	var ck: Dictionary = man.get("clock", {})
+	ok(bool(ck.get("deterministic", false)), "%s 清单声明确定性时钟" % case_name)
+	return code
+
+
 ## --- 打桩用例（hidden）-------------------------------------------------------
 ## 这三个用例不写报告、不走断言汇总：输出与退出码就是父用例的证据通道。
 ## `--all` 永远不会直接跑到它们（hidden），只由上面的用例以子进程拉起。
@@ -2116,6 +2473,151 @@ func _case_probe_loop() -> void:
 		ATOMIC_WRITES, fails, first_reason,
 	])
 	_probe_exit = 0 if fails == 0 else 1
+
+
+## --- S0.3 批次 4 辅助（菜单 / 九宫格）-----------------------------------------
+
+func _menu_node(menu: Node, key_or_path: String) -> Node:
+	return menu.get_node_or_null(String(MENU_PATHS.get(key_or_path, key_or_path)))
+
+
+func _menu_card_path(slot: int) -> String:
+	return "Root/GridPage/Panel/Col/Grid/Col/Cards/Slot%d" % slot
+
+
+func _menu_card_body_path(slot: int) -> String:
+	return _menu_card_path(slot) + "/Box/Body"
+
+
+## 注入一次真实按键（按下 + 抬起）。
+##
+## 走 `Input.parse_input_event`，和玩家的键盘走同一条管线：产品码里没有为测试
+## 留的后门，所以"菜单能被 ESC 打开"这件事必须真的由菜单的输入处理完成。也正
+## 因为如此，暂停期间还能点得动按钮才是**证据**（PROCESS_MODE_ALWAYS 生效），
+## 而不是"测试直接调了函数"。
+func _press_key(keycode: Key) -> void:
+	for i in 2:
+		var ev := InputEventKey.new()
+		ev.keycode = keycode
+		ev.physical_keycode = keycode
+		ev.pressed = (i == 0)
+		Input.parse_input_event(ev)
+		Input.flush_buffered_events()
+		await process_frame
+
+
+func _press_escape() -> void:
+	await _press_key(KEY_ESCAPE)
+
+
+## 注入一次真实左键点击（按下 + 抬起，落在控件中心）。控件矩形退化时直接不点：
+## 那说明布局还没跑出尺寸，点 (0,0) 只会得到"看起来点过了"的假信号。
+func _click_control(ctrl: Control) -> bool:
+	if ctrl == null:
+		return false
+	var rect := ctrl.get_global_rect()
+	if rect.size.x < 1.0 or rect.size.y < 1.0:
+		return false
+	var pos := rect.get_center()
+	for i in 2:
+		var ev := InputEventMouseButton.new()
+		ev.button_index = MOUSE_BUTTON_LEFT
+		ev.pressed = (i == 0)
+		ev.position = pos
+		ev.global_position = pos
+		Input.parse_input_event(ev)
+		Input.flush_buffered_events()
+		await process_frame
+	return true
+
+
+## 清空隔离目录里的文件，但保留目录本身（同一用例要在"空"与"满"之间来回切）。
+func _clear_saves_files() -> void:
+	var d := DirAccess.open(SAVES_DIR)
+	if d == null:
+		return
+	var files := d.get_files()
+	d.list_dir_end()
+	for f in files:
+		DirAccess.remove_absolute(SAVES_DIR.path_join(String(f)))
+
+
+## 九个固定存档样本。`saved_at` / `game_time` / `playtime` 全部**写死**：如果让
+## `SaveSystem` 自己写，卡片上的时间会取墙上时钟，同一份代码两次运行会拍出不同的
+## PNG，B- 门禁就永远是红的。也就是说这里的"假"是为了让截图这个"真"成立。
+func _write_fixture_slots() -> void:
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+	for slot in range(1, 10):
+		_write_text(_slot_file(slot), _fixture_slot_text(slot))
+
+
+func _fixture_slot_text(slot: int) -> String:
+	var hour := (6 + slot) % 24
+	var minute := slot * 5
+	var playtime := float(slot * 137)
+	var game_time := float(slot - 1) * 170.0 + (float(hour) * 60.0 + float(minute)) / 1440.0 * 170.0
+	return JSON.stringify({
+		"schema_version": 1,
+		"saved_at": "2025-10-16 %02d:%02d:00" % [hour, minute],
+		"saved_at_unix": 1760571600 + slot * 60,
+		"meta": {
+			"slot": slot,
+			"game_day": slot,
+			"clock_text": "第 %d 天 %02d:%02d" % [slot, hour, minute],
+			"party_name": "无名军团",
+			"party_level": slot,
+			"playtime": playtime,
+			"playtime_text": "%02d:%02d:%02d" % [
+				int(playtime) / 3600, (int(playtime) / 60) % 60, int(playtime) % 60,
+			],
+			"world_seed": PROBE_SEED,
+		},
+		"game": {
+			"world_seed": PROBE_SEED,
+			"game_time": game_time,
+			"day_length": 170.0,
+			"party": {"name": "无名军团", "level": slot},
+			"money": slot * 11,
+			"food": slot * 3,
+			"supply": slot,
+			"scene_kind": 0,
+			"player_pos": {"x": 0.0, "y": 0.0, "z": 0.0},
+			"playtime": playtime,
+		},
+	}, "  ", false)
+
+
+## 一张 PNG 的尺寸与平均亮度。
+##
+## 用途只有一条——**否掉空图**：截图黑屏或纯色时，路径、清单、sha256 一切照旧
+## "正常"，只有看一眼像素才能发现。`res://.shots/*.png` 不在引擎导入库里，必须
+## 用 `FileAccess` 读原始字节再解码（与 `tools/img_diff.gd` 同一套做法）。
+func _png_stats(path: String) -> Dictionary:
+	var out := {"ok": false, "width": 0, "height": 0, "mean": 0.0, "reason": ""}
+	if not FileAccess.file_exists(path):
+		out["reason"] = "文件不存在"
+		return out
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		out["reason"] = "打不开（%s）" % error_string(FileAccess.get_open_error())
+		return out
+	var bytes := f.get_buffer(f.get_length())
+	f.close()
+	var img := Image.new()
+	if img.load_png_from_buffer(bytes) != OK:
+		out["reason"] = "PNG 解码失败"
+		return out
+	var total := 0.0
+	var n := 0
+	for y in range(0, img.get_height(), 7):
+		for x in range(0, img.get_width(), 7):
+			total += img.get_pixel(x, y).get_luminance()
+			n += 1
+	out["ok"] = true
+	out["width"] = img.get_width()
+	out["height"] = img.get_height()
+	out["mean"] = total / maxf(float(n), 1.0)
+	return out
 
 
 ## --- S0.3 批次 2 辅助 ---------------------------------------------------------
@@ -2247,13 +2749,23 @@ func _idle_run(frames: int) -> void:
 
 
 ## 把现场还给后续用例（GameState / Rng 回默认，与 s0_3_state 的收尾同口径）。
+## 把用例改过的全局事实复原到出厂态。用例之间共享**同一个进程**（`--all` 在一个
+## 进程里顺序跑完所有用例），所以"上一个用例停在哪个槽位"属于必须显式复原的状态：
+## 不还原的话，下一个用例会以为自己是从全新存档开始的（踩过一次：`s0_3_roundtrip`
+## 走后 `SaveSystem.current_slot` 停在 3，`s0_3_slots` 的"无当前槽位"分支整段失效）。
 func _restore_defaults() -> void:
 	var gs := get_root().get_node_or_null("GameState")
 	var rng := get_root().get_node_or_null("Rng")
+	var ss := get_root().get_node_or_null("SaveSystem")
 	if gs != null:
 		gs.call("new_game", 20250929)
 	if rng != null:
 		rng.call("seed_from", 20250929)
+	if ss != null:
+		# `select_slot()` 只接受 1..9（没有公开的"清空"入口，这正是它的语义），
+		# 所以"回到没有选中槽位"只能写回默认值。
+		ss.set("current_slot", 0)
+		ss.set("last_error", "")
 
 
 ## 以子进程跑一个打桩用例并把 stdout 收回来。

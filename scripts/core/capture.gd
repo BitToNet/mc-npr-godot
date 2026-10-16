@@ -50,6 +50,38 @@ const CASES := {
 		{"name": "s0_boot_follow", "time": 0.50, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
 		{"name": "s0_boot_wide", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0},
 	],
+	## S0.3 batch 4 — the save menu / 3x3 grid (B- evidence for ROADMAP §5 S0.3).
+	##
+	## Split into two batches of two shots because the two data states cannot both
+	## be photographed by one process: the "empty" state needs no save files at all
+	## and the "full" state needs nine of them.  `s0_3_slots` swaps `user://saves`
+	## and spawns one child per batch, so neither PNG can depend on whatever the
+	## developer happens to have saved.
+	##
+	## `ui` steps drive the **real** UI through injected input events — product code
+	## gets no "demo state" hook.  They are deltas: the second shot of a batch
+	## continues from the state the first shot left behind.  `ui_expect` then makes
+	## the driver prove it arrived: a mismatch is a non-zero exit, never a quiet
+	## picture of the wrong screen.
+	##
+	## Node paths are relative to the menu node itself and include its `Root`
+	## wrapper (`menu_page.gd` builds `Root` so that a single Backdrop can swallow
+	## clicks aimed at the debug HUD underneath).
+	"s0_3_menu_empty": [
+		{"name": "01_menu_home", "time": 0.33, "mode": "FREE", "size": 52.0, "yaw": 40.0,
+			"ui": ["esc"], "ui_expect": {"open": true, "page": "home", "confirm": false}},
+		{"name": "02_grid_empty", "time": 0.33, "mode": "FREE", "size": 52.0, "yaw": 40.0,
+			"ui": ["click:Root/Home/Panel/Col/Actions/SaveAs"],
+			"ui_expect": {"open": true, "page": "grid", "confirm": false}},
+	],
+	"s0_3_menu_full": [
+		{"name": "03_grid_full", "time": 0.33, "mode": "FREE", "size": 52.0, "yaw": 40.0,
+			"ui": ["esc", "click:Root/Home/Panel/Col/Actions/SaveAs"],
+			"ui_expect": {"open": true, "page": "grid", "confirm": false}},
+		{"name": "04_overwrite_confirm", "time": 0.33, "mode": "FREE", "size": 52.0, "yaw": 40.0,
+			"ui": ["click:Root/GridPage/Panel/Col/Grid/Col/Cards/Slot3"],
+			"ui_expect": {"open": true, "page": "grid", "confirm": true}},
+	],
 }
 
 var _enabled := false
@@ -174,8 +206,13 @@ func _run() -> void:
 			get_tree().quit()
 		return
 	var manifest: Array = []
+	var ui_failed := 0
 	for shot in _shots:
 		_apply(shot)
+		if shot.has("ui"):
+			ui_failed += await _apply_ui(shot["ui"])
+		if shot.has("ui_expect"):
+			ui_failed += _expect_ui(shot["ui_expect"])
 		for i in _frames:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
@@ -195,7 +232,9 @@ func _run() -> void:
 	_write_manifest(manifest)
 	print("[capture] done")
 	if _quit:
-		get_tree().quit()
+		# S0.3 batch 4: a failed UI step or a failed `ui_expect` must not look like a
+		# successful capture — the parent case asserts this exit code.
+		get_tree().quit(1 if ui_failed > 0 else 0)
 
 
 ## Machine-readable sidecar for B- class evidence: which PNGs, which camera
@@ -301,3 +340,100 @@ func _apply(shot: Dictionary) -> void:
 	if pl != null:
 		rig.snap_to(pl.global_position)
 	rig._apply()
+
+
+## ---------------------------------------------------------------------------
+## S0.3 batch 4 — 驱动真实 UI 拍图
+## ---------------------------------------------------------------------------
+## 产品码里**没有**「把菜单摆成某个状态」的后门；截图的 UI 状态由注入的真实输入
+## 事件达成（ESC 键、鼠标按下+抬起），走的是玩家同一条管线。老师傅的做法（给菜单
+## 加个 `set_demo_state()`）会让截图证明的是那个后门，而不是玩家看到的路。
+##
+## 步骤是**增量**：同一批次的第二张图承接第一张图留下的状态（一个批次只有一个
+## 进程）。找不到控件、控件不可见、或 `ui_expect` 与真实状态不符，一律记失败并让
+## 本次截图进程以非 0 退出 —— 否则「拍错屏」会变成一张看起来正常的 PNG。
+func _apply_ui(steps: Array) -> int:
+	var failed := 0
+	for step in steps:
+		var s := String(step)
+		if s == "esc":
+			await _press_key(KEY_ESCAPE)
+			print("[capture] ui esc")
+		elif s.begins_with("click:"):
+			var target := s.substr(6)
+			var ok_click := await _click_path(target)
+			print("[capture] ui click ", target, " -> ", "ok" if ok_click else "FAILED")
+			if not ok_click:
+				failed += 1
+		else:
+			printerr("[capture] 未知 ui 步骤：", s)
+			failed += 1
+	return failed
+
+
+func _click_path(path: String) -> bool:
+	var ctrl := _menu_control(path)
+	if ctrl == null:
+		return false
+	if not ctrl.is_visible_in_tree():
+		printerr("[capture] ui 目标当前不可见：", path)
+		return false
+	var p := ctrl.get_global_rect().get_center()
+	for pressed in [true, false]:
+		var ev := InputEventMouseButton.new()
+		ev.button_index = MOUSE_BUTTON_LEFT
+		ev.pressed = pressed
+		ev.position = p
+		ev.global_position = p
+		Input.parse_input_event(ev)
+		Input.flush_buffered_events()
+		await get_tree().process_frame
+	return true
+
+
+func _press_key(keycode: Key) -> void:
+	for pressed in [true, false]:
+		var ev := InputEventKey.new()
+		ev.keycode = keycode
+		ev.physical_keycode = keycode
+		ev.pressed = pressed
+		Input.parse_input_event(ev)
+		Input.flush_buffered_events()
+		await get_tree().process_frame
+
+
+func _menu_control(path: String) -> Control:
+	var menu := get_tree().get_first_node_in_group("menu")
+	if menu == null:
+		printerr("[capture] 场景里找不到菜单节点（group=menu）")
+		return null
+	var node := menu.get_node_or_null(path)
+	if node == null:
+		printerr("[capture] ui 步骤找不到控件：", path)
+		return null
+	return node as Control
+
+
+## 截图前检查「真的到了声明的界面」。菜单用鸭子类型访问（`call`）：截图器不该
+## 编译期依赖菜单脚本，否则菜单改名/换实现会连累所有批次。
+func _expect_ui(expect: Dictionary) -> int:
+	var menu := get_tree().get_first_node_in_group("menu")
+	if menu == null:
+		printerr("[capture] ui_expect：场景里没有菜单节点")
+		return 1
+	var failed := 0
+	if expect.has("open") and bool(menu.call("is_open")) != bool(expect["open"]):
+		printerr("[capture] ui_expect open 不符：期望 ", expect["open"],
+				"，实际 ", menu.call("is_open"))
+		failed += 1
+	if expect.has("page") and String(menu.call("page_name")) != String(expect["page"]):
+		printerr("[capture] ui_expect page 不符：期望 ", expect["page"],
+				"，实际 ", menu.call("page_name"))
+		failed += 1
+	if expect.has("confirm") and bool(menu.call("confirm_open")) != bool(expect["confirm"]):
+		printerr("[capture] ui_expect confirm 不符：期望 ", expect["confirm"],
+				"，实际 ", menu.call("confirm_open"))
+		failed += 1
+	if failed == 0:
+		print("[capture] ui_expect ok ", JSON.stringify(expect))
+	return failed

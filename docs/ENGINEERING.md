@@ -14,11 +14,11 @@
 
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
-| `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换） |
+| `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
-| `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板）、`ui_slider.gd`（方形滑块） |
+| `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / 覆盖确认三页，S0.3 批次 4）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
 | `scripts/legion/`、`scripts/data/`、`scripts/fx/` | **待建** | 分别在 M4 / M1 / M3 建目录 |
 | `shaders/common/` | 全场景共用着色器 | `toon.gdshader`（3 阶阶梯硬光影）、`outline.gdshader`（逆壳描边） |
@@ -134,8 +134,11 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 **判定方式**：`--out=res://.shots/<任意>` 重采一次，与上表**逐机位 sha256 相等**即为通过
 （`B-` 自 S0.6 起按**逐位一致**判定，不再用百分比容差）。
 
-**复核结果（2026-10-16）**：S0.1 批次 1 / 2 / 3 / 4 与最终回归，以及 S0.3 批次 1 / 2 / 3，
-**每批 6/6 全等**。
+**复核结果（2026-10-16）**：S0.1 批次 1 / 2 / 3 / 4 与最终回归，以及 S0.3 批次 1 / 2 / 3 / 4，
+**每批 6/6 全等**。其中 S0.3 批次 4 新增了菜单与 3×3 宫格（`main.tscn` 里多了一整棵 UI 子树），
+6 机位仍全等 —— 因为 `MenuLayer` 默认 `visible = false`，这条同时充当"UI 没有漏进主画面"的强断言。
+菜单自身的 4 张 `B-` 截图是**另一组**基线（含中文文本，只在同一台机器上逐位可复现），
+不与本表的 6 机位混用。
 
 ---
 
@@ -155,6 +158,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 10 | **`change_scene_to_file()` 是"帧末生效"，不是"立即换场景"** | 调用返回 `err=0` 后，`SceneTree.current_scene` 在**第 1 帧仍是旧场景**（`--script` 实测为 `null`），**第 2 帧**才是新场景；旧场景及其节点组也不会当帧释放。若调用后立刻查场景状态，会把"已提交的意图"当成"已发生的事实" | 三处一起做：① 断言必须"等到目标场景真的成为 `current_scene` 再多等 2 帧"（`_await_route()`，绝不固定 `await N` 帧）；② 路由器用 `_expected_path` 标记"在飞行中"，此时拒绝第二次切换（否则引擎只保留最后一次请求，栈与屏幕会不一致）；③ 但 `current_route()` 仍如实返回**已提交的意图**，不因旧场景还在就撒谎 |
 | 11 | **`SceneTree` 子类里没有 `get_tree()`** | `tools/verify.gd` 继承 `SceneTree`，写 `get_tree().current_scene` / `get_tree().get_node_count()` 直接**解析期报错**（`Function "get_tree()" not found in base self`），整个套件无法加载 | 直接用 `self` 上的成员与方法：`current_scene` / `get_node_count()` / `get_first_node_in_group()`。同一原因，autoload 标识符在 `--script` 里也不参与编译，必须 `get_root().get_node_or_null("Name")` |
 | 12 | **节点自动名含全局计数器，不可作为结构指纹** | 同一场景加载两次，未命名节点拿到的是 `@MeshInstance3D@28` 与 `@MeshInstance3D@64`（计数器随进程增长），直接把 `name` 拿去哈希会得出"两次不一样"的错误结论 | 归一化：名字以 `@` 开头时改用 `get_class()`，再按子节点顺序逐条记录 `名字或类:类:子节点数`。归一后 92 条指纹跨次加载**逐位一致**（`fe520385…`）。`s0_3_router` 用它把"回到世界节点数 ±0"升级成"结构逐条相同" |
+| 13 | **`verify.gd --all` 在同一个进程里顺序跑完全部用例** | 用例之间会通过全局服务互相污染：`s0_3_roundtrip` / `s0_3_no_autosave` 走后 `SaveSystem.current_slot` 停在 3，于是 `s0_3_slots` 的"没有当前槽位 ⇒ 保存等同另存为"整段**静默退化**成"直接写当前槽位"——**单跑该用例全绿、放进 `--all` 里 7 条失败**。这类失效模式最危险的地方是它只在组合运行下出现，而"每次验收都跑 `--all`"正是唯一能逮住它的手段 | 用例**自带前置条件**：`_restore_defaults()` 补上 `SaveSystem.current_slot` / `last_error` 的复原（`select_slot()` 只接受 1..9、没有公开的"清空"入口，故直接写回默认值），新用例在开头显式复位并把"起步是『没有选中槽位』"写成断言。**新增用例时必须问一句：它依赖上一个用例的残留状态吗？** |
+| 14 | **同一秒内的两次存档可以逐位相同** | `s0_3_overwrite` 的"确认覆盖后文件字节确实换了"报失败：`saved_at` 只到秒、`meta` 里其余字段也都取自同一批状态，而整个流程（写 → 弹窗 → 取消 → 弹窗 → 确认）耗时 < 1s，于是覆盖前后**字节逐位相同**是**正确**行为，错的只是断言 | 判"到底写没写"要看**发布次数**而不是内容：订阅 `SaveSystem.save_written` 计数（取消必须 0 次、确认必须 +1），内容层面只断言"仍是完整合法 JSON"。推广：**"值变了" 不适用于幂等写，"发生了写" 才适用** |
+| 15 | **UI 控件路径必须相对"菜单节点"写全，且要带自己的包装层** | `--shots` 注入点击时报 `ui 步骤找不到控件：Home/Panel/Col/Actions/SaveAs`（漏了菜单自己的 `Root` 包装层）与 `Root/GridPage/Panel/Col/Grid/Cards/Slot3`（漏了宫格内部的 `Col` 容器）两次 | 路径一律写成**相对菜单节点**的完整链（`Root/Home/...`）；新增 UI 前先用一次性探针把真实节点树打出来再写路径（本批用 `tools/_probe_menu.gd`，验收后删除）。配套约束：找不到控件必须以**非 0 退出**，绝不"拍一张当前画面的图"充当证据 |
 
 ---
 
@@ -235,3 +241,39 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > 让拒绝理由说"栈已满"而不是"来源不对"——否则深度上限这条规则永远不可观测、等于没写。
 > 同理，"回到世界是不是同一片世界"若不查结构与 seed，只查节点总数，那么"重建出一片同规模的
 > 另一片地形"也会通过——**弱断言会让错误的实现在验收里活下来**。
+
+### 6.5 S0.3 批次 4 验收时点（autoload 保持 8；新增存档菜单与 3×3 九宫格）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **16 用例 / 失败 0 / 跳过 0 / 594 断言全通过** / 退出码 0（71.8s） |
+| headless `tools/verify.gd --all` | 16 用例 / 失败 0 / 跳过 **4**（`s0_2_baseline`、`s0_6_repro`、`s0_3_slots`、`s0_3_overwrite` 需 GPU）/ 退出码 0（14.7s） |
+| 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `WARNING` / `SCRIPT ERROR` |
+| 新增用例 `s0_3_slots` | **100/100**：装配（`MenuLayer` 默认隐藏、`group=menu` 唯一、菜单层号 > 调试 HUD 层号）/ **暂停契约**（`paused==true` 时主场景 `can_process()==false`，菜单与 `Clock` 为 `true`，且暂停中 `Clock.frame` 精确 +30 帧、`t` +0.5s、暂停中注入的真实点击仍能打开宫格）/ 无当前槽位时「保存」「读取」各自跳宫格并显示服务给的拒绝理由 / 空槽位写入（无需确认、卡片正文立刻 == `slot_info().label`、状态行显示"当前槽位：5"）/ `ESC` 四级层级 / 4 张 `B-` 菜单截图的两轮逐位一致 + 两两不同 + 非空图 |
+| 新增用例 `s0_3_overwrite` | **34/34**：点已占用槽位弹出整页确认（标题含槽位号、正文含该档 `label` 与 `saved_at`）/ **弹窗期间与取消后 `saves/` 逐项 sha256+mtime 不变**、`save_written` 发布次数 0 → +1 / `ESC` 先取消弹窗而不关菜单 / 确认后才覆盖且仍是完整合法 JSON / 主页「保存」写已占用的当前槽位同样先问 |
+| `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**（菜单默认隐藏 ⇒ 主视图零像素变化），manifest `det=True hz=60.0 t=2.5 frame=150` |
+| `B-` 菜单 4 张（新增） | 1600×900，两个数据状态 × 两轮独立窗口进程：`01_menu_home eeec5d02…` / `02_grid_empty ce9175ce…` / `03_grid_full a504ec4e…` / `04_overwrite_confirm 1563abf8…`；每张两轮 sha256 逐位一致（`img_diff` `channel=0` 差异像素 0）、四张两两不同、平均亮度 0.2088~0.4615（非空图判定） |
+| `C-` 性能（3 次采样极差） | FPS **0.000%** / ms-per-frame **0.000%** / 静态内存 **0.000%** / 三角面 **0.000%** / 绘制调用 **0.000%**；`fps_mean 60.0` / `ms_per_frame 16.667` / `primitives 219978` / `draw_calls 96`（与 §6.1–§6.4 全等）/ `memory_static 126.13 MB` / `objects 2034` |
+| autoload 数量 | **8** / 上限 10（本批**不新增服务**，菜单是场景内的 UI 节点而非 autoload） |
+
+> `primitives 219978` 与 `draw_calls 96` 自 §6.1 起五次验收完全不变：菜单虽是 `main.tscn` 里的真实
+> 节点树，但默认隐藏 ⇒ 不在渲染路径上。
+>
+> `memory_static` 91.25~91.63 → **126.13 MB**、`objects` 1778~1782 → **2034**。这 +34.8 MB 没有靠猜，
+> 用独立探针（headless 加载主场景 → 只释放 `MenuLayer` 子树 → 再读监视器）拆开量过：
+> **菜单子树 77 节点 = 34.29 MB / 254 对象**（99.52 → 65.23 MB），窗口侧 +34.8 MB 与之相互印证。
+> 主体是中文 `SystemFont`（`SystemFont.font_names` 匹配到系统 CJK 字体）及其字形缓存。
+> 本步不动它（UI 必须能显示中文），但**登记一条后续可选项**：若日后要压内存，首选项是把
+> `SystemFont` 换成子集化的随包字体，预计可省 ~30 MB。
+>
+> **本批最值得记住的两条负面结论**（已回写 §5 陷阱 13/14 与 `ROADMAP` §5 S0.3/§15）：
+> ① `verify.gd --all` 是**同一个进程里顺序跑完所有用例**，所以"上一个用例停在哪个槽位"属于必须显式
+> 复原的状态——`s0_3_roundtrip` 走后 `SaveSystem.current_slot` 停在 3，`s0_3_slots` 的"无当前槽位"
+> 整段**静默退化**成另一条分支（单跑该用例全绿、`--all` 里 7 条失败）；② 同一秒内状态没变时两次存档的
+> **字节可以逐位相同**（`saved_at` 只到秒），所以"文件内容变了"不能当"确实写过了"的判据，
+> 要用 `save_written` 的发布次数（取消必须 0 次、确认必须 +1）。
+>
+> **本批最值得记住的设计结论**：截图状态由**注入的真实输入**（`Input.parse_input_event`）达成，
+> 而不给产品码加"演示状态"钩子。代价是控件路径必须写对，收益是子进程能自证"我到达了声明的界面"
+> （`ui_expect`），对不上就以非 0 退出——两个路径 bug（漏了菜单自己的 `Root` 包装层、漏了宫格的
+> `Col` 容器）都是这样被当场逮住的，而不是产出一张看着正常的错误截图。

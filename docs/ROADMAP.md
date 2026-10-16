@@ -456,7 +456,24 @@ $P      = "G:\godot_project\mc-npr-godot"
 批次 3 ✅ 已完成（2026-10-16，提交 `2036423`，autoload 7 → 8：`scripts/core/scene_router.gd` + `scenes/battle/battle_stub.tscn`
 （占位靶子，M2 替换）+ 守卫规则 `scene_change_owner`；`s0_3_state` 的 autoload 契约 7 → 8，
 `s0_2_guard` 类数描述 7 类 → 8 类，新增 `s0_3_router` 70 断言；实测证据见 §15 台账与 `docs/成果.md`）；
-批次 4 待开工。
+批次 4 ✅ 已完成（2026-10-16，subject `feat(ui): S0.3 批次 4 —— 新增存档菜单与 3×3 九宫格，接入 ESC 暂停与 SaveSystem`：
+新增 `scripts/ui/menu_page.gd`（菜单页 / `ESC` 层级 / 覆盖确认弹窗）与 `scripts/ui/save_grid.gd`（3×3 槽卡片），
+`scenes/main.tscn` 挂载 `MenuLayer`（**默认隐藏**），autoload 保持 8（本批不新增服务）；
+`Clock` / `scripts/ui/ui_panel.gd` / 菜单三者显式 `PROCESS_MODE_ALWAYS`（陷阱 1 落地）；
+新增用例 `s0_3_slots` 100 断言 + `s0_3_overwrite` 34 断言 + 4 张 `B-` 菜单截图；
+实测证据见 §15 台账与 `docs/成果.md`）。
+
+**批次 4 的对齐结论（2026-10-16，与本会话逐项确认后定稿）**
+
+| 决策点 | 结论 |
+|---|---|
+| 保存 / 另存为 | 「保存」写**当前槽位**；没有当前槽位时按 `save_current()` 的契约**跳九宫格**并显示服务给的拒绝理由（"保存等同另存为"）；「另存为」一律打开九宫格、选槽后写入 |
+| 覆盖二次确认 | **整页确认弹窗**（"确认覆盖" / "取消（保留旧存档）"两个按钮），不是行内提示；弹窗期间与取消后旧档 sha256 + mtime **逐项不变** |
+| 当前槽位也要问 | 主页「保存」写**已占用**的当前槽位时同样先问一次：服务是唯一裁决（`save_slot()` 的覆盖确认契约不区分"我自己的档"），宁可多问一次也不静默覆盖 |
+| `B-` 四张 | ① 菜单主页面 ② 九宫格空槽态 ③ 九宫格满槽态 ④ 覆盖确认态 —— 状态由**注入的真实输入**（ESC / 点击）达成，产品码里没有"演示状态"后门 |
+| 暂停契约 | `ESC` 打开菜单 ⇒ `get_tree().paused = true`；`Clock` / `ui_panel.gd` / 菜单三者显式 `PROCESS_MODE_ALWAYS`（陷阱 1 的落地与实测） |
+| 菜单默认隐藏 | `scenes/main.tscn` 挂载后 `visible = false`：本批唯一还要守住 6 机位 `B-` 门禁的地方 |
+| 淡入淡出过渡 | **未纳入本批**（本批对齐范围只有菜单 + 宫格 + 覆盖确认）。理由：幕布必须**活过场景切换**（`change_scene_to_file()` 会释放旧场景），所以它不能挂在任何场景内，需要一个持久属主（新 autoload，或路由器持有 UI）—— 这是要先对齐的设计决定，不在批次末尾顺手做。顺延为独立小步，已在 §15 台账登记 |
 
 **批次 3 的对齐结论（2026-10-16，与本会话逐项确认后定稿）**
 
@@ -489,6 +506,10 @@ $P      = "G:\godot_project\mc-npr-godot"
 1. `get_tree().paused = true` 会**连带停掉 autoload 的 `_process`**（autoload 挂在 root 下、默认继承暂停）。
    故 `Clock` 与 UI 根节点必须显式设 `process_mode = PROCESS_MODE_ALWAYS`；`GameState` 保持默认
    （暂停时游戏时间不应推进）。
+   **已实测（2026-10-16，批次 4）**：菜单打开后 `paused == true`、主场景 `can_process() == false`、
+   菜单与 `Clock` 的 `can_process()` 均为 `true`，且**暂停中 `Clock.frame` 仍精确前进 30 帧 / `t` +0.5s**
+   （确定性模式下可数，不是"看起来在动"）；暂停期间注入的真实点击仍能打开宫格 —— 这条同时证明了
+   `PROCESS_MODE_ALWAYS` 确实生效（否则按钮收不到输入）。
 2. ~~**Windows 上"原子覆盖"需实测**~~ **已实测结案（2026-10-16，批次 2）**：单进程探针先给出
    "`rename_absolute(tmp, 已存在且未打开的目标)` 返回 OK、内容被替换、无 `.tmp` 残留；目标被读句柄
    占用时返回 err=1 且原档不变"的结论；**但跨进程并发用例 `s0_3_atomic` 推翻了"无空窗"这半句**——
@@ -508,9 +529,13 @@ $P      = "G:\godot_project\mc-npr-godot"
    路由器另用 `_expected_path` 标记"在飞行中"，此期间拒绝第二次切换（否则引擎只保留最后一次请求，
    栈与屏幕会不一致）。见 `docs/ENGINEERING.md` §5 陷阱 10。
 4. `user://saves/` 目录需按需 `DirAccess.make_dir_recursive_absolute()` 创建，首次存档前不存在。
-5. `ESC` 的键位与 `ui_cancel` 默认动作、以及 `input_setup.gd` 既有映射需先核对是否冲突（S0.4 还会
-   注册 `F1/F3/F5/F9`）。
+5. ~~`ESC` 的键位与 `ui_cancel` 默认动作、以及 `input_setup.gd` 既有映射需先核对是否冲突~~ **已核对
+   （2026-10-16，批次 4）**：`project.godot` 没有 `[input]` 段、`input_setup.gd` 未占用 `ESC`，内建
+   `ui_cancel` 已绑定 Escape；菜单同时认 `keycode` / `physical_keycode` / `ui_cancel` 三者，不改键位表。
+   用例断言"`ui_cancel` 存在且绑在 Escape 上"（S0.4 注册 `F1/F3/F5/F9` 时不受影响）。
 6. 菜单节点**默认必须隐藏**，否则 6 机位 `B-` 门禁立即变红（这也是本步最有价值的一条自动防线）。
+   **已守住（2026-10-16，批次 4）**：`s0_3_slots` 断言"启动时 `visible == false`"，且 6 机位 sha256 与
+   S0.1 基线**全等**（6/6）；三层 UI 的层号也纳入断言（菜单层 > 调试 HUD 层）。
 
 **验收标准**
 - `A-` 「新游戏 → 快存 → 退出进程 → 读档」后 seed/时间/金钱/粮草/玩家位置逐字段一致（用例 `s0_3_roundtrip`）。
@@ -521,13 +546,19 @@ $P      = "G:\godot_project\mc-npr-godot"
   重试**吸收（实测并发 170~193 次读 **0 次失败**），且风暴结束后读者看到的最终内容与写者自述的
   最后一版 sha256 一致。
 - `A-` 宫格页渲染 9 个槽位；空槽显示「空槽位」且不可读取（用例 `s0_3_slots`）。
+  **已实测（2026-10-16，批次 4）**：9 张卡片正文逐个 == `SaveSystem.slot_info(slot).label`（宫格自己不算、不缓存槽位数据）；
+  空槽位在读取态点击给出理由、`current_slot` 不变、一个文件都不写。
 - `A-` **无自动存档**：启动 → 进战斗 → 返回 → 退出全流程中，除显式点击「保存 / 另存为」外，
   `user://saves/` 下所有文件的内容哈希与 mtime 均不发生任何变化（用例 `s0_3_no_autosave`）。
 - `A-` 覆盖已有槽必须触发二次确认；取消后原存档哈希不变（用例 `s0_3_overwrite`）。
-- `D-` `ESC` 菜单页开合、宫格选槽与二次确认流程的手感确认。
+  **已实测（2026-10-16，批次 4）**：弹窗期间与取消后 `saves/` 逐项（sha256 + mtime）不变，且 `save_written`
+  **一次都没发**；确认后才 +1 次写入。注意口径：同一秒内状态没变时两次存档的**字节可以逐位相同**
+  （`saved_at` 只到秒），所以"文件内容变了"不能当判据，"发布了几次写入"才是。
+- `D-` `ESC` 菜单页开合、宫格选槽与二次确认流程的手感确认。**待你试**（2026-10-16 批次 4 代码与 `A-`/`B-`
+  全部就位；本项是全步唯一未闭环的验收项，故 §15 中 S0.3 状态保持"进行中"）。
 
 **依赖与风险**：S0.2。风险：单例过多导致隐式耦合 → 约定只有 `SceneRouter` 能切场景、只有 `SaveSystem` 能读写 `user://`。
-**状态**：🚧 进行中（批次 1 ✅、批次 2 ✅；批次 3 场景路由 / 批次 4 菜单与九宫格 待开工）
+**状态**：🚧 进行中（批次 1–4 全部落地 ✅；仅剩 `D-` 人工试玩确认）
 
 ### S0.4 调试与观测层
 
@@ -1473,7 +1504,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 |---|---|---|---|---|
 | S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ✅ 已验收 | 6 批迁移全部完成（批次 1–4 为代码移动，`1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；验收：窗口 `--all` 8 用例 / 152 断言全通过 / 退出码 0，headless 8 用例 0 失败 2 跳过，推送门禁 0 条 ERROR，`B-` 6 机位与迁移前基线**逐位一致（6/6 sha256 全等）**；产出 `docs/ENGINEERING.md` |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
-| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 `39f0c34`，subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 2 ✅ 已完成（2026-10-16，提交 `93c25e6`）**：新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` 之后，3 → 7）：9 固定槽位（1-based）+ `schema_version: 1` + `meta` 槽位卡片字段（真实时间 / 游戏内日期时间 / 队伍名与等级 / 累计时长）+ 脏存档容错（非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 `game` 一律拒读且不改动当前状态；未知·缺失·类型错误字段逐条告警并保留当前值）+ `migrations` 版本链钩子 + **无自动存档**（无 `_ready`/`_process`/`EventBus` 订阅，`SAVE_DIR` 由首次写入惰性创建）。新增 4 用例：`s0_3_roundtrip` 63 断言（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回并回吐快照文件）、`s0_3_dirty` 47 断言、`s0_3_atomic` 29 断言（跨进程并发 800 次写 / 170 次观测，**0 次半截内容**、读者重试后 **0 次读取失败**、最终与写者自述 sha256 逐位一致）、`s0_3_no_autosave` 17 断言（启动 + 世界重建 + 五种全局事实 + 完整启动子进程后，`user://saves` 全部文件哈希与 mtime **零变化**，且有正对照证明该检查真能检出显式存档）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **13 用例 / 0 失败 / 0 跳过（385 断言）/ 退出码 0**，headless 13 用例 / 0 失败 / 2 跳过；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 3 ✅ 已完成（2026-10-16，提交 `2036423`）**：新增 `scripts/core/scene_router.gd`（autoload `SceneRouter`，7 → 8）与 `scenes/battle/battle_stub.tscn` + `scripts/battle/battle_stub.gd`（**占位靶子**，M2 替换）。`SceneRouter` 是**唯一**允许调用 `change_scene_to_file()` 的文件（守卫新规则 `scene_change_owner` 按属主路径放行）；浅栈 `world` → `battle`（`MAX_DEPTH=2`），越界一律显式失败并给出原因，拒绝不改动状态；栈与真实屏幕对账（场景被外部换掉/释放后 `current_route()` 归空，不沿用旧信念）；`_expected_path` 挡住同帧内的第二次切换（`change_scene_to_file` 只是登记，`current_scene` 要到帧末才更新）；只发自身事实 `route_changed(from,to)`，不发 `encounter_started`/`battle_finished`（留给 M1/M2，避免双重发射）；无 `_ready`、无 `_process`（批次 4 的 `paused` 不会卡住路由）。新增用例 `s0_3_router` 70 断言，覆盖：路由表与 API 契约、切换落地前的同帧语义、`world→battle→world` 后**节点数 ±0（101 → 101）**、世界子树**结构指纹逐条一致（92 条）**、**seed 派生值一致**（`spawn_point` + `height_at` + `Scatter.stats`）、栈深上限与三类越界的显式拒绝、`route_changed` 恰好 4 次且被拒调用一次不播报、占位场景正交相机/面着色网格（242 三角面）/`Style.toon()` + 逆壳描边、以及"栈不撒谎"。同批把 `s0_3_state` 的 autoload 契约 7 → 8、`s0_2_guard` 类数描述 7 类 → 8 类。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **14 用例 / 0 失败 / 0 跳过（460 断言）/ 退出码 0 / 50034 ms**，headless 14 用例 / 0 失败 / 2 跳过（411 断言）/ 13939 ms；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`C-` fps_mean 59.97–60.02、ms/frame 16.662–16.676、三角面 219,978、绘制调用 96。批次 4（菜单 + 九宫格）待开工 |
+| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 `39f0c34`，subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 2 ✅ 已完成（2026-10-16，提交 `93c25e6`）**：新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` 之后，3 → 7）：9 固定槽位（1-based）+ `schema_version: 1` + `meta` 槽位卡片字段（真实时间 / 游戏内日期时间 / 队伍名与等级 / 累计时长）+ 脏存档容错（非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 `game` 一律拒读且不改动当前状态；未知·缺失·类型错误字段逐条告警并保留当前值）+ `migrations` 版本链钩子 + **无自动存档**（无 `_ready`/`_process`/`EventBus` 订阅，`SAVE_DIR` 由首次写入惰性创建）。新增 4 用例：`s0_3_roundtrip` 63 断言（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回并回吐快照文件）、`s0_3_dirty` 47 断言、`s0_3_atomic` 29 断言（跨进程并发 800 次写 / 170 次观测，**0 次半截内容**、读者重试后 **0 次读取失败**、最终与写者自述 sha256 逐位一致）、`s0_3_no_autosave` 17 断言（启动 + 世界重建 + 五种全局事实 + 完整启动子进程后，`user://saves` 全部文件哈希与 mtime **零变化**，且有正对照证明该检查真能检出显式存档）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **13 用例 / 0 失败 / 0 跳过（385 断言）/ 退出码 0**，headless 13 用例 / 0 失败 / 2 跳过；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 3 ✅ 已完成（2026-10-16，提交 `2036423`）**：新增 `scripts/core/scene_router.gd`（autoload `SceneRouter`，7 → 8）与 `scenes/battle/battle_stub.tscn` + `scripts/battle/battle_stub.gd`（**占位靶子**，M2 替换）。`SceneRouter` 是**唯一**允许调用 `change_scene_to_file()` 的文件（守卫新规则 `scene_change_owner` 按属主路径放行）；浅栈 `world` → `battle`（`MAX_DEPTH=2`），越界一律显式失败并给出原因，拒绝不改动状态；栈与真实屏幕对账（场景被外部换掉/释放后 `current_route()` 归空，不沿用旧信念）；`_expected_path` 挡住同帧内的第二次切换（`change_scene_to_file` 只是登记，`current_scene` 要到帧末才更新）；只发自身事实 `route_changed(from,to)`，不发 `encounter_started`/`battle_finished`（留给 M1/M2，避免双重发射）；无 `_ready`、无 `_process`（批次 4 的 `paused` 不会卡住路由）。新增用例 `s0_3_router` 70 断言，覆盖：路由表与 API 契约、切换落地前的同帧语义、`world→battle→world` 后**节点数 ±0（101 → 101）**、世界子树**结构指纹逐条一致（92 条）**、**seed 派生值一致**（`spawn_point` + `height_at` + `Scatter.stats`）、栈深上限与三类越界的显式拒绝、`route_changed` 恰好 4 次且被拒调用一次不播报、占位场景正交相机/面着色网格（242 三角面）/`Style.toon()` + 逆壳描边、以及"栈不撒谎"。同批把 `s0_3_state` 的 autoload 契约 7 → 8、`s0_2_guard` 类数描述 7 类 → 8 类。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **14 用例 / 0 失败 / 0 跳过（460 断言）/ 退出码 0 / 50034 ms**，headless 14 用例 / 0 失败 / 2 跳过（411 断言）/ 13939 ms；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`C-` fps_mean 59.97–60.02、ms/frame 16.662–16.676、三角面 219,978、绘制调用 96。批次 4（菜单 + 九宫格）→ **已完成 ✅（2026-10-16，subject `feat(ui): S0.3 批次 4 —— 新增存档菜单与 3×3 九宫格，接入 ESC 暂停与 SaveSystem`）**：新增 `scripts/ui/menu_page.gd`（`CanvasLayer`，`layer=20` / `PROCESS_MODE_ALWAYS` / `add_to_group("menu")`；主页五入口 + 宫格页 + 覆盖确认弹窗三页；`ESC` 四级层级＝弹窗→宫格→主页→关闭，`keycode`/`physical_keycode`/`ui_cancel` 三者都认）与 `scripts/ui/save_grid.gd`（`COLUMNS=3` / `SLOT_COUNT=9`、卡片 296×104、`slot_pressed(slot)`；卡片正文**只读** `SaveSystem.slot_info(slot).label`，宫格自己不算、不缓存槽位数据）。`scenes/main.tscn` 挂载 `MenuLayer`（**默认隐藏**，否则 6 机位 `B-` 立即变红）；`scripts/core/render_clock.gd` 与 `scripts/ui/ui_panel.gd` 补 `PROCESS_MODE_ALWAYS`（陷阱 1 落地）；`scripts/core/capture.gd` 的 `--shots` 新增 UI 步骤驱动（`ui:["esc","click:<控件相对路径>"]` + `ui_expect` 自证行；**产品码不留演示状态后门**，"拍错屏"直接以非 0 退出而不是产出一张看着正常的 PNG）。新增用例 `s0_3_slots` **100 断言**（装配与层号、暂停契约、无当前槽位的两条跳转、空槽位直写与卡片刷新、`ESC` 层级、4 张 `B-` 截图两轮逐位一致 + 两两不同 + 非空图）与 `s0_3_overwrite` **34 断言**（整页弹窗先问后写、弹窗期间与取消后目录逐项 sha256+mtime 不变、`save_written` 计数 0 → +1、主页「保存」写已占用的当前槽位同样先问）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **16 用例 / 0 失败 / 0 跳过 / 594 断言 / 退出码 0 / 71843 ms**，headless 16 用例 / 0 失败 / **4 跳过** / 411 断言 / 14672 ms；**`B-` 6 机位与 S0.1 基线逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`B-` 菜单 4 张（1600×900，两轮独立进程逐位一致）`01_menu_home eeec5d02…` / `02_grid_empty ce9175ce…` / `03_grid_full a504ec4e…` / `04_overwrite_confirm 1563abf8…`；`C-` fps_mean 60.0、ms/frame 16.667、三角面 219,978、绘制调用 96（与批次 3 全等），**静态内存 91.3 → 126.13 MB、对象 1778 → 2034** —— 增量经独立探针拆开量过：**菜单子树 77 节点 = 34.29 MB / 254 对象**（headless 侧 99.52 → 65.23 MB，与窗口侧 +34.8 MB 相互印证），主体是中文 `SystemFont`（匹配到系统 CJK 字体）及其字形缓存，登记为"若日后压内存，首选项是换子集化随包字体"。**两条负面结论已回写**：① `--all` 在同**一个进程**里顺序跑完所有用例，因此"上一个用例停在哪个槽位"属于必须显式复原的状态（`s0_3_roundtrip` 走后 `current_slot` 停在 3，导致 `s0_3_slots` 的"无当前槽位"整段失效 —— `_restore_defaults()` 已补 `SaveSystem.current_slot`/`last_error`，两个新用例自带前置条件）；② 同一秒内状态没变时两次存档的**字节可以逐位相同**（`saved_at` 只到秒），"文件内容变了"不能当"确实写过了"的判据，要用 `save_written` 的发布次数。**未闭环项**：`D-` 人工试玩（§5 S0.3 唯一剩余验收项）；淡入淡出过渡**未纳入本批**（幕布必须活过 `change_scene_to_file()` 的场景释放 ⇒ 需要一个不挂在任何场景里的持久属主，属要先对齐的设计决定，顺延为独立小步） |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
 | S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ⏳ 未开始 | — |
 | S0.6 | 可复现渲染时钟（可注入 `u_time`） | S0.2 | ✅ 已验收 | 提交 `457a7d2`（实现）+ `953fd0d`（用例与守卫）；`tools/verify.gd --all` 窗口模式 **8/8 用例、152/152 断言**、退出码 0，headless 6 通过 + 2 跳过、退出码 0。关键证据 `s0_6_repro` 31/31：两独立进程同参数截图 `img_diff` **0 像素 / 0.0000%** 且 sha256 逐位相同（`s0_boot_follow`、`s0_boot_wide`），`--yaw=45→52` 与 `--frames=15→200` 反向对照均判不同；`s0_6_clock` 28/28；修复前同口径实测 1.62%–5.67%。`C-` 三次采样 ms/frame 16.685/16.667/16.667、三角面 219,978、绘制调用 96（vsync 封顶，仅证明未跌破上限）。结论与遗留见 `docs/成果.md` |
@@ -1586,6 +1617,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-16 | **S0.3 批次 2 落地：autoload 6 → 7**。新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` **之后**）：`SAVE_DIR="user://saves"` / `SLOT_COUNT=9` / `schema_version:1` / `meta` 槽位卡片字段 / `migrations` 版本链钩子 / 脏存档与脏字段容错 / `save_written`·`save_failed`·`load_failed`·`slot_loaded` 四信号；**无 `_ready`、无 `_process`、不订阅 `EventBus`**，目录由首次写入惰性创建（无自动存档的静态与动态双证据）。`tools/verify.gd` 新增 4 用例（`s0_3_roundtrip` 63 / `s0_3_dirty` 47 / `s0_3_atomic` 29 / `s0_3_no_autosave` 17 断言）与 3 个隐藏探针（跨进程写 / 读回吐 / 狂写循环）；`s0_3_state` 的 autoload 契约 6 → 7 并把 `SaveSystem` 排在 `GameState` 之后的顺序纳入断言。**同时修好三个验收工具的坑（详见 `docs/ENGINEERING.md` §5 陷阱 6–9）**：① 引擎 rename 覆盖在 Windows 上非原子（读者须重试）；② `JSON.parse_string()` 解析失败会打引擎级 `ERROR`，坏存档是正常输入，改用 `JSON.new().parse()`；③ `OS.create_process()` 子进程不继承 stdout，子进程结论必须落文件；④ 子进程只认 `--` 之后的 `--out=`，`s0_2_baseline` 因此曾整例失败且有假通过风险（已修正并补"运行前删旧报告 + 断言不存在"） | 批次 2 的验收核心是**"没有自动存档"要能被证伪**：用例先证明检查本身有效（正对照：显式 `save_slot` 一定改变目录快照），再断言全流程零变化；同时用**真跨进程**（不是同进程两次调用）证明存档文件是进程间事实。另一个关键判断：单进程探针只看末态会得出"rename 覆盖无空窗"的错误结论，**跨进程并发观测才推翻它**——这条负面结论已写入 §5 S0.3 陷阱 2 与 `save_system.gd` 文件头，成为后续所有 `user://` 写入的既定约束 | 用户（本会话批准执行 S0.3 批次 2） |
 
 | 2026-10-16 | **S0.3 批次 3 落地：autoload 7 → 8**。新增 `scripts/core/scene_router.gd`（autoload `SceneRouter`）与占位战斗场景 `scenes/battle/battle_stub.tscn`（`scripts/battle/battle_stub.gd`，M2 替换）。路由器是**唯一**允许调 `change_scene_to_file()` 的文件——守卫新增第 8 类规则 `scene_change_owner`（按属主路径白名单放行，`s0_2_guard` 由 7 类升为 8 类，并带正负对照：路由器路径 0 命中、`terrain.gd` 里同一句恰好 1 命中）。栈为浅栈 `world` → `battle`（`MAX_DEPTH = 2`），三类越界（重复进入、栈满、非战斗返回）各自给出**指名原因**且不改动状态；`_expected_path` 挡同帧第二次切换；栈与屏幕对账（`_sync()`），场景被外部释放后 `current_route()` 归空。`s0_3_state` 的 autoload 契约 7 → 8；新增 `s0_3_router` 70 断言。**本次记录 3 条实测结论（详见 `docs/ENGINEERING.md` §5 陷阱 10–12）**：① `change_scene_to_file()` 在 `--script`（SceneTree MainLoop）下**可用**，但 `current_scene` 第 1 帧仍为 `null`、第 2 帧才是新场景（陷阱 3 的量化确认）；② `SceneTree` 子类里**没有** `get_tree()`，应直接用 `current_scene` / `get_node_count()`；③ 节点自动名（`@MeshInstance3D@28`）含全局计数器，两次加载必然不同 ⇒ 结构指纹必须先把 `@` 开头名字归一为 `get_class()`，归一后 92 条指纹**逐位可复现**（`fe520385…`） | 批次 3 的验收核心是**"回到世界是不是同一片世界"**：只断言节点数 ±0 太弱（总数相同、结构换了也过），故加两层——世界子树的**结构指纹**（92 条 `名字/类:类:子节点数`）与 **seed 派生值**（`spawn_point`、`height_at` 采样、`Scatter.stats` 树石数）必须逐条一致；同时用"外部释放场景后路由归空"证明路由栈不是一份永不更新的自述。占位场景刻意保持**纯函数**（无 `Rng`/时钟/`_process`），只做"能当靶子"的最小合规：正交相机 + `MeshUtil.facet()` 低模地面 + 逆壳描边 + `Style.PALETTE`，故 `B-` 6 机位不受影响（6/6 逐位一致） | 用户（本会话批准执行 S0.3 批次 3） |
+| 2026-10-16 | **S0.3 批次 4 落地（S0.3 最后一批）：菜单页 + 3×3 九宫格 + 覆盖二次确认**。新增 `scripts/ui/menu_page.gd`（三页：主页/宫格/确认弹窗；`ESC` 四级层级；`PROCESS_MODE_ALWAYS`）与 `scripts/ui/save_grid.gd`（9 张槽卡片，正文只读 `SaveSystem.slot_info()`）；`scenes/main.tscn` 挂载 `MenuLayer` 且**默认隐藏**；`render_clock.gd` / `ui_panel.gd` 补 `PROCESS_MODE_ALWAYS`；`capture.gd` 的 `--shots` 增加 UI 步骤驱动与 `ui_expect` 自证行（产品码无演示状态后门）。新增 `s0_3_slots` 100 断言、`s0_3_overwrite` 34 断言、4 张菜单 `B-` 截图。窗口 `--all` 16 用例 / 0 失败 / 0 跳过 / 594 断言 / 71843 ms；headless 16 / 0 失败 / 4 跳过 / 411 断言 / 14742 ms；`B-` 6 机位与 S0.1 基线全等（6/6）；菜单 4 张两轮逐位一致且两两不同。**两条负面结论**：① `--all` 是**同进程顺序跑**，用例间的全局残留（`SaveSystem.current_slot`）必须显式复原，否则后置用例会静默退化成"另一条分支"；② 同一秒内两次存档字节可以逐位相同（`saved_at` 到秒），判"确实写过"要看 `save_written` 的发布次数而不是哈希。**登记两项未闭环**：`D-` 人工试玩；淡入淡出过渡（幕布需活过场景释放 ⇒ 需先对齐属主设计，顺延独立小步）。`C-` 内存 91.3 → 126.13 MB 经独立探针拆分：菜单子树 77 节点 = 34.29 MB（主体是中文 `SystemFont` 及字形缓存），已登记"换子集字体可省 ~30 MB"为后续可选项 | 用户（本会话五问五答后批准执行 S0.3 批次 4；其中覆盖确认形态由用户在"行内提示 vs 独立弹窗"中选择**独立弹窗**） |
 
 ---
 
@@ -1602,6 +1634,8 @@ $P      = "G:\godot_project\mc-npr-godot"
 | `scripts/style.gd` | 仅新增调色板项与少量材质参数，**不重构** | 全程 |
 | `scripts/capture.gd` | 扩展 `--case=` 批量案例表与截图清单 JSON；**触发条件收紧**：仅 `--shots`/`--shot=`/`--capture`/`--bench` 才启动截图批次，`--case=`/`--out=` 降为修饰符（避免与 verify 抢占退出码） | S0.2（已完成） |
 | `scripts/ui_panel.gd` | 保留为调试面板；新 UI 抽取公共控件工厂 | S0.4、S1.5 |
+| `scripts/ui/menu_page.gd`、`scripts/ui/save_grid.gd`（新增） | 游戏内菜单页与 3×3 宫格组件（§3.5）；S0.4 在其上加调试入口、S6.3 在其上加槽位管理（删除/多分辨率） | S0.3 ✅、S0.4、S6.3 |
+| `scenes/main.tscn` | 挂载 `MenuLayer`（默认隐藏）；S1.2 把世界入口接到 `GameState` 时同时收编 `world_seed` 与两套时钟 | S0.3 ✅、S1.2 |
 | `scripts/scatter.gd` | 保留；其 MultiMesh 模式被 S4.3 复用为性能范本 | S4.3 |
 
 ## 附录 B：与既有美术规范的一致性自检

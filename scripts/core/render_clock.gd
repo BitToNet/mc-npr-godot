@@ -61,9 +61,21 @@ var shader_param_ok := false
 
 
 func _ready() -> void:
-	# No `process_mode` tricks: the clock must keep ticking even while paused so
-	# that a capture is never taken against a frozen `t`.  A very low priority
-	# makes sure `t` is already correct by the time scene scripts read it.
+	# S0.3 batch 4 — the pause contract.  `get_tree().paused = true` (the save menu
+	# does exactly that) stops `_process` for every node that inherits the tree's
+	# pause mode, **including autoloads**.  A clock that silently freezes while a
+	# menu is open would make `render_time` a function of "how long the player
+	# browsed the menu", i.e. screenshots taken with a menu open would stop being
+	# reproducible and wave/wind phase would depend on menu dwell time.  So the
+	# clock declares PROCESS_MODE_ALWAYS explicitly.
+	#
+	# This used to be a comment claiming no tricks were needed — nothing had ever
+	# paused the tree, so the claim was never tested.  `s0_3_slots` now asserts it:
+	# it pauses the tree, waits N frames, and requires `frame` to have advanced by
+	# exactly N.
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	# A very low priority makes sure `t` is already correct by the time scene
+	# scripts read it.
 	process_priority = -1000
 	shader_param_ok = ProjectSettings.has_setting("shader_globals/" + PARAM)
 	if not shader_param_ok:
