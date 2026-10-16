@@ -1,0 +1,24 @@
+# Godot 4+ engine cache and generated data
+.godot/
+/android/
+
+# Godot import cache / export configuration
+.import/
+export.cfg
+export_presets.cfg
+
+# Imported translations (generated from CSV)
+*.translation
+
+# Mono / C# build artifacts
+.mono/
+data_*/
+mono_crash.*.json
+
+# Capture output from the in-game screenshot tool (scripts/capture.gd)
+.shots/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*~

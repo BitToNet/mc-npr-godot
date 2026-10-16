@@ -1,0 +1,46 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/terrain.gd" id="2_terrain"]
+[ext_resource type="Script" path="res://scripts/water.gd" id="3_water"]
+[ext_resource type="Script" path="res://scripts/scatter.gd" id="4_scatter"]
+[ext_resource type="Script" path="res://scripts/clouds.gd" id="5_clouds"]
+[ext_resource type="Script" path="res://scripts/day_night.gd" id="6_daynight"]
+[ext_resource type="Script" path="res://scripts/player.gd" id="7_player"]
+[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="8_rig"]
+[ext_resource type="Script" path="res://scripts/ui_panel.gd" id="9_ui"]
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707, 0.404, -0.579, 0, 0.82, 0.573, 0.707, -0.405, 0.579, 0, 30, 0)
+shadow_enabled = true
+directional_shadow_mode = 0
+directional_shadow_max_distance = 110.0
+
+[node name="Terrain" type="Node3D" parent="."]
+script = ExtResource("2_terrain")
+
+[node name="Water" type="MeshInstance3D" parent="."]
+script = ExtResource("3_water")
+
+[node name="Scatter" type="Node3D" parent="."]
+script = ExtResource("4_scatter")
+
+[node name="Clouds" type="Node3D" parent="."]
+script = ExtResource("5_clouds")
+
+[node name="Player" type="Node3D" parent="."]
+script = ExtResource("7_player")
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("8_rig")
+
+[node name="DayNight" type="Node3D" parent="."]
+script = ExtResource("6_daynight")
+
+[node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("9_ui")
