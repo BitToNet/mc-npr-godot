@@ -21,7 +21,7 @@ func _load_style() -> Node:
 
 func _initialize() -> void:
 	_load_style()
-	var terrain_script = load("res://scripts/terrain.gd")
+	var terrain_script = load("res://scripts/world/terrain.gd")
 	var t = terrain_script.new()
 	root.add_child(t)
 

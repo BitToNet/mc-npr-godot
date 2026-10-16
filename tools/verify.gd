@@ -116,7 +116,7 @@ const GUARD_WHITELIST := [
 				+ "测量用墙钟属正当用法，故登记而不改写。",
 	},
 	{
-		"path": "res://scripts/terrain.gd",
+		"path": "res://scripts/world/terrain.gd",
 		"rule": "unfreezable_time",
 		"reason": "terrain.gd 的 Time.get_ticks_msec() 只用于统计 stats[\"gen_ms\"]"
 				+ "（生成耗时，只写进日志与 stats 字典），不参与任何画面动画。"
