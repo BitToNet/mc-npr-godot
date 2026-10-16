@@ -4,7 +4,7 @@
 > 与执行陷阱。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录。
 >
 > ⚠️ **本文件尚未完成**：按 `ROADMAP` §5 S0.5，本文件还需补齐**命名规范、信号约定、
-> 数据表格式、autoload 上限（当前 3 / 上限 6）、允许/禁止清单**；S0.5 另产出
+> 数据表格式、autoload 上限（当前 3 / 上限 10）、允许/禁止清单**；S0.5 另产出
 > `docs/ART_PIPELINE.md`（含「新建合规物件」6 步模板与 3 个反例 + 内嵌截图）。
 > 当前内容仅覆盖 S0.1 的交付范围。
 
@@ -157,4 +157,4 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | headless `tools/verify.gd --all` | 8 用例 / 失败 0 / 跳过 2（`s0_2_baseline`、`s0_6_repro` 需 GPU）/ 退出码 0 |
 | 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `SCRIPT ERROR` |
 | `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等** |
-| autoload 数量 | 3 / 上限 6（`Style` `Capture` `Clock`） |
+| autoload 数量 | 3 / 上限 **10**（`Style` `Capture` `Clock`；上限 2026-10-16 由 6 放宽，见 `ROADMAP` §16） |
