@@ -103,18 +103,18 @@
 
 | 能力 | 位置 | 可复用性 |
 |---|---|---|
-| 程序化 NPR 岛屿地形（63m 见方、104×104 网格、面着色 + 逆壳描边） | `scripts/terrain.gd` | ★★★ 战略地图地形直接沿用同一套噪声与配色管线 |
-| 全局美术中枢（调色板 / toon 材质工厂 / 3 阶渐变 ramp / 描边开关 / 像素级墨线宽度） | `scripts/style.gd` | ★★★ 所有新内容必须走它 |
-| 低模几何工具库（`facet` 面着色、`combine`、`roughen`、`blob/cone/tapered_cylinder/superellipse_prism`） | `scripts/mesh_util.gd` | ★★★ 角色、Boss、单位、装备图标全部由它构建 |
-| 角色运动（解析高度场绑定、加减速、跳跃、squash & stretch、姿态动画） | `scripts/player.gd` | ★★☆ 军阀棋子 / 军团单位姿态可参考 |
-| 正交等距相机（FOLLOW/ORBIT/FREE + 阻尼跟随 + 镜头属性） | `scripts/camera_rig.gd` | ★★☆ 战略层可扩为多档缩放；Boss 战需**另建**横版相机 |
-| 昼夜系统（关键帧插值、太阳方位、天空/环境联动） | `scripts/day_night.gd` | ★★★ 直接接全局游戏时间 |
-| 植被/道具散布（噪声生态 + `MultiMesh` 实例化 + 逐实例自定义数据） | `scripts/scatter.gd` | ★★★ 军团作战**单位实例化**的性能架构范本 |
-| 水体（顶点色烘焙深度/泡沫 + 半透明 sheet） | `scripts/water.gd` | ★★☆ 战略层沿用 |
-| 云层场 | `scripts/clouds.gd` | ★☆☆ |
-| UI 语言（neo-brutalist：粗墨边、硬阴影、纯色块、方形滑块） | `scripts/ui_panel.gd`、`scripts/ui_slider.gd` | ★★★ 全部新 UI 必须延续 |
-| 运行时输入映射 | `scripts/input_setup.gd` | ★★★ 扩展为战斗/指挥两套 binding |
-| 截图与性能工具（`--shots` / `--shot=` / `--bench`） | `scripts/capture.gd` | ★★★ 验收工具链的起点 |
+| 程序化 NPR 岛屿地形（63m 见方、104×104 网格、面着色 + 逆壳描边） | `scripts/world/terrain.gd` | ★★★ 战略地图地形直接沿用同一套噪声与配色管线 |
+| 全局美术中枢（调色板 / toon 材质工厂 / 3 阶渐变 ramp / 描边开关 / 像素级墨线宽度） | `scripts/core/style.gd` | ★★★ 所有新内容必须走它 |
+| 低模几何工具库（`facet` 面着色、`combine`、`roughen`、`blob/cone/tapered_cylinder/superellipse_prism`） | `scripts/core/mesh_util.gd` | ★★★ 角色、Boss、单位、装备图标全部由它构建 |
+| 角色运动（解析高度场绑定、加减速、跳跃、squash & stretch、姿态动画） | `scripts/actors/player.gd` | ★★☆ 军阀棋子 / 军团单位姿态可参考 |
+| 正交等距相机（FOLLOW/ORBIT/FREE + 阻尼跟随 + 镜头属性） | `scripts/core/camera_rig.gd` | ★★☆ 战略层可扩为多档缩放；Boss 战需**另建**横版相机 |
+| 昼夜系统（关键帧插值、太阳方位、天空/环境联动） | `scripts/world/day_night.gd` | ★★★ 直接接全局游戏时间 |
+| 植被/道具散布（噪声生态 + `MultiMesh` 实例化 + 逐实例自定义数据） | `scripts/world/scatter.gd` | ★★★ 军团作战**单位实例化**的性能架构范本 |
+| 水体（顶点色烘焙深度/泡沫 + 半透明 sheet） | `scripts/world/water.gd` | ★★☆ 战略层沿用 |
+| 云层场 | `scripts/world/clouds.gd` | ★☆☆ |
+| UI 语言（neo-brutalist：粗墨边、硬阴影、纯色块、方形滑块） | `scripts/ui/ui_panel.gd`、`scripts/ui/ui_slider.gd` | ★★★ 全部新 UI 必须延续 |
+| 运行时输入映射 | `scripts/core/input_setup.gd` | ★★★ 扩展为战斗/指挥两套 binding |
+| 截图与性能工具（`--shots` / `--shot=` / `--bench`） | `scripts/core/capture.gd` | ★★★ 验收工具链的起点 |
 | 离线诊断脚本（`extends SceneTree` 模式） | `tools/diag.gd`、`tools/probe.gd`、`tools/analyze.gd`、`tools/windtest.gd` | ★★★ `tools/verify.gd` 的写法范本 |
 
 ### 2.2 关键既有 API（新系统依赖的契约，改动需评估影响面）
@@ -324,6 +324,14 @@ $P      = "G:\godot_project\mc-npr-godot"
 3. 全仓共 **25 处** `res://scripts|shaders|scenes` 引用需同步改写（`project.godot` 4 处、
    `scenes/main.tscn` 的 `ext_resource`、脚本内 `load()/preload()`、`tools/` 内的加载路径）。
 4. `tools/verify.gd` 的 `_walk()` 已确认**递归**扫描 `GUARD_SCAN_DIRS`，脚本进子目录后守卫不会漏扫。
+5. **`.godot` 全局类缓存不随文件移动更新**（批次 1 实测踩到）：移动脚本后
+   `.godot/global_script_class_cache.cfg` 仍保存旧路径，headless `--script` 会报
+   `Could not find script for class "MeshUtil"`、`Could not parse global class "CameraRig" from
+   "res://scripts/camera_rig.gd"`、`Class "CameraRig" hides a global script class`（新旧路径同时注册）。
+   处置：删除 `global_script_class_cache.cfg`（必要时连 `uid_cache.bin`、`shader_cache/`）后执行
+   `--headless --import` 重建。`.godot/` 为 gitignore 产物，可再生；此症状属**环境缓存**而非内容错误。
+6. **着色器路径写错不报错，只静默退化**：`load()` 失败时材质回落默认，画面变样但日志干净，
+   所以批次 4 必须靠 `B-` 6 机位逐位比对兜住，不能只看"退出码 0 且无 ERROR"。
 
 **验收标准**
 - `A-` headless 启动主场景 60 帧无 `ERROR`/`SCRIPT ERROR` 日志（可复用 `s0_2_boot`）。
@@ -331,15 +339,16 @@ $P      = "G:\godot_project\mc-npr-godot"
 - `B-` 同 seed 同参数截图与重组前基线一致（`img_diff` 差异像素比 < 0.1%）。
   > Q13 已裁定选 (c)：改动画时钟为可注入 `u_time`。**前置 S0.6 已验收（2026-10-16）**。
   > S0.6 实测确定性模式下差异为 **0.0000%（逐位一致）**，故本项自本步起**收紧为逐位一致判定**：
-  > 截图必须与 `res://.shots/baseline_pre_s01.png` 之外的既有基线逐位相同（sha256 相等），
-  > 取证口径与反向对照见 `tools/verify.gd --case=s0_6_repro`。
+  > 截图必须与迁移前基线**逐机位 sha256 相等**；基线为 S0.1 动工前采集的确定性 6 机位集合
+  > （机位参数与完整 sha256 见 `docs/ENGINEERING.md` §4）。自动化口径另见
+  > `tools/verify.gd --case=s0_6_repro`（2 机位 + 反向对照）。
   > ⚠️ 若重组本身**有意**改变画面，则须先在 §16 登记并留新基线，不得直接改判。
 - `C-` `--bench` FPS 相对重组前基线下降 ≤ 3%（基线用 `tools/baseline.gd` 采集）。
   > 注意：本工程基线被 vsync 封顶在 60fps（`ms/frame` ≈ 16.667），该口径只能拦住
   > "跌破帧上限"级别的劣化；更细的劣化需比对 `ms/frame` 或三角面/绘制调用。
 
 **依赖与风险**：无依赖（`B-` 项前置 S0.6 已验收）。风险：`.uid` 文件与 `res://` 路径引用遗漏 → 靠 `A-`/`B-` 拦截。
-**状态**：⏳ 未开始
+**状态**：✅ 已验收（2026-10-16，提交 `1bab8fd` + `16b7196` + `1aa739c` + `534e2bd`；产出 `docs/ENGINEERING.md`）
 
 ### S0.2 验收工具链 v1（verify 运行器 + 图像比对 + 性能基线）
 
@@ -1322,7 +1331,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | 🚧 进行中 | 执行方案与目录映射表见 §5 S0.1（2026-10-16 对齐定稿） |
+| S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ✅ 已验收 | 6 批迁移全部完成（批次 1–4 为代码移动，`1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；验收：窗口 `--all` 8 用例 / 152 断言全通过 / 退出码 0，headless 8 用例 0 失败 2 跳过，推送门禁 0 条 ERROR，`B-` 6 机位与迁移前基线**逐位一致（6/6 sha256 全等）**；产出 `docs/ENGINEERING.md` |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
 | S0.3 | 全局服务骨架 | S0.2 | ⏳ 未开始 | — |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
@@ -1426,7 +1435,10 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-16 | **S0.6 验收通过 → `✅ 已验收`**，验收证据记入提交 `457a7d2` + `953fd0d`；§3.4 的 `B-` 约定**收紧为逐位一致**（实测 0.0000%，比原定 `< 0.1%` 更严）；§5 S0.1 的 `B-` 前置条件解除，并补 `C-` 口径说明（基线被 vsync 封顶 60fps，只能拦"跌破上限"级劣化）；§5 S0.6 增补实测结论；§15 台账 S0.6 填证据、S0.1 依赖改为「前置 S0.6 已验收」；修正 §4 合计步数（M0 5→6，合计 53→54，v1.3 漏改） | 四项 `A-` 与 `C-` 全绿：两独立进程同参数截图 0 像素差异且 sha256 相同，`--yaw`/`--frames` 反向对照均正确触发（排除空图假通过与"动画被冻结"） | 用户（本会话批准执行 S0.6） |
 | 2026-10-16 | 规范守卫新增规则 **`unfreezable_time`**：着色器内建 `TIME`（`.gdshader`）与 GDScript `Time.get_ticks_msec/usec`（`.gd`）一律判违例；测量用墙钟（`capture.gd` 的 `_benchmark` 计时、`terrain.gd` 的 `gen_ms` 统计）按既有白名单机制逐条登记理由。`tools/verify.gd` 新增 `_exec_user()`：强制在游戏侧参数前插入 `--`，并以 `--quit-after` 兜底 | 防止后续步骤重新引入不可冻结时间源；另实测缺失 `--` 会让 `OS.get_cmdline_user_args()` 为空、`capture.gd` 收不到 `--shots` 便不 `quit()`，而 `OS.execute` 无超时 ⇒ 整个验收套件静默挂死（实测 10 分钟），现退化为"清单没写出"的显式失败 | 用户（本会话批准执行 S0.6） |
 | 2026-10-16 | **登记既有缺陷（本次未修）**：`tools/verify.gd` 的 `_case_baseline` 未把 `--out=` 透传给 `baseline.gd` 子进程 | 用 `--out=` 重定向报告目录时 `s0_2_baseline` 只得 3/7（找不到 baseline JSON）；默认目录下 15/15，故 S0.2 的既有验收结论不受影响。是否单独修复待用户决定 | 待用户决定 |
-| 2026-10-16 | **S0.1 执行方案登记**（§5 S0.1）：目录映射表（15 个脚本 + 3 个着色器逐项定去向）、6 批迁移顺序与独立提交/回滚点、4 条执行陷阱；`shaders/` 约定**增补子目录 `common/`**（§3.2 同步改写）；`scenes/main.tscn` 在 S0.1 **不移动**（改名留到 S1.2）；§15 台账 S0.1 置 `🚧 进行中` | 与本会话对齐后定稿：① 全部按 §3.2 九目录归类、不新增 scripts 子目录；② `toon`/`outline` 归入新增的 `shaders/common/`（放 `fx/` 或 `character/` 名不符实）；③ 主场景留到 S1.2 与 `main.gd` 拆分一起改名；④ 5 批迁移、每批独立提交并各自跑 A-/B- 校验 | 用户（本会话四选一，均取推荐项） |
+| 2026-10-16 | **S0.1 执行方案登记**（§5 S0.1）：目录映射表（15 个脚本 + 3 个着色器逐项定去向）、6 批迁移顺序与独立提交/回滚点、4 条执行陷阱；`shaders/` 约定**增补子目录 `common/`**（§3.2 同步改写）；`scenes/main.tscn` 在 S0.1 **不移动**（改名留到 S1.2）；§15 台账 S0.1 置 `🚧 进行中` | 与本会话对齐后定稿：① 全部按 §3.2 九目录归类、不新增 scripts 子目录；② `toon`/`outline` 归入新增的 `shaders/common/`（放 `fx/` 或 `character/` 名不符实）；③ 主场景留到 S1.2 与 `main.gd` 拆分一起改名；④ 6 批迁移（批次 0 基线 + 5 批代码/文档），每批独立提交并各自跑 `A-`/`B-` 校验 | 用户（本会话四选一，均取推荐项） |
+| 2026-10-16 | **S0.1 验收通过 → `✅ 已验收`**：6 批迁移全部完成（批次 1–4 代码移动记为 `1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；产出 `docs/ENGINEERING.md`（目录职责 + 旧→新映射表 + 迁移前基线 sha256 + 执行陷阱）；§3.1 既有资产清单的路径同步为重组后路径；§5 S0.1 陷阱清单由 4 条增至 6 条 | 验收全绿：窗口 `verify.gd --all` 8 用例 / 152 断言全通过 / 退出码 0；headless 8 用例 0 失败 2 跳过；推送门禁 0 条 ERROR；**`B-` 6 机位与迁移前基线逐位一致（6/6 sha256 全等）**，且每批迁移后各自复跑过一次 | 用户（本会话批准执行 S0.1） |
+| 2026-10-16 | §5 S0.1 陷阱清单补登两条实测结论：⑤ `.godot` 全局类缓存不随文件移动更新（须删缓存 + `--headless --import` 重建）；⑥ 着色器路径写错不报错、只静默回落默认材质 | 批次 1 首次执行即因⑤失败（`Could not find script for class "MeshUtil"` / `Class "CameraRig" hides a global script class`），属环境缓存而非内容错误；⑥ 决定了批次 4 必须用逐位比对而非"退出码 0 + 无 ERROR"判定 | 实测登记（S0.1 执行过程） |
+| 2026-10-16 | `docs/ENGINEERING.md` 新增为**长期工程约定文件**（目录职责、引用规则、迁移映射表、基线哈希、执行陷阱）；§3.2 的目录约定仍是权威定义，本文件为其落地记录 | S0.1 交付物要求「记录目录职责与迁移映射表」；把"哪类文件该放哪 + 移动文件必改哪 4 处 + 5 条陷阱"固化下来，后续 M1–M6 新增模块可直接照做 | 用户（本会话批准执行 S0.1） |
 
 ---
 
