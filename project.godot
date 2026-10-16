@@ -26,6 +26,10 @@ Clock="*res://scripts/core/render_clock.gd"
 Rng="*res://scripts/core/rng.gd"
 EventBus="*res://scripts/core/event_bus.gd"
 GameState="*res://scripts/core/game_state.gd"
+; S0.3 batch 2 — `SaveSystem` reads and writes `GameState.snapshot()`, so it comes
+; last.  It has no `_ready`, subscribes to nothing and writes no file until a save
+; is requested (ROADMAP §3.5 "不做自动存档"); `s0_3_no_autosave` asserts that.
+SaveSystem="*res://scripts/core/save_system.gd"
 
 [shader_globals]
 

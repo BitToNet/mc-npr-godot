@@ -85,8 +85,42 @@ const CASES := {
 		"kind": "headed",
 	},
 	"s0_3_state": {
-		"desc": "全局服务契约：autoload 3→6 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
+		"desc": "全局服务契约：autoload 3→7 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
 		"kind": "pure",
+	},
+	"s0_3_roundtrip": {
+		"desc": "存档跨进程往返：子进程写 → 父进程逐字段比对 → 另一子进程读回；覆盖需二次确认、空槽位与越界被拒、九宫格卡片数据齐全",
+		"kind": "pure",
+	},
+	"s0_3_dirty": {
+		"desc": "脏存档容错：非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 game 段一律拒读不崩；缺失·未知·类型错误字段告警且保留当前值；v0→v1 迁移钩子真能跑",
+		"kind": "pure",
+	},
+	"s0_3_atomic": {
+		"desc": "原子写：跨进程并发写同一槽位 800 次，每个读得出来的样本都是完整合法 JSON（绝无半截）；引擎 replace 的非原子窗口由读者重试吸收；rename 被占用时失败、原档不变、不留 .tmp",
+		"kind": "pure",
+	},
+	"s0_3_no_autosave": {
+		"desc": "无自动存档：启动 + 世界重建 + 五种全局事实后，user://saves 全部文件哈希与 mtime 零变化（且该检查确实能检出显式存档）",
+		"kind": "pure",
+	},
+	"s0_3_probe_write": {
+		"desc": "[打桩] 新游戏 → 存槽 3，供 s0_3_roundtrip 以子进程拉起",
+		"kind": "pure",
+		"hidden": true,
+		"probe": true,
+	},
+	"s0_3_probe_read": {
+		"desc": "[打桩] 读槽 3 → 回吐快照 JSON，供 s0_3_roundtrip 以子进程拉起",
+		"kind": "pure",
+		"hidden": true,
+		"probe": true,
+	},
+	"s0_3_probe_loop": {
+		"desc": "[打桩] 连续写同一槽位 ATOMIC_WRITES 次，供 s0_3_atomic 并发观测",
+		"kind": "pure",
+		"hidden": true,
+		"probe": true,
 	},
 }
 
@@ -137,12 +171,43 @@ const UNFREEZABLE_SHADER_TOKEN := "TIME"
 const UNFREEZABLE_SCRIPT_TOKENS := ["Time.get_ticks_msec", "Time.get_ticks_usec"]
 
 ## -----------------------------------------------------------------------------
+##  S0.3 批次 2（SaveSystem）常量
+## -----------------------------------------------------------------------------
+## 用例期间把 `user://saves` 整体换名为 `user://saves.bak`——探针实测引擎的目录
+## 换名可用（目标必须不存在），因此验收不会碰玩家真实存档，产品码里也不留后门。
+const SAVES_DIR := "user://saves"
+const SAVES_BAK := "user://saves.bak"
+const ROUNDTRIP_SLOT := 3
+const ATOMIC_SLOT := 9
+const ATOMIC_WRITES := 800
+## 子进程写档时用的可辨识状态；父进程逐字段比对这几个数。
+const PROBE_SEED := 4242
+const PROBE_TIME := 123.5
+const PROBE_MONEY := 40
+const PROBE_FOOD := 7
+const PROBE_SUPPLY := 3
+const PROBE_SCENE_KIND := 1
+const PROBE_POS := Vector3(1.25, 2.5, -3.75)
+## 子进程 B 把读回的快照落成文件而不是塞进 stdout。实测：子进程 stdout 里的中文
+## 被控制台按非 UTF-8 解码成乱码（`无名军团` → `鏃犲悕鍐涟`），而存档文件本身是对的。
+## 所以跨进程回吐走 UTF-8 文件，stdout 只留纯 ASCII 的状态行。
+const PROBE_SNAPSHOT_FILE := "_probe_read_snapshot.json"
+## 狂写子进程自己的统计。`OS.create_process` 下子进程**不继承** stdout（实测：子进程
+## 的 print 一行都没进父进程日志），所以子进程的话必须落成文件才拿得到。
+const PROBE_LOOP_FILE := "_probe_loop_summary.json"
+
+## -----------------------------------------------------------------------------
 ##  运行时状态
 ## -----------------------------------------------------------------------------
 var _opt_case := ""
 var _opt_all := false
 var _opt_list := false
 var _opt_out := REPORT_DIR
+
+## 打桩用例（probe）自报的退出码。 -1 = 未设置。
+## 打桩用例不走 `_run_one` 的汇总逻辑，否则汇总里的 quit() 会覆盖它们的退出码，
+## 而退出码正是父用例唯一的返回通道。
+var _probe_exit := -1
 
 var _started := false
 var _finished := false
@@ -203,6 +268,12 @@ func _process(_delta: float) -> bool:
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(_opt_out)
 	var t_all := Time.get_ticks_msec()
+
+	# 打桩用例：只做事、只以退出码说话，不写报告、不进断言汇总
+	var probe_meta: Dictionary = CASES.get(_opt_case, {})
+	if _opt_case != "" and bool(probe_meta.get("probe", false)):
+		await _run_probe(_opt_case)
+		return
 
 	var ids: Array = []
 	if _opt_all:
@@ -349,9 +420,34 @@ func _dispatch(id: String) -> void:
 			await _case_repro()
 		"s0_3_state":
 			await _case_state()
+		"s0_3_roundtrip":
+			await _case_roundtrip()
+		"s0_3_dirty":
+			await _case_dirty()
+		"s0_3_atomic":
+			await _case_atomic()
+		"s0_3_no_autosave":
+			await _case_no_autosave()
+		"s0_3_probe_write":
+			await _case_probe_write()
+		"s0_3_probe_read":
+			await _case_probe_read()
+		"s0_3_probe_loop":
+			await _case_probe_loop()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
+
+
+## 打桩用例的统一入口：等 autoload 就位 → 分发 → 按 `_probe_exit` 退出。
+## 之所以绕开 `_run_one`：那里的汇总会用 `quit(0/1)` 覆盖打桩用例自报的退出码，
+## 而父用例拿到的就是那个退出码。
+func _run_probe(id: String) -> void:
+	await process_frame
+	await process_frame
+	await _dispatch(id)
+	_finished = true
+	quit(_probe_exit if _probe_exit >= 0 else 1)
 
 
 ## =============================================================================
@@ -707,13 +803,21 @@ func _case_baseline() -> void:
 	var reports: Array = []
 	for i in 3:
 		var label := "verify_run%d" % (i + 1)
+		var report_path := _opt_out.path_join("baseline_%s.json" % label)
+		# 先删旧报告再跑：`--out` 指向同一目录时，上一轮的文件会让「写出了 JSON」变成
+		# 假通过（本用例曾经只认默认目录，一旦 `--out` 换目录就整例失败——见 §16 记录）。
+		if FileAccess.file_exists(report_path):
+			DirAccess.remove_absolute(report_path)
+		ok(not FileAccess.file_exists(report_path),
+				"baseline 第 %d 次的报告文件在运行前不存在（旧文件不能冒充证据）" % (i + 1))
 		var out: Array = []
 		var exit_code := _exec_godot(PackedStringArray([
 			"--script", "res://tools/baseline.gd", "--", "--label=" + label,
+			"--out=" + _opt_out,
 		]), out)
 		eq(exit_code, 0, "baseline 第 %d 次运行退出码 = 0" % (i + 1))
-		var r := _read_json(_opt_out.path_join("baseline_%s.json" % label))
-		ok(not r.is_empty(), "baseline 第 %d 次写出了 JSON" % (i + 1))
+		var r := _read_json(report_path)
+		ok(not r.is_empty(), "baseline 第 %d 次写出了 JSON" % (i + 1), report_path)
 		if not r.is_empty():
 			reports.append(r)
 	if reports.size() < 3:
@@ -963,12 +1067,14 @@ func _case_state() -> void:
 	var rng := get_root().get_node_or_null("Rng")
 	var bus := get_root().get_node_or_null("EventBus")
 	var gs := get_root().get_node_or_null("GameState")
+	var ss := get_root().get_node_or_null("SaveSystem")
 
-	section("三个服务节点存在，且注册顺序满足依赖（Rng 先于 GameState）")
+	section("四个服务节点存在，且注册顺序满足依赖（Rng 先于 GameState，SaveSystem 在其后）")
 	ok(rng != null, "autoload Rng 节点存在于 root")
 	ok(bus != null, "autoload EventBus 节点存在于 root")
 	ok(gs != null, "autoload GameState 节点存在于 root")
-	if rng == null or bus == null or gs == null:
+	ok(ss != null, "autoload SaveSystem 节点存在于 root")
+	if rng == null or bus == null or gs == null or ss == null:
 		return
 
 	var order: Array = []
@@ -977,11 +1083,14 @@ func _case_state() -> void:
 	var i_rng := order.find("Rng")
 	var i_bus := order.find("EventBus")
 	var i_gs := order.find("GameState")
-	ok(i_rng >= 0 and i_bus >= 0 and i_gs >= 0, "三个服务都在 root 子节点中",
+	var i_ss := order.find("SaveSystem")
+	ok(i_rng >= 0 and i_bus >= 0 and i_gs >= 0 and i_ss >= 0, "四个服务都在 root 子节点中",
 			"root 子节点=%s" % [str(order)])
 	ok(i_rng < i_gs, "Rng 注册在 GameState 之前（GameState._ready() 要调用 Rng.seed_from）",
 			"Rng@%d GameState@%d" % [i_rng, i_gs])
 	ok(i_bus < i_gs or i_bus != i_gs, "EventBus 与 GameState 顺序无强依赖，只要求都存在")
+	ok(i_ss > i_gs, "SaveSystem 注册在 GameState 之后（它读写 GameState.snapshot()）",
+			"GameState@%d SaveSystem@%d" % [i_gs, i_ss])
 
 	section("autoload 清单与计数（§3.2 上限 10）")
 	var autoloads: Array = []
@@ -990,8 +1099,8 @@ func _case_state() -> void:
 		if nm.begins_with("autoload/"):
 			autoloads.append(nm.substr("autoload/".length()))
 	autoloads.sort()
-	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "Style"]
-	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 6 个（批次 1 后 3 → 6）")
+	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "SaveSystem", "Style"]
+	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 7 个（批次 2 后 3 → 7）")
 	ok(autoloads.size() <= 10, "autoload 数量 %d ≤ 10（§3.2 上限）" % autoloads.size())
 
 	section("GameState 字段契约：SNAPSHOT_FIELDS == snapshot() 的键集")
@@ -1187,6 +1296,769 @@ func _warn_mentions(warns: PackedStringArray, needle: String) -> bool:
 		if String(w).contains(needle):
 			return true
 	return false
+
+
+## =============================================================================
+##  S0.3 批次 2 —— SaveSystem（ROADMAP §5 S0.3，契约 §3.5）
+## =============================================================================
+## 证据分工：
+##   s0_3_roundtrip    跨进程往返（子进程 A 写 → 父进程逐字段比对 → 子进程 B 读回）
+##   s0_3_dirty        脏存档：拒读类与「可读但告警」类分开，迁移钩子真能跑
+##   s0_3_atomic       跨进程并发写同一槽位，观测不到半截文件
+##   s0_3_no_autosave  文件内容哈希 + mtime 零变化，且该检查确实能检出显式存档
+##   s0_3_probe_*      打桩（hidden），只由上面三个用例以子进程拉起
+##
+## ⚠️ 全部用例期间 `user://saves` 被整体换名为 `user://saves.bak`（目录换名已实测
+##    可用），所以验收**不会碰玩家真实存档**，产品码里也没有任何测试后门。
+
+func _case_roundtrip() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	ok(ss != null, "autoload SaveSystem 节点存在于 root")
+	if ss == null:
+		return
+
+	section("测试隔离（不动玩家真实存档）")
+	var notes := _saves_begin()
+	print("    [note] ", "; ".join(notes))
+
+	section("子进程 A：新游戏 → 存档（写文件的是另一个进程）")
+	var out_a: Array = []
+	var code_a := _exec_case("s0_3_probe_write", out_a)
+	ok(code_a == 0, "写档子进程退出码 = 0", "退出码=%d 输出=%s" % [code_a, _tail(out_a, 4)])
+	ok(_lines_contain(out_a, "[probe] WRITE ok=true"), "子进程自称写入成功", _tail(out_a, 4))
+
+	section("父进程直接读文件：schema_version / 时间戳 / game 段逐字段")
+	var raw := FileAccess.get_file_as_string(_slot_file(ROUNDTRIP_SLOT))
+	var parsed: Variant = JSON.parse_string(raw)
+	ok(typeof(parsed) == TYPE_DICTIONARY, "槽 3 是合法 JSON 对象")
+	var d: Dictionary = parsed if typeof(parsed) == TYPE_DICTIONARY else {}
+	eq(int(d.get("schema_version", 0)), 1, "存档含 schema_version: 1")
+	ok(String(d.get("saved_at", "")).length() >= 16, "含可读的真实写入时刻",
+			str(d.get("saved_at", "")))
+	ok(int(d.get("saved_at_unix", 0)) > 0, "含 unix 写入时刻", str(d.get("saved_at_unix", 0)))
+	var game_v: Variant = d.get("game", {})
+	var game: Dictionary = game_v if typeof(game_v) == TYPE_DICTIONARY else {}
+	eq(game.size(), 10, "game 段含 10 个字段（与 GameState.SNAPSHOT_FIELDS 同量）")
+	eq(int(game.get("world_seed", 0)), PROBE_SEED, "game.world_seed")
+	near(float(game.get("game_time", -1.0)), PROBE_TIME, 0.000001, "game.game_time")
+	eq(int(game.get("money", -1)), PROBE_MONEY, "game.money")
+	eq(int(game.get("food", -1)), PROBE_FOOD, "game.food")
+	eq(int(game.get("supply", -1)), PROBE_SUPPLY, "game.supply")
+	eq(int(game.get("scene_kind", -1)), PROBE_SCENE_KIND, "game.scene_kind")
+	near(float(game.get("day_length", -1.0)), 170.0, 0.000001, "game.day_length")
+	var pos: Array = game.get("player_pos", [])
+	eq(pos.size(), 3, "game.player_pos 为 [x,y,z]")
+	if pos.size() == 3:
+		near(float(pos[0]), PROBE_POS.x, 0.000001, "player_pos.x")
+		near(float(pos[1]), PROBE_POS.y, 0.000001, "player_pos.y")
+		near(float(pos[2]), PROBE_POS.z, 0.000001, "player_pos.z")
+	var meta_v: Variant = d.get("meta", {})
+	var meta: Dictionary = meta_v if typeof(meta_v) == TYPE_DICTIONARY else {}
+	eq(int(meta.get("game_day", 0)), 1, "meta.game_day 与 game_time=123.5 自洽（第 1 天）")
+	eq(String(meta.get("clock_text", "")), "第 1 天 17:26", "meta.clock_text 与 game_time 自洽")
+	eq(String(meta.get("party_name", "")), "无名军团", "meta.party_name")
+	eq(int(meta.get("party_level", 0)), 1, "meta.party_level")
+	eq(int(meta.get("world_seed", 0)), PROBE_SEED, "meta.world_seed 与 game 段一致")
+	ok(String(meta.get("playtime_text", "")).length() == 8, "meta.playtime_text 形如 HH:MM:SS",
+			str(meta.get("playtime_text", "")))
+
+	section("子进程 B：跨进程读档 → 回吐快照")
+	var handoff := _opt_out.path_join(PROBE_SNAPSHOT_FILE)
+	if FileAccess.file_exists(handoff):
+		DirAccess.remove_absolute(handoff)
+	ok(not FileAccess.file_exists(handoff), "回吐文件在子进程运行前不存在（陈旧文件不能冒充证据）")
+	var out_b: Array = []
+	var code_b := _exec_case("s0_3_probe_read", out_b)
+	ok(code_b == 0, "读档子进程退出码 = 0", "退出码=%d 输出=%s" % [code_b, _tail(out_b, 4)])
+	ok(_lines_contain(out_b, "[probe] READ ok=true"), "子进程自称读档成功", _tail(out_b, 4))
+	ok(_lines_contain(out_b, "[probe] READ ok=true warnings=0"),
+			"读回时零告警（写读字段集没有漂移）", _tail(out_b, 4))
+	ok(_lines_contain(out_b, "[probe] SNAPSHOT_FILE "), "子进程 B 声明写出了回吐文件", _tail(out_b, 4))
+	ok(FileAccess.file_exists(handoff), "回吐文件确实存在（另一个进程写、本进程读）", handoff)
+	var snap: Dictionary = _read_json(handoff)
+	eq(snap.size(), 10, "回吐快照含 10 个字段")
+	eq(int(snap.get("world_seed", 0)), PROBE_SEED, "跨进程读回 world_seed")
+	near(float(snap.get("game_time", -1.0)), PROBE_TIME, 0.000001, "跨进程读回 game_time")
+	eq(int(snap.get("money", -1)), PROBE_MONEY, "跨进程读回 money")
+	eq(int(snap.get("food", -1)), PROBE_FOOD, "跨进程读回 food")
+	eq(int(snap.get("supply", -1)), PROBE_SUPPLY, "跨进程读回 supply")
+	eq(int(snap.get("scene_kind", -1)), PROBE_SCENE_KIND, "跨进程读回 scene_kind")
+	var bparty: Dictionary = snap.get("party", {})
+	eq(String(bparty.get("name", "")), "无名军团", "跨进程读回 party.name（中文不被 stdout 编码破坏）")
+	eq(int(bparty.get("level", 0)), 1, "跨进程读回 party.level")
+	var bpos: Array = snap.get("player_pos", [])
+	ok(bpos.size() == 3 and absf(float(bpos[0]) - PROBE_POS.x) < 0.000001
+			and absf(float(bpos[1]) - PROBE_POS.y) < 0.000001
+			and absf(float(bpos[2]) - PROBE_POS.z) < 0.000001,
+			"跨进程读回 player_pos", str(bpos))
+
+	section("覆盖契约：默认拒写、显式 overwrite 才生效")
+	var slot3 := _slot_file(ROUNDTRIP_SLOT)
+	var sha_before := FileAccess.get_sha256(slot3)
+	var denied: Dictionary = ss.call("save_slot", ROUNDTRIP_SLOT)
+	ok(not bool(denied.get("ok")), "槽位已占用时默认拒写", str(denied.get("reason")))
+	ok(bool(denied.get("requires_confirm")), "结果标记 requires_confirm（批次 4 的菜单据此弹框）")
+	ok(String(denied.get("reason")).contains("二次确认"), "原因说明需二次确认",
+			str(denied.get("reason")))
+	eq(FileAccess.get_sha256(slot3), sha_before, "拒写后原档逐位不变")
+	var allowed: Dictionary = ss.call("save_slot", ROUNDTRIP_SLOT, true)
+	ok(bool(allowed.get("ok")), "显式 overwrite=true 写入成功", str(allowed.get("reason")))
+	ne(FileAccess.get_sha256(slot3), sha_before, "覆盖后内容确实变化")
+
+	section("九宫格卡片数据（§3.5：槽号 / 真实时间 / 游戏内时间 / 队伍 / 时长）")
+	var info3: Dictionary = ss.call("slot_info", ROUNDTRIP_SLOT)
+	ok(bool(info3.get("exists")), "slot_info(3).exists")
+	eq(int(info3.get("slot", 0)), ROUNDTRIP_SLOT, "卡片带槽号")
+	eq(String(info3.get("party_name", "")), "无名军团", "卡片带队伍名")
+	eq(int(info3.get("party_level", 0)), 1, "卡片带队伍等级")
+	ok(String(info3.get("clock_text", "")).contains("第"), "卡片带游戏内日期时间",
+			str(info3.get("clock_text", "")))
+	ok(String(info3.get("saved_at", "")).length() >= 16, "卡片带真实写入时刻")
+	ok(String(info3.get("playtime_text", "")).length() == 8, "卡片带累计时长",
+			str(info3.get("playtime_text", "")))
+	var info2: Dictionary = ss.call("slot_info", 2)
+	ok(not bool(info2.get("exists")), "空槽位 exists=false")
+	eq(String(info2.get("label", "")), "空槽位", "空槽位卡片文案")
+	eq((ss.call("list_slots") as Array).size(), 9, "list_slots() 恰好 9 个槽位")
+
+	section("空槽位与越界槽位")
+	var empty_load: Dictionary = ss.call("load_slot", 2)
+	ok(not bool(empty_load.get("ok")), "读空槽位失败（不是崩溃）")
+	ok(String(empty_load.get("reason")).contains("空槽位"), "原因明说空槽位",
+			str(empty_load.get("reason")))
+	var oob: Dictionary = ss.call("save_slot", 10, true)
+	ok(not bool(oob.get("ok")), "槽位号 10 越界被拒")
+	ok(String(oob.get("reason")).contains("非法"), "越界原因明确", str(oob.get("reason")))
+	ok(not bool(ss.call("slot_exists", 0)), "slot_exists(0) 为假")
+
+	section("测试隔离回收")
+	var back := _saves_end()
+	print("    [note] ", "; ".join(back))
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "隔离目录已清走（saves.bak 不存在）")
+	_restore_defaults()
+
+
+func _case_dirty() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	var gs := get_root().get_node_or_null("GameState")
+	ok(ss != null and gs != null, "SaveSystem / GameState 均存在")
+	if ss == null or gs == null:
+		return
+	_saves_begin()
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+
+	var load_failed_log: Array = []
+	var loaded_log: Array = []
+	var on_load_failed := func(slot: int, reason: String) -> void:
+		load_failed_log.append([slot, reason])
+	var on_slot_loaded := func(slot: int) -> void:
+		loaded_log.append(slot)
+	ss.connect("load_failed", on_load_failed)
+	ss.connect("slot_loaded", on_slot_loaded)
+
+	# 基线现场：可辨识的初始值，用来断言「缺失 / 类型错误字段保留当前值」
+	gs.call("new_game", 777)
+	gs.set("money", 555)
+	gs.set("food", 111)
+	gs.set("player_pos", Vector3(9.0, 9.0, 9.0))
+	gs.set("game_time", 1.0)
+
+	section("可用但脏：缺失字段逐条告警并保留当前值")
+	_write_text(_slot_file(1), '{"schema_version": 1, "game": {}}')
+	var r1: Dictionary = ss.call("load_slot", 1)
+	ok(bool(r1.get("ok")), "空 game 段仍可读（字段级问题不该拒绝整个存档）",
+			str(r1.get("reason")))
+	var w1: PackedStringArray = r1.get("warnings", PackedStringArray())
+	ge(w1.size(), 10, "10 个缺失字段各自告警（实际 %d 条）" % w1.size())
+	ok(_warn_mentions(w1, "world_seed"), "告警点名 world_seed")
+	ok(_warn_mentions(w1, "player_pos"), "告警点名 player_pos")
+	eq(gs.get("money"), 555, "缺失的 money 保留当前值")
+	eq(gs.get("player_pos"), Vector3(9.0, 9.0, 9.0), "缺失的 player_pos 保留当前值")
+
+	section("可用但脏：未知字段 / 类型错误")
+	_write_text(_slot_file(2), '{"schema_version": 1, "game": {"money": "很多钱", '
+			+ '"game_time": "早晨", "food": 9, "no_such_field": 1}}')
+	gs.set("money", 555)
+	gs.set("game_time", 1.0)
+	var r2: Dictionary = ss.call("load_slot", 2)
+	ok(bool(r2.get("ok")), "类型错误字段不拒绝整个存档", str(r2.get("reason")))
+	var w2: PackedStringArray = r2.get("warnings", PackedStringArray())
+	ok(_warn_mentions(w2, "类型错误"), "类型错误有明确告警", str(w2))
+	ok(_warn_mentions(w2, "no_such_field"), "未知字段被点名而不是静默丢弃", str(w2))
+	eq(gs.get("money"), 555, "类型错误的 money 保留当前值")
+	near(gs.get("game_time"), 1.0, 0.000001, "类型错误的 game_time 保留当前值")
+	eq(gs.get("food"), 9, "同一文件里合法的 food 照常应用")
+
+	section("不可用：拒读而不是崩溃，且一个字段都不改")
+	var before_money: int = gs.get("money")
+	var refuse_cases := [
+		{"slot": 3, "text": "{oops", "needle": "JSON", "what": "非 JSON 文本"},
+		{"slot": 4, "text": "[1, 2, 3]", "needle": "JSON 对象", "what": "数组根"},
+		{"slot": 5, "text": '{"schema_version": 99, "game": {}}', "needle": "99",
+			"what": "来自更高版本"},
+		{"slot": 6, "text": '{"schema_version": 0, "game": {}}', "needle": "无迁移路径",
+			"what": "无迁移路径的旧版本"},
+		{"slot": 7, "text": '{"schema_version": 1}', "needle": "game", "what": "缺 game 段"},
+		{"slot": 8, "text": '{"schema_version": 1, "game": "不是字典"}', "needle": "game",
+			"what": "game 段类型错误"},
+		{"slot": 3, "text": "", "needle": "读不出",
+			"what": "0 字节空文件（读者重试花完后才报错）"},
+		{"slot": 9, "text": '{"schema_version": 1, "game": {},', "needle": "JSON",
+			"what": "被截断的 JSON（半截文件）"},
+	]
+	for c in refuse_cases:
+		_write_text(_slot_file(int(c["slot"])), String(c["text"]))
+		var r: Dictionary = ss.call("load_slot", int(c["slot"]))
+		ok(not bool(r.get("ok")), "拒读：%s（不崩溃）" % c["what"], str(r.get("reason")))
+		ok(String(r.get("reason")).contains(String(c["needle"])),
+				"拒读原因点名 %s" % c["needle"], str(r.get("reason")))
+	eq(gs.get("money"), before_money, "全部拒读之后 GameState 一个字段都没被改")
+	eq(gs.get("world_seed"), 777, "world_seed 仍是拒读前的值")
+
+	section("缺失 schema_version：告警并沿用当前版本")
+	_write_text(_slot_file(1), '{"game": {"money": 12}}')
+	var r7: Dictionary = ss.call("load_slot", 1)
+	ok(bool(r7.get("ok")), "缺失 schema_version 仍按 v1 读取", str(r7.get("reason")))
+	ok(_warn_mentions(r7.get("warnings", PackedStringArray()), "缺少 schema_version"),
+			"告警说明缺失 schema_version")
+	eq(gs.get("money"), 12, "字段照常应用")
+
+	section("迁移钩子：v0 → v1 真能跑通（不是死代码）")
+	_write_text(_slot_file(1), '{"schema_version": 0, "save": {"world_seed": 99, "money": 31}}')
+	var no_hook: Dictionary = ss.call("load_slot", 1)
+	ok(not bool(no_hook.get("ok")), "未注册钩子时 v0 被明确拒读", str(no_hook.get("reason")))
+	var mig: Dictionary = ss.get("migrations")
+	mig[0] = func(d: Dictionary) -> Dictionary:
+		return {"schema_version": 1, "game": d.get("save", {})}
+	gs.set("money", 0)
+	var migrated: Dictionary = ss.call("load_slot", 1)
+	ok(bool(migrated.get("ok")), "注册 v0→v1 钩子后同一文件可读", str(migrated.get("reason")))
+	eq(gs.get("world_seed"), 99, "迁移后的 world_seed 生效")
+	eq(gs.get("money"), 31, "迁移后的 money 生效")
+	mig.erase(0)
+	var after_erase: Dictionary = ss.call("load_slot", 1)
+	ok(not bool(after_erase.get("ok")), "撤掉钩子后又拒读（证明生效的确实是钩子）",
+			str(after_erase.get("reason")))
+
+	section("信号契约：过去式事实，只在真的发生时发一次")
+	eq(loaded_log, [1, 2, 1, 1], "slot_loaded 只在四次成功读档时各发一次")
+	ge(load_failed_log.size(), refuse_cases.size() + 1,
+			"load_failed 每次拒读都发（含撤钩子后那一次，实际 %d 次）" % load_failed_log.size())
+	ok(not load_failed_log.is_empty() and String(load_failed_log[0][1]).length() > 0,
+			"load_failed 负载带非空原因",
+			str(load_failed_log[0] if not load_failed_log.is_empty() else []))
+	ss.disconnect("load_failed", on_load_failed)
+	ss.disconnect("slot_loaded", on_slot_loaded)
+
+	var wrote_log: Array = []
+	var on_save_written := func(slot: int, path: String) -> void:
+		wrote_log.append([slot, path])
+	ss.connect("save_written", on_save_written)
+	var wsave: Dictionary = ss.call("save_slot", 1, true)
+	ok(bool(wsave.get("ok")), "显式覆盖写入成功", str(wsave.get("reason")))
+	eq(wrote_log.size(), 1, "save_written 发了一次")
+	if wrote_log.size() == 1:
+		eq(int(wrote_log[0][0]), 1, "save_written 带槽号")
+		ok(String(wrote_log[0][1]).ends_with("slot_1.json"), "save_written 带路径",
+				str(wrote_log[0][1]))
+	ss.disconnect("save_written", on_save_written)
+
+	section("测试隔离回收")
+	_saves_end()
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "saves.bak 已清走")
+	_restore_defaults()
+
+
+func _case_atomic() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	ok(ss != null, "autoload SaveSystem 节点存在于 root")
+	if ss == null:
+		return
+	_saves_begin()
+	var slot_path := _slot_file(ATOMIC_SLOT)
+
+	section("预置有效存档，再让子进程狂写同一槽位（父进程同时轮询）")
+	var seed_save: Dictionary = ss.call("save_slot", ATOMIC_SLOT, true)
+	ok(bool(seed_save.get("ok")), "预置槽 9 成功", str(seed_save.get("reason")))
+	var summary_path := _opt_out.path_join(PROBE_LOOP_FILE)
+	if FileAccess.file_exists(summary_path):
+		DirAccess.remove_absolute(summary_path)
+	ok(not FileAccess.file_exists(summary_path), "狂写统计文件在子进程运行前不存在（陈旧文件不能冒充证据）")
+	var pid := _spawn_case("s0_3_probe_loop")
+	ok(pid > 0, "狂写子进程已启动", "pid=%d" % pid)
+
+	# 两种读法并行采样，因为它们证明的是不同的东西：
+	#   (a) 裸读 —— 读者恰好在这一刻打开文件，会撞上引擎 rename 的非原子窗口；
+	#   (b) 产品读档接口 —— 自带重试，它的失败次数才是玩家真正会遇到的。
+	var samples := 0
+	var half := 0
+	var absent := 0
+	var unreadable := 0
+	var first_half := ""
+	var reader_fails := 0
+	var first_reader_fail := ""
+	var money_seen := {}
+	var deadline := Time.get_ticks_msec() + 30000
+	while pid > 0 and OS.is_process_running(pid) and Time.get_ticks_msec() < deadline:
+		if FileAccess.file_exists(slot_path):
+			var txt := FileAccess.get_file_as_string(slot_path)
+			if txt.strip_edges() == "":
+				unreadable += 1
+			elif _slot_text_is_complete(txt):
+				samples += 1
+				var seen_d := _parse_json_silent(txt)
+				var seen_game: Dictionary = seen_d.get("game", {})
+				money_seen[int(seen_game.get("money", -1))] = true
+			else:
+				half += 1
+				if first_half == "":
+					first_half = txt.substr(0, 96)
+		else:
+			absent += 1
+		var lr: Dictionary = ss.call("load_slot", ATOMIC_SLOT)
+		if not bool(lr.get("ok")):
+			reader_fails += 1
+			if first_reader_fail == "":
+				first_reader_fail = String(lr.get("reason"))
+		await process_frame
+
+	var finished := pid > 0 and not OS.is_process_running(pid)
+	ok(finished, "狂写子进程在 30 秒内自行结束（不是被超时打断）")
+	if not finished and pid > 0:
+		OS.kill(pid)
+	var code := OS.get_process_exit_code(pid) if pid > 0 else -1
+	ok(code == 0, "狂写子进程退出码 = 0（%d 次 save_slot 全部成功）" % ATOMIC_WRITES,
+			"退出码=%d" % code)
+	ge(samples, 20, "轮询期间读到 ≥ 20 次完整内容（否则本用例是空转，实际 %d 次）" % samples)
+	ok(half == 0, "0 次半截/损坏内容：每一个读得出来的样本都是完整合法 JSON",
+			"首个异常样本=%s（共 %d 次）" % [first_half, half])
+	eq(reader_fails, 0, "风暴期间产品读档接口 0 次失败（读者重试用掉了引擎的非原子窗口）：%s"
+			% first_reader_fail)
+	ge(money_seen.size(), 2, "风暴期间读到过 ≥ 2 个不同的存档版本（实际 %d 种）" % money_seen.size())
+	var max_money := -1
+	for k in money_seen.keys():
+		max_money = maxi(max_money, int(k))
+	print("    [note] 裸读样本 %d 次：完整 %d / 半截 %d；不可读瞬间：文件不存在 %d / 存在但读不出 %d"
+			% [samples + half + absent + unreadable, samples, half, absent, unreadable])
+	print("    [note] 产品读档接口并发调用失败 %d 次；读到 %d 种不同版本（money 最大 %d）"
+			% [reader_fails, money_seen.size(), max_money])
+
+	section("写者自述（子进程不继承 stdout，只能靠文件说话）")
+	var summary: Dictionary = _read_json(summary_path)
+	eq(int(summary.get("writes", 0)), ATOMIC_WRITES, "写者自述写了 %d 次" % ATOMIC_WRITES)
+	eq(int(summary.get("fails", -1)), 0, "写者自述 0 次失败：%s" % str(summary.get("first_reason", "")))
+	eq(int(summary.get("last_published_money", -1)), ATOMIC_WRITES,
+			"写者最后一版就是 money=%d" % ATOMIC_WRITES)
+
+	# ⚠️ 这两段必须紧跟在轮询之后：本节后面的用例自己会重写槽 9，一旦中间插入写操作，
+	# 「读者的最终版本 = 写者发布的最后一版」就不再是并发的事实，而只是巧合。
+	section("风暴结束后：读者看到的最终版本 = 写者发布的最后一版（逐字节）")
+	var final_txt := FileAccess.get_file_as_string(slot_path)
+	ok(_slot_text_is_complete(final_txt), "槽 9 最终内容是完整合法 JSON")
+	var final_d := _parse_json_silent(final_txt)
+	var final_game: Dictionary = final_d.get("game", {})
+	var final_money := int(final_game.get("money", -1))
+	ok(final_money >= 1 and final_money <= ATOMIC_WRITES,
+			"槽 9 的 money 是并发写入序列里的某个值（1..%d）" % ATOMIC_WRITES,
+			"实际=%d" % final_money)
+	eq(final_money, int(summary.get("last_published_money", -1)),
+			"读者的最终版本与写者自述的最后一版一致（不是陈旧版本）")
+	eq(FileAccess.get_sha256(slot_path), String(summary.get("last_published_sha", "")),
+			"最终内容 sha256 与写者发布时自算的 sha256 完全一致")
+
+	section("rename 被占用时：拒绝写入、原档不变、不留 .tmp（引擎实测语义）")
+	var before_sha := FileAccess.get_sha256(slot_path)
+	var hold := FileAccess.open(slot_path, FileAccess.READ)
+	var blocked: Dictionary = ss.call("save_slot", ATOMIC_SLOT, true)
+	if hold != null:
+		hold.close()
+	ok(not bool(blocked.get("ok")), "目标被读句柄占用时返回失败（不假装成功）",
+			str(blocked.get("reason")))
+	ok(String(blocked.get("reason")).contains("原存档保持不变"), "原因说明原档保持不变",
+			str(blocked.get("reason")))
+	eq(FileAccess.get_sha256(slot_path), before_sha, "失败后原存档逐位不变")
+	ok(not FileAccess.file_exists(slot_path + ".tmp"), "失败后不残留 .tmp")
+	var retried: Dictionary = ss.call("save_slot", ATOMIC_SLOT, true)
+	ok(bool(retried.get("ok")), "句柄释放后同一槽位写入成功", str(retried.get("reason")))
+
+	section("残留 .tmp 既不是槽位，也不会被当成存档")
+	var tmp8 := _slot_file(8) + ".tmp"
+	_write_text(tmp8, '{"schema_version": 1, "game": {}}')
+	ok(not bool(ss.call("slot_exists", 8)), "slot_exists(8) 为假（.tmp 不算槽位）")
+	var r8: Dictionary = ss.call("load_slot", 8)
+	ok(not bool(r8.get("ok")), "load_slot(8) 拒绝")
+	ok(String(r8.get("reason")).contains("空槽位"), "原因明说空槽位", str(r8.get("reason")))
+	ok(FileAccess.file_exists(tmp8), "残留 .tmp 本身还在（不是被静默删除）")
+	var w8: Dictionary = ss.call("save_slot", 8, true)
+	ok(bool(w8.get("ok")), "写入槽 8 成功", str(w8.get("reason")))
+	ok(not FileAccess.file_exists(tmp8), "写入成功后自己的 .tmp 被清理")
+
+	section("测试隔离回收")
+	_saves_end()
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "saves.bak 已清走")
+	_restore_defaults()
+
+
+func _case_no_autosave() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	ok(ss != null, "autoload SaveSystem 节点存在于 root")
+	if ss == null:
+		return
+	_saves_begin()
+
+	section("阶段 1：存档目录不存在时，跑满一整轮也不该建出任何存档")
+	ok(not DirAccess.dir_exists_absolute(SAVES_DIR), "隔离后 user://saves 不存在")
+	await _idle_run(90)
+	var snap1 := _saves_snapshot(SAVES_DIR)
+	eq(snap1.size(), 0, "阶段 1 后仍无任何存档文件：%s" % str(snap1.keys()))
+	ok(not DirAccess.dir_exists_absolute(SAVES_DIR),
+			"阶段 1 后目录仍未被创建（服务没有 _ready 写盘，也没有别的隐式写动作）")
+
+	section("阶段 2：目录已有存档时，全流程内容哈希与 mtime 零变化")
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+	_write_text(_slot_file(1), '{"schema_version": 1, "game": {"money": 5}}')
+	var before := _saves_snapshot(SAVES_DIR)
+	eq(before.size(), 1, "基线快照含 1 个文件")
+	await _idle_run(90)
+	eq(_saves_snapshot(SAVES_DIR), before, "本进程跑满一轮后哈希与 mtime 全不变")
+	var out: Array = []
+	var code := _exec_godot(PackedStringArray(["--headless", "--quit-after", "120"]), out)
+	ok(code == 0, "子进程完整启动主场景 120 帧退出码 = 0",
+			"退出码=%d 输出=%s" % [code, _tail(out, 4)])
+	var errs := _error_lines(out)
+	eq(errs.size(), 0, "子进程日志无 ERROR / SCRIPT ERROR：%s" % str(errs))
+	eq(_saves_snapshot(SAVES_DIR), before, "另一个进程完整启动后哈希与 mtime 仍全不变")
+
+	section("正面控制：显式存档必须被这套检查检出（否则上面是空转）")
+	var wrote: Dictionary = ss.call("save_slot", 1, true)
+	ok(bool(wrote.get("ok")), "显式 save_slot(1, true) 成功", str(wrote.get("reason")))
+	ne(_saves_snapshot(SAVES_DIR), before, "显式存档后快照确实变化（内容哈希变了）")
+
+	section("静态契约：服务里没有隐式写盘入口")
+	var src := FileAccess.get_file_as_string("res://scripts/core/save_system.gd")
+	# 只看代码、不看注释：文件顶部的契约说明里**提到**了这些名字，把它们算成证据就是
+	# 自欺——注释不会写盘，也不能证明代码不写盘。
+	var code_only := ""
+	for raw in src.split("\n"):
+		code_only += _strip_comment(String(raw), "gd") + "\n"
+	ok(not code_only.contains("func _process"), "SaveSystem 没有 _process（不按帧写盘）")
+	ok(not code_only.contains("func _physics_process"), "SaveSystem 没有 _physics_process")
+	ok(not code_only.contains("func _ready"), "SaveSystem 没有 _ready（启动零动作）")
+	ok(not code_only.contains("EventBus"), "SaveSystem 的代码不引用全局总线（没有事件触发的写盘）")
+	eq(code_only.count("_atomic_write("), 2,
+			"唯一的写盘路径 _atomic_write 只有 1 处定义 + 1 处调用（新增写入口必须显式登记）")
+
+	section("测试隔离回收")
+	_saves_end()
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "saves.bak 已清走")
+	_restore_defaults()
+
+
+## --- 打桩用例（hidden）-------------------------------------------------------
+## 这三个用例不写报告、不走断言汇总：输出与退出码就是父用例的证据通道。
+## `--all` 永远不会直接跑到它们（hidden），只由上面的用例以子进程拉起。
+
+## 子进程：新游戏 → 设定可辨识状态 → 存槽 3。
+func _case_probe_write() -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	var ss := get_root().get_node_or_null("SaveSystem")
+	if gs == null or ss == null:
+		printerr("[probe] WRITE ok=false 原因=autoload 缺失")
+		_probe_exit = 1
+		return
+	gs.call("new_game", PROBE_SEED)
+	gs.set("game_time", PROBE_TIME)
+	gs.set("money", PROBE_MONEY)
+	gs.set("food", PROBE_FOOD)
+	gs.set("supply", PROBE_SUPPLY)
+	gs.set("player_pos", PROBE_POS)
+	gs.call("set_scene_kind", PROBE_SCENE_KIND)
+	var r: Dictionary = ss.call("save_slot", ROUNDTRIP_SLOT, true)
+	print("[probe] WRITE ok=%s path=%s reason=%s" % [
+		str(r.get("ok")), str(r.get("path")), str(r.get("reason")),
+	])
+	_probe_exit = 0 if bool(r.get("ok")) else 1
+
+
+## 子进程：读槽 3 → 回吐单行快照 JSON（父进程直接解析）。
+func _case_probe_read() -> void:
+	var ss := get_root().get_node_or_null("SaveSystem")
+	var gs := get_root().get_node_or_null("GameState")
+	if ss == null or gs == null:
+		printerr("[probe] READ ok=false 原因=autoload 缺失")
+		_probe_exit = 1
+		return
+	var r: Dictionary = ss.call("load_slot", ROUNDTRIP_SLOT)
+	var warns: PackedStringArray = r.get("warnings", PackedStringArray())
+	print("[probe] READ ok=%s warnings=%d reason=%s" % [
+		str(r.get("ok")), warns.size(), str(r.get("reason")),
+	])
+	if not bool(r.get("ok")):
+		_probe_exit = 1
+		return
+	var handoff := _opt_out.path_join(PROBE_SNAPSHOT_FILE)
+	_write_json(handoff, gs.call("snapshot"))
+	print("[probe] SNAPSHOT_FILE ", handoff)
+	_probe_exit = 0
+
+
+## 子进程：连续写同一槽位 ATOMIC_WRITES 次，父进程同时在轮询那个文件。
+## 结束时把「按自己写的最后一次，槽位里应当是什么」落成文件——父进程只能靠它
+## 判断「读者看到的最终版本是不是写者发布的最后一版」。
+func _case_probe_loop() -> void:
+	var ss := get_root().get_node_or_null("SaveSystem")
+	var gs := get_root().get_node_or_null("GameState")
+	if ss == null or gs == null:
+		printerr("[probe] LOOP writes=0 fails=1 原因=autoload 缺失")
+		_probe_exit = 1
+		return
+	var fails := 0
+	var first_reason := ""
+	for i in ATOMIC_WRITES:
+		gs.set("money", i + 1)
+		var r: Dictionary = ss.call("save_slot", ATOMIC_SLOT, true)
+		if not bool(r.get("ok")):
+			fails += 1
+			if first_reason == "":
+				first_reason = String(r.get("reason"))
+	var slot_path: String = ss.call("slot_path", ATOMIC_SLOT)
+	var last_published := FileAccess.get_file_as_string(slot_path)
+	var last_d: Dictionary = _parse_json_silent(last_published)
+	var last_game: Dictionary = last_d.get("game", {})
+	_write_json(_opt_out.path_join(PROBE_LOOP_FILE), {
+		"writes": ATOMIC_WRITES,
+		"fails": fails,
+		"first_reason": first_reason,
+		"last_published_sha": FileAccess.get_sha256(slot_path),
+		"last_published_bytes": last_published.length(),
+		"last_published_money": int(last_game.get("money", -1)),
+	})
+	print("[probe] LOOP writes=%d fails=%d first_reason=%s" % [
+		ATOMIC_WRITES, fails, first_reason,
+	])
+	_probe_exit = 0 if fails == 0 else 1
+
+
+## --- S0.3 批次 2 辅助 ---------------------------------------------------------
+
+func _slot_file(slot: int) -> String:
+	return SAVES_DIR.path_join("slot_%d.json" % slot)
+
+
+## 把 user://saves 整体让位给 user://saves.bak。
+## 目录换名已由探针实测：目标不存在时可用；target 已存在且非空时失败（因此先清）。
+func _saves_begin() -> PackedStringArray:
+	var notes := PackedStringArray()
+	if DirAccess.dir_exists_absolute(SAVES_BAK):
+		if DirAccess.dir_exists_absolute(SAVES_DIR):
+			_dir_remove_recursive(SAVES_DIR)
+		DirAccess.rename_absolute(SAVES_BAK, SAVES_DIR)
+		notes.append("发现上次遗留的 saves.bak，已先还原")
+	if DirAccess.dir_exists_absolute(SAVES_DIR):
+		var err := DirAccess.rename_absolute(SAVES_DIR, SAVES_BAK)
+		notes.append("已把 saves/ 让位为 saves.bak（err=%d）" % err)
+	else:
+		notes.append("原本没有 saves/ 目录，无需让位")
+	return notes
+
+
+## 删掉用例期间造出来的 saves/，再把备份换回来。
+func _saves_end() -> PackedStringArray:
+	var notes := PackedStringArray()
+	if DirAccess.dir_exists_absolute(SAVES_DIR):
+		_dir_remove_recursive(SAVES_DIR)
+	if DirAccess.dir_exists_absolute(SAVES_BAK):
+		var err := DirAccess.rename_absolute(SAVES_BAK, SAVES_DIR)
+		notes.append("已还原 saves.bak -> saves/（err=%d）" % err)
+	else:
+		notes.append("没有 saves.bak 需要还原")
+	return notes
+
+
+## 递归删除目录。先把 DirAccess 的目录句柄收起来再删——Windows 上打开着的
+## 目录句柄会挡住删除（与预登记陷阱 2 同源的引擎/系统语义）。
+func _dir_remove_recursive(dir_path: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir_path):
+		return
+	var dirs: Array = []
+	var files: Array = []
+	var d := DirAccess.open(dir_path)
+	if d != null:
+		dirs = d.get_directories()
+		files = d.get_files()
+		d.list_dir_end()
+	for sub in dirs:
+		_dir_remove_recursive(dir_path.path_join(String(sub)))
+	for f in files:
+		DirAccess.remove_absolute(dir_path.path_join(String(f)))
+	DirAccess.remove_absolute(dir_path)
+
+
+## 目录内每个文件的 sha256 + mtime —— 验收原文要的正是这两项。
+func _saves_snapshot(dir_path: String) -> Dictionary:
+	var out := {}
+	if not DirAccess.dir_exists_absolute(dir_path):
+		return out
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return out
+	var files := d.get_files()
+	d.list_dir_end()
+	for f in files:
+		var p := dir_path.path_join(String(f))
+		out[String(f)] = {
+			"sha256": FileAccess.get_sha256(p),
+			"mtime": FileAccess.get_modified_time(p),
+		}
+	return out
+
+
+## 一次观测是否算「完整」：JSON 对象 + schema_version 1 + 必备 game.money。
+## 「不存在」与「存在但读不出」是另外两类观测，由调用方单独计数，不算半截。
+func _slot_text_is_complete(txt: String) -> bool:
+	var d := _parse_json_silent(txt)
+	if d.is_empty():
+		return false
+	if int(d.get("schema_version", -1)) != 1:
+		return false
+	var game_v: Variant = d.get("game", null)
+	if typeof(game_v) != TYPE_DICTIONARY:
+		return false
+	return (game_v as Dictionary).has("money")
+
+
+## 解析可能损坏的文本，失败时保持安静。
+## 与 `scripts/core/save_system.gd` 同一条理由：并发观测里的「半截样本」是**预期输入**，
+## `JSON.parse_string()` 会为每一个样本打一行引擎级 ERROR，把真正的错误淹掉。
+func _parse_json_silent(text: String) -> Dictionary:
+	var parser := JSON.new()
+	if parser.parse(text) != OK:
+		return {}
+	var data: Variant = parser.data
+	return data if typeof(data) == TYPE_DICTIONARY else {}
+
+
+## 跑一轮「该写盘的东西都没写盘」的模拟：新游戏 → 逻辑步推进 → 五种全局事实
+## 全部投递 → 把所有只读的存档接口调一遍。
+##
+## ⚠️ 真正的「大地图遭遇 → 战斗 → 返回」需要 SceneRouter（S0.3 批次 3）才能跑通；
+## 本用例覆盖它现在能覆盖的部分：任何非玩家显式操作的流程都不许落盘。
+func _idle_run(frames: int) -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	var bus := get_root().get_node_or_null("EventBus")
+	var ss := get_root().get_node_or_null("SaveSystem")
+	if gs != null:
+		gs.call("new_game", 31337)
+	for i in 6:
+		await physics_frame
+	if bus != null:
+		bus.emit_signal("time_advanced", 2, 0.5)
+		bus.emit_signal("encounter_started", {"id": "probe"})
+		bus.emit_signal("battle_finished", {"win": true})
+		bus.emit_signal("resources_changed", 1, 2, 3)
+		bus.emit_signal("settlement_entered", "s1")
+	if ss != null:
+		ss.call("select_slot", 1)
+		ss.call("slot_info", 1)
+		ss.call("list_slots")
+		ss.call("load_slot", 1)
+		ss.call("load_slot", 9)
+	for i in maxi(frames - 6, 0):
+		await physics_frame
+
+
+## 把现场还给后续用例（GameState / Rng 回默认，与 s0_3_state 的收尾同口径）。
+func _restore_defaults() -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	var rng := get_root().get_node_or_null("Rng")
+	if gs != null:
+		gs.call("new_game", 20250929)
+	if rng != null:
+		rng.call("seed_from", 20250929)
+
+
+## 以子进程跑一个打桩用例并把 stdout 收回来。
+## `--quit-after` 是兜底：万一打桩用例挂死，子进程也会退出，表现为「标记行缺失」的
+## 显式失败，而不是无限等待（与 `_exec_user` 同一条约束）。
+## 以子进程跑一个打桩用例并把 stdout 收回来。
+## `--out=` 必须放在 `--` **之后**：`--` 之前的参数引擎自己解析，子进程的
+## `OS.get_cmdline_user_args()` 只看得见 `--` 之后的（踩过一次：放前面时子进程
+## 静默用了默认报告目录，回吐文件写去了别处）。`--quit-after` 同理是兜底：万一
+## 打桩用例挂死，子进程也会退出，表现为「标记行缺失」的显式失败，而不是无限等待。
+func _exec_case(case_id: String, out_lines: Array) -> int:
+	return _exec_godot(PackedStringArray([
+		"--headless", "--quit-after", "20000",
+		"--script", "res://tools/verify.gd", "--", "--case=" + case_id, "--out=" + _opt_out,
+	]), out_lines)
+
+
+## 非阻塞启动一个打桩用例子进程（stdout 继承本进程），返回 pid。
+## 必须非阻塞：父进程要在子进程写盘的同时轮询那个槽位文件。
+func _spawn_case(case_id: String) -> int:
+	return OS.create_process(OS.get_executable_path(), PackedStringArray([
+		"--headless", "--path", _project_dir(), "--quit-after", "20000",
+		"--script", "res://tools/verify.gd", "--", "--case=" + case_id, "--out=" + _opt_out,
+	]))
+
+
+func _write_text(path: String, text: String) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		printerr("[verify] 无法写入 ", path)
+		return
+	f.store_string(text)
+	f.close()
+
+
+## 把 `OS.execute` 收回的输出摊平成单行。
+## `out_lines` 的元素是**读取分块**而不是严格按行（实测一整段 stderr+stdout 会落在
+## 同一个元素里），所以这里统一按 "\n" 再切一次：机器可读标记行必须能逐行匹配，
+## 否则断言会随缓冲边界随机失败。
+func _flatten_lines(lines: Array) -> PackedStringArray:
+	var out := PackedStringArray()
+	for l in lines:
+		for piece in String(l).split("\n"):
+			out.append(String(piece))
+	return out
+
+
+func _lines_contain(lines: Array, needle: String) -> bool:
+	for l in _flatten_lines(lines):
+		if String(l).contains(needle):
+			return true
+	return false
+
+
+## 取以 `prefix` 开头那一行的剩余部分（打桩用例的单行机器可读输出）。
+func _line_value(lines: Array, prefix: String) -> String:
+	for l in _flatten_lines(lines):
+		var s := String(l)
+		if s.begins_with(prefix):
+			return s.substr(prefix.length())
+	return ""
+
+
+func _tail(lines: Array, n: int) -> String:
+	var flat := _flatten_lines(lines)
+	var start := maxi(flat.size() - n, 0)
+	var out := PackedStringArray()
+	for i in range(start, flat.size()):
+		out.append(String(flat[i]))
+	return " | ".join(out)
+
+
+func _error_lines(lines: Array) -> Array:
+	var out: Array = []
+	for l in _flatten_lines(lines):
+		var s := String(l)
+		if s.contains("ERROR") or s.contains("SCRIPT ERROR"):
+			out.append(s.strip_edges())
+	return out
 
 
 ## --- 诊断用例 ----------------------------------------------------------------

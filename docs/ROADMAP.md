@@ -277,6 +277,13 @@ $P      = "G:\godot_project\mc-npr-godot"
 - 覆盖已有槽必须**二次确认**，且确认框需明确显示将被覆盖的槽号与写入时间。
 - 写盘失败（磁盘满 / 无权限 / 路径不可写）**不得静默**：必须显示失败原因，并保持原存档不变
   （原子写入，禁止半截文件）。
+- 「禁止半截文件」的**实测口径**（2026-10-16，批次 2，用例 `s0_3_atomic`）：引擎在 Windows 上的
+  `rename` 覆盖是"**先删目标再改名**"、**不是**原子替换 —— 并发读者会撞上极短的"文件不存在"或
+  "文件在但读不出来"瞬间（170 个样本里 17 + 22 次），因此**只靠写者做不到原子**。契约按此收窄：
+  ①**任何时刻读得出来的内容必须是完整合法 JSON**（实测 131/131，无一次半截）；
+  ②读者侧用**有界重试**吸收该窗口（实测并发读失败 42 → 0），空槽位（无同名 `.tmp`）不重试、不拖慢
+  九宫格渲染；③写者失败时原档逐位不变、不留 `.tmp`。详见 §5 S0.3 陷阱 2 与
+  `docs/ENGINEERING.md` §5 陷阱 6。
 
 **与调试快捷键的关系**
 
@@ -442,9 +449,11 @@ $P      = "G:\godot_project\mc-npr-godot"
 | **3** | `scripts/core/scene_router.gd`（`SceneRouter`）+ `scenes/battle/battle_stub.tscn`（**占位靶子**，M2 替换） | `project.godot` autoload；守卫新增规则 `scene_change_owner`，同步更新 `s0_2_guard` 的类数描述 | 7 → 8 | `s0_3_router`（`goto_battle`→`return_to_world` 节点数 ±0、autoload ≤ 10） |
 | **4** | `scripts/ui/menu_page.gd` + `scripts/ui/save_grid.gd`（含槽卡片），接入 `ESC` 与 `SaveSystem` | `scenes/main.tscn` 挂载菜单（**默认隐藏**） | 8 | `s0_3_slots`、`s0_3_overwrite` + `B-` 截图 4 张 |
 
-**批次落地状态**：批次 1 ✅ 已完成（2026-10-16，提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`；
+**批次落地状态**：批次 1 ✅ 已完成（2026-10-16，提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`）；
+批次 2 ✅ 已完成（2026-10-16，autoload 6 → 7：`scripts/core/save_system.gd` + `project.godot` 注册；新增 4 个用例
+`s0_3_roundtrip` / `s0_3_dirty` / `s0_3_atomic` / `s0_3_no_autosave`，共 156 断言；
 实测证据见 §15 台账与 `docs/成果.md`）；
-批次 2 / 3 / 4 待开工。
+批次 3 / 4 待开工。
 
 **验收门禁（每批都跑，不只最后跑一次）**
 - `A-` headless 启动 60 帧 0 条 `ERROR`/`SCRIPT ERROR`（`--quit-after 60`）。
@@ -467,9 +476,18 @@ $P      = "G:\godot_project\mc-npr-godot"
 1. `get_tree().paused = true` 会**连带停掉 autoload 的 `_process`**（autoload 挂在 root 下、默认继承暂停）。
    故 `Clock` 与 UI 根节点必须显式设 `process_mode = PROCESS_MODE_ALWAYS`；`GameState` 保持默认
    （暂停时游戏时间不应推进）。
-2. **Windows 上"原子覆盖"需实测**：`DirAccess.rename()` 在目标文件已存在时是否原子覆盖，
-   Godot 各平台的实现不一致。批次 2 必须先写探针确认；不成立则改"先写 `.tmp` → 备份旧档
-   → 换名 → 失败回滚"两段式，并在此登记结论。
+2. ~~**Windows 上"原子覆盖"需实测**~~ **已实测结案（2026-10-16，批次 2）**：单进程探针先给出
+   "`rename_absolute(tmp, 已存在且未打开的目标)` 返回 OK、内容被替换、无 `.tmp` 残留；目标被读句柄
+   占用时返回 err=1 且原档不变"的结论；**但跨进程并发用例 `s0_3_atomic` 推翻了"无空窗"这半句**——
+   子进程连写同一槽位 800 次、父进程同期取 170 个样本（另一轮复测 193 个），实测
+   **17 / 28 次「文件不存在」+ 22 / 25 次「文件在但读不出来」**（引擎的覆盖实现是"先删目标再改名"，
+   不是原子替换），而**没有任何一次半截内容**（每个读得出来的样本都是完整合法 JSON，
+   `schema_version` 与 `game.money` 齐全，两轮分别 131 / 140 个全部合法），风暴结束后读者看到的
+   最终版本与写者自述的最后一版 **sha256 逐位一致**。
+   ⇒ **不做**"先写 `.tmp` → 备份旧档 → 换名 → 回滚"的两段式（它反而会把空窗拉长）；
+   改为：写者 `.tmp` → 回读校验 → `rename` + 有界重试（20×3 ms），读者 `_read_slot_text()`
+   同样有界重试，并以"同目录 `.tmp` 是否存在"区分「真空槽位」（立即返回，不拖慢九宫格渲染）与
+   「发布中」（重试）。实测该重试把 170 次并发读的失败数压到 **0**。
 3. `change_scene_to_file()` 后旧场景**不是当帧释放**，"节点数 ±0"断言必须 `await` 若干帧再取数。
 4. `user://saves/` 目录需按需 `DirAccess.make_dir_recursive_absolute()` 创建，首次存档前不存在。
 5. `ESC` 的键位与 `ui_cancel` 默认动作、以及 `input_setup.gd` 既有映射需先核对是否冲突（S0.4 还会
@@ -480,7 +498,10 @@ $P      = "G:\godot_project\mc-npr-godot"
 - `A-` 「新游戏 → 快存 → 退出进程 → 读档」后 seed/时间/金钱/粮草/玩家位置逐字段一致（用例 `s0_3_roundtrip`）。
 - `A-` 存档 JSON 含 `schema_version: 1`；注入未知/缺失/类型错误字段后读档不崩溃并有明确告警（用例 `s0_3_dirty`）。
 - `A-` `goto_battle` → `return_to_world` 后场景节点数回到基线 ±0，autoload 数量 ≤ 10（2026-10-16 由 ≤ 6 放宽，见 §16）。
-- `A-` 并发写同一槽位不产生半截文件（原子性用例）。
+- `A-` 并发写同一槽位**不产生半截文件**（用例 `s0_3_atomic`）：读者读得出来的每个样本都必须是完整
+  合法 JSON（两轮实测 131/131、140/140）；引擎 rename 覆盖在 Windows 上的非原子窗口由**读者有界
+  重试**吸收（实测并发 170~193 次读 **0 次失败**），且风暴结束后读者看到的最终内容与写者自述的
+  最后一版 sha256 一致。
 - `A-` 宫格页渲染 9 个槽位；空槽显示「空槽位」且不可读取（用例 `s0_3_slots`）。
 - `A-` **无自动存档**：启动 → 进战斗 → 返回 → 退出全流程中，除显式点击「保存 / 另存为」外，
   `user://saves/` 下所有文件的内容哈希与 mtime 均不发生任何变化（用例 `s0_3_no_autosave`）。
@@ -488,7 +509,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 - `D-` `ESC` 菜单页开合、宫格选槽与二次确认流程的手感确认。
 
 **依赖与风险**：S0.2。风险：单例过多导致隐式耦合 → 约定只有 `SceneRouter` 能切场景、只有 `SaveSystem` 能读写 `user://`。
-**状态**：⏳ 未开始
+**状态**：🚧 进行中（批次 1 ✅、批次 2 ✅；批次 3 场景路由 / 批次 4 菜单与九宫格 待开工）
 
 ### S0.4 调试与观测层
 
@@ -1434,7 +1455,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 |---|---|---|---|---|
 | S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ✅ 已验收 | 6 批迁移全部完成（批次 1–4 为代码移动，`1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；验收：窗口 `--all` 8 用例 / 152 断言全通过 / 退出码 0，headless 8 用例 0 失败 2 跳过，推送门禁 0 条 ERROR，`B-` 6 机位与迁移前基线**逐位一致（6/6 sha256 全等）**；产出 `docs/ENGINEERING.md` |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
-| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`；**提交自身无法引用自身哈希**，故此处记 subject，哈希留待批次 2 一并登记）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。批次 2（`SaveSystem`）待开工 |
+| S0.3 | 全局服务骨架 | S0.2 | 🚧 进行中 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`；**提交自身无法引用自身哈希**，故此处记 subject，哈希留待批次 2 一并登记）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 2 ✅ 已完成（2026-10-16）**：新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` 之后，3 → 7）：9 固定槽位（1-based）+ `schema_version: 1` + `meta` 槽位卡片字段（真实时间 / 游戏内日期时间 / 队伍名与等级 / 累计时长）+ 脏存档容错（非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 `game` 一律拒读且不改动当前状态；未知·缺失·类型错误字段逐条告警并保留当前值）+ `migrations` 版本链钩子 + **无自动存档**（无 `_ready`/`_process`/`EventBus` 订阅，`SAVE_DIR` 由首次写入惰性创建）。新增 4 用例：`s0_3_roundtrip` 63 断言（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回并回吐快照文件）、`s0_3_dirty` 47 断言、`s0_3_atomic` 29 断言（跨进程并发 800 次写 / 170 次观测，**0 次半截内容**、读者重试后 **0 次读取失败**、最终与写者自述 sha256 逐位一致）、`s0_3_no_autosave` 17 断言（启动 + 世界重建 + 五种全局事实 + 完整启动子进程后，`user://saves` 全部文件哈希与 mtime **零变化**，且有正对照证明该检查真能检出显式存档）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **13 用例 / 0 失败 / 0 跳过（385 断言）/ 退出码 0**，headless 13 用例 / 0 失败 / 2 跳过；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。批次 3（`SceneRouter`）与批次 4（菜单 + 九宫格）待开工 |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
 | S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ⏳ 未开始 | — |
 | S0.6 | 可复现渲染时钟（可注入 `u_time`） | S0.2 | ✅ 已验收 | 提交 `457a7d2`（实现）+ `953fd0d`（用例与守卫）；`tools/verify.gd --all` 窗口模式 **8/8 用例、152/152 断言**、退出码 0，headless 6 通过 + 2 跳过、退出码 0。关键证据 `s0_6_repro` 31/31：两独立进程同参数截图 `img_diff` **0 像素 / 0.0000%** 且 sha256 逐位相同（`s0_boot_follow`、`s0_boot_wide`），`--yaw=45→52` 与 `--frames=15→200` 反向对照均判不同；`s0_6_clock` 28/28；修复前同口径实测 1.62%–5.67%。`C-` 三次采样 ms/frame 16.685/16.667/16.667、三角面 219,978、绘制调用 96（vsync 封顶，仅证明未跌破上限）。结论与遗留见 `docs/成果.md` |
@@ -1544,6 +1565,8 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-16 | **验收标准修改：Autoload 上限 6 → 10**。§3.2 的「Autoload 上限 6 个」改为 10 个；§5 S0.3 的 `A-` 由「autoload 数量 ≤ 6」改为「≤ 10」；§3.2 同时补齐既有 autoload 列表（原漏写 `Clock`，实际为 `Style` `Capture` `Clock` 3 个）；`docs/ENGINEERING.md` §1/§6 与 `docs/成果.md` 同步 | **S0.3 与自身验收标准冲突**：S0.3 要求「autoload ≤ 6」，却要新增 4 个（`GameState` `EventBus` `SceneRouter` `SaveSystem`），现有 3 个 → 共 7 个，必然违反。两条备选：① 合并服务（如 `SceneRouter` 并入 `GameState`、`SaveSystem` 延后）；② 放宽上限。**选 ②**：不为迁就一个数字把职责不同的服务硬塞成"上帝对象"，且 10 留 3 个余量给 M1–M6（含 §3.2 要求的 `Rng` 服务，若日后落为 autoload） | **用户（本会话明确指示"autoload 修改原有验收标准，把上限放宽到 10 个"）** |
 | 2026-10-16 | **S0.3 执行方案登记**（§5 S0.3）：4 批划分（服务 / 存档 / 路由 / UI）与每批的交付物、同批必改项、autoload 计数（3 → 6 → 7 → 8）、新增校验用例；每批验收门禁；**5 个设计决定**（拆 4 批 / 新建 `scenes/battle/battle_stub.tscn` 作路由靶子 / `Rng` 纳入本步但暂不收编既有裸 `randi()` / 存档用例整体换名 `user://saves/` ↔ `saves.bak` 做隔离 / `ESC` 暂停世界但 `Clock` 与 UI 保持 `PROCESS_MODE_ALWAYS`）；**6 条预登记陷阱**；§3.2 的 autoload 列表补入 `Rng`（合计 8）并新增"已发生事实"信号命名族；§15 台账 S0.3 置 `🚧 进行中` | 与本会话对齐后定稿。关键权衡：① `Rng` 越晚收编越贵，但收编既有 `randi()` 会改变地形/植被随机序列 ⇒ 6 机位基线失效，故只建服务、不收编；② 存档测试若走"产品码支持测试保存根"会给发布构建留下旁路，故改用目录整体换名，零产品码改动；③ `get_tree().paused` 会连带停掉 autoload，故须逐节点显式设 `PROCESS_MODE_ALWAYS` | 用户（本会话五问五答，均取推荐项） |
 | 2026-10-16 | **S0.3 批次 1 落地：autoload 3 → 6**。新增 `scripts/core/rng.gd`（`Rng`，FNV-1a 具名子流）、`scripts/core/event_bus.gd`（`EventBus`，5 个过去式事实信号、无状态）、`scripts/core/game_state.gd`（`GameState`，10 个存档字段 + `snapshot()`/`restore()` 容错 + `_physics_process` 固定逻辑步推进游戏时间）；`project.godot` 注册三者且 **`Rng` 先于 `GameState`**（后者 `_ready()` 要调用 `Rng.seed_from`）；§3.2/§5 S0.3/附录 A 的 autoload 计数与描述同步；`docs/ENGINEERING.md` §1/§6 同步。**记录两条负面结论（在 §15 与 `docs/成果.md` 展开）**：① `SceneTree.physics_frame` 在节点 `_physics_process` **之前**发射 ⇒ "N 次 await == N 步"是错的（实测 60 次 await 只推进 59 步），用例改断言"前进量恒为 1/60 的整数倍"；② `Script.get()` 读不到 `const`，读常量须用 `get_script_constant_map()` | 批次 1 是全 4 批里唯一"只加服务、不改画面"的一批，因此它的验收意义在于**证明新增 autoload 对渲染零影响**：`B-` 6 机位 sha256 与 S0.1 迁移前基线全等（6/6），manifest `det=True hz=60.0 t=2.5 frame=150`。`GameState.world_seed` 默认值刻意取 `20250929`（与 `main.gd` 的 `@export` 同值），使 S1.2 把场景入口接到本服务时世界逐位不变 —— 该同值性由 `s0_3_state` 断言守住 | 用户（本会话批准执行 S0.3 批次 1） |
+
+| 2026-10-16 | **S0.3 批次 2 落地：autoload 6 → 7**。新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` **之后**）：`SAVE_DIR="user://saves"` / `SLOT_COUNT=9` / `schema_version:1` / `meta` 槽位卡片字段 / `migrations` 版本链钩子 / 脏存档与脏字段容错 / `save_written`·`save_failed`·`load_failed`·`slot_loaded` 四信号；**无 `_ready`、无 `_process`、不订阅 `EventBus`**，目录由首次写入惰性创建（无自动存档的静态与动态双证据）。`tools/verify.gd` 新增 4 用例（`s0_3_roundtrip` 63 / `s0_3_dirty` 47 / `s0_3_atomic` 29 / `s0_3_no_autosave` 17 断言）与 3 个隐藏探针（跨进程写 / 读回吐 / 狂写循环）；`s0_3_state` 的 autoload 契约 6 → 7 并把 `SaveSystem` 排在 `GameState` 之后的顺序纳入断言。**同时修好三个验收工具的坑（详见 `docs/ENGINEERING.md` §5 陷阱 6–9）**：① 引擎 rename 覆盖在 Windows 上非原子（读者须重试）；② `JSON.parse_string()` 解析失败会打引擎级 `ERROR`，坏存档是正常输入，改用 `JSON.new().parse()`；③ `OS.create_process()` 子进程不继承 stdout，子进程结论必须落文件；④ 子进程只认 `--` 之后的 `--out=`，`s0_2_baseline` 因此曾整例失败且有假通过风险（已修正并补"运行前删旧报告 + 断言不存在"） | 批次 2 的验收核心是**"没有自动存档"要能被证伪**：用例先证明检查本身有效（正对照：显式 `save_slot` 一定改变目录快照），再断言全流程零变化；同时用**真跨进程**（不是同进程两次调用）证明存档文件是进程间事实。另一个关键判断：单进程探针只看末态会得出"rename 覆盖无空窗"的错误结论，**跨进程并发观测才推翻它**——这条负面结论已写入 §5 S0.3 陷阱 2 与 `save_system.gd` 文件头，成为后续所有 `user://` 写入的既定约束 | 用户（本会话批准执行 S0.3 批次 2） |
 
 ---
 

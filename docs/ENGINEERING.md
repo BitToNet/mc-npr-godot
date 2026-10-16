@@ -4,7 +4,7 @@
 > 与执行陷阱。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录。
 >
 > ⚠️ **本文件尚未完成**：按 `ROADMAP` §5 S0.5，本文件还需补齐**命名规范、信号约定、
-> 数据表格式、autoload 上限（当前 6 / 上限 10）、允许/禁止清单**；S0.5 另产出
+> 数据表格式、autoload 上限（当前 7 / 上限 10）、允许/禁止清单**；S0.5 另产出
 > `docs/ART_PIPELINE.md`（含「新建合规物件」6 步模板与 3 个反例 + 内嵌截图）。
 > 当前内容仅覆盖 S0.1 的交付范围。
 
@@ -15,7 +15,7 @@
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
 | `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做） |
-| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
+| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板）、`ui_slider.gd`（方形滑块） |
@@ -146,6 +146,10 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 3 | **`GUARD_WHITELIST` 按精确路径 + 行号登记** | 移动白名单内文件后 `s0_2_guard` 误报「未登记违例」 | 与文件移动**同批**更新白名单条目（涉及 `core/main.gd`、`core/capture.gd`、`world/terrain.gd`） |
 | 4 | **着色器路径错误会静默退化** | 不报错，但材质回落为默认（画面变样） | 靠 `B-` 6 机位逐位比对兜住；改 `style.gd` 的 3 条 `load()` 后必须复跑 |
 | 5 | **`verify.gd` 的子进程必须带 `--` 分隔符** | 子进程收不到 `--shots`，不退出，`OS.execute` 无超时 ⇒ 整个套件静默挂死 | 用 `_exec_user()`（自动插 `--` 并加 `--quit-after` 兜底） |
+| 6 | **引擎的「改名覆盖」在 Windows 上不是原子替换** | 跨进程狂写同一槽位时（`s0_3_atomic`，800 次写 / 170~193 次观测），读者会看到 17~28 次「文件不存在」、22~25 次「文件在但读不出来」；但**没有任何一次半截内容**（每一次读得出来的样本都是完整合法 JSON，两轮 131 / 140 个全部合法）。单进程探测只看末态会误判为「无空窗」 | 写者：`.tmp` → 回读校验 → `rename` + 有界重试；读者：`_read_slot_text()` 有界重试，并以「同目录 `.tmp` 是否存在」区分「真空槽位」（立即返回）与「发布中」（重试）。规则与实测数字见 `ROADMAP` §3.5 与 `scripts/core/save_system.gd` 文件头 |
+| 7 | **`JSON.parse_string()` 解析失败会打引擎级 `ERROR`** | 坏存档是**正常输入**（玩家能改、磁盘能坏、`s0_3_atomic` 的并发样本），却让 `--headless` 日志出现 `ERROR: Parse JSON failed...`，掩盖真正的错误 | 一律改用 `JSON.new()` + `parse()` 实例接口（返回 `Error`、不打日志），自己把原因写进返回值与信号 |
+| 8 | **`OS.create_process()` 的子进程不继承 stdout** | 子进程 `print()` 一行都不到父进程日志里（实测 `[probe] ...` 全部丢失），退出码之外无证据 | 子进程的结论必须**落成文件**（`_probe_loop_summary.json` / `_probe_read_snapshot.json`），父进程读文件断言 |
+| 9 | **子进程只认 `--` 之后的 `--out=`** | 父进程用 `--out=res://.verify/<批次>` 隔离报告，子进程仍写默认目录 ⇒ `s0_2_baseline` 整例失败（且假如目录里恰有旧报告，会变成**假通过**） | 任何产出报告的子进程都要显式透传 `--out=`，并在运行前删除旧报告 + 断言其不存在 |
 
 ---
 
@@ -177,3 +181,26 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > `primitives` 与 `draw_calls` 与 §6.1 完全相同，是"只加服务、未动画面"的第二种独立证据
 > （第一种是 `B-` 6 机位 sha256 全等）。`memory_static` 由 89.1 MB 升至 90.95 MB，
 > 增量即 3 个 autoload 脚本与其节点，属预期。
+
+### 6.3 S0.3 批次 2 验收时点（autoload 6 → 7，只加服务、未改画面）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **13 用例 / 失败 0 / 跳过 0 / 385 断言全通过** / 退出码 0（50.2s） |
+| headless `tools/verify.gd --all` | 13 用例 / 失败 0 / 跳过 2（`s0_2_baseline`、`s0_6_repro` 需 GPU）/ 退出码 0（13.1s） |
+| 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `WARNING` / `SCRIPT ERROR` |
+| 新增用例（共 156 断言） | `s0_3_roundtrip` 63/63（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回，快照以 UTF-8 文件回吐）/ `s0_3_dirty` 47/47（8 类坏档拒读 + 3 类脏字段告警保留当前值 + `v0→v1` 迁移钩子真能跑）/ `s0_3_atomic` 29/29（跨进程并发 800 写 / 170 观测）/ `s0_3_no_autosave` 17/17 |
+| `s0_3_state` | 由 72 → **74/74**：autoload 契约 6 → 7，并新增"`SaveSystem` 注册在 `GameState` 之后"的顺序断言 |
+| `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**，manifest `det=True hz=60.0 t=2.5 frame=150` |
+| `C-` 性能（3 次采样极差） | FPS **0.067%** / ms-per-frame **0.054%** / 静态内存 **0.948%** / 三角面 **0.000%** / 绘制调用 **0.000%**（全部 < 5%）；`fps_mean 59.93–59.97` / `ms_per_frame 16.676–16.685` / `primitives 219978` / `draw_calls 96` / `memory_static 91.15–92.02 MB` / `objects 1776–1779` |
+| autoload 数量 | **7** / 上限 10（`Style` `Capture` `Clock` `Rng` `EventBus` `GameState` `SaveSystem`；`Rng` 先于 `GameState`、`SaveSystem` 后于 `GameState`，均由 `s0_3_state` 断言） |
+
+> `primitives 219978` 与 `draw_calls 96` 自 §6.1 起三次验收完全不变，再次独立证明"只加服务"。
+> `memory_static` 90.95 → 91.15~92.02 MB、`objects` ~1774 → 1776~1779，增量即 `SaveSystem` 节点与其脚本。
+>
+> **本批最值得记住的负面结论**（详见 §5 陷阱 6 与 `ROADMAP` §5 S0.3 陷阱 2）：单进程探针只看
+> **末态**会得出"引擎 rename 覆盖无空窗"的错误结论；跨进程并发观测才测出 Windows 上它其实是
+> **"先删目标再改名"**，读者会撞上"文件不存在"或"文件在但读不出来"的瞬间（两轮实测：
+> 170 样本 → 17 + 22 次；193 样本 → 28 + 25 次）。结论不是加回滚备份，
+> 而是**读者有界重试**——实测把并发读的失败数从 42 压到 **0**，且**从头到尾没有一次半截内容**
+> （两轮 131 / 140 个可读样本全部是完整合法 JSON）。
