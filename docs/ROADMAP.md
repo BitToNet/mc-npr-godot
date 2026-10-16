@@ -166,7 +166,7 @@ Main.rebuild(seed)                             # 世界重建入口
   ```
   scenes/    world/  battle/  ui/  dev/
   scripts/   core/   world/   actors/  battle/  legion/  data/  ui/  fx/
-  shaders/   terrain/  character/  fx/
+  shaders/   common/  terrain/  character/  fx/
   data/      units/  weapons/  frames/  world/  economy/     (资源与表)
   tools/     verify cases + 离线脚本
   docs/      本文 + 工程/美术/平衡文档
@@ -272,6 +272,58 @@ $P      = "G:\godot_project\mc-npr-godot"
 - 把扁平 `scripts/` 重组为 §3.2 约定的分层目录；`shaders/`、`scenes/` 同步分层。
 - 保持行为**零变化**：主场景、启动参数、节点组、既有公开 API 全部不变。
 - 生成 `docs/ENGINEERING.md` 记录目录职责与迁移映射表（旧路径 → 新路径）。
+
+**执行方案（2026-10-16 与本会话对齐后定稿）**
+
+目录映射表（旧路径 → 新路径）：
+
+| 现路径 | 新路径 | 归类理由 |
+|---|---|---|
+| `scripts/main.gd` | `scripts/core/main.gd` | 场景入口与编排（S1.2 再拆为世界入口） |
+| `scripts/style.gd` | `scripts/core/style.gd` | 全局调色板/材质服务（autoload） |
+| `scripts/capture.gd` | `scripts/core/capture.gd` | 截图服务（autoload） |
+| `scripts/render_clock.gd` | `scripts/core/render_clock.gd` | 时间服务（autoload） |
+| `scripts/mesh_util.gd` | `scripts/core/mesh_util.gd` | 通用网格工具，被 world/actors 共用 |
+| `scripts/input_setup.gd` | `scripts/core/input_setup.gd` | 输入映射（S0.4 扩三套 binding） |
+| `scripts/camera_rig.gd` | `scripts/core/camera_rig.gd` | 相机控制（S1.2 扩多档缩放） |
+| `scripts/terrain.gd` | `scripts/world/terrain.gd` | 地形 |
+| `scripts/water.gd` | `scripts/world/water.gd` | 水体 |
+| `scripts/scatter.gd` | `scripts/world/scatter.gd` | 植被散布（S4.3 复用其 MultiMesh 范本） |
+| `scripts/clouds.gd` | `scripts/world/clouds.gd` | 云 |
+| `scripts/day_night.gd` | `scripts/world/day_night.gd` | 昼夜（S1.4 接日历系统） |
+| `scripts/player.gd` | `scripts/actors/player.gd` | 演示角色；S1.3 棋子/战斗角色同族 |
+| `scripts/ui_panel.gd` | `scripts/ui/ui_panel.gd` | 调试面板（S0.4 抽公共控件工厂） |
+| `scripts/ui_slider.gd` | `scripts/ui/ui_slider.gd` | 同上 |
+| `shaders/toon.gdshader` | `shaders/common/toon.gdshader` | 全局 toon 材质，地形/植被/角色共用 |
+| `shaders/outline.gdshader` | `shaders/common/outline.gdshader` | 逆壳描边，全场景通用 |
+| `shaders/water.gdshader` | `shaders/terrain/water.gdshader` | 仅水体使用 |
+| `scenes/main.tscn` | **不移动** | S0.1 恪守"主场景不变"；改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做 |
+
+> 约定增补：`shaders/common/` 为本次新增子目录（原 §3.2 只有 `terrain/ character/ fx/`）。
+> 理由：`toon.gdshader` / `outline.gdshader` 是全场景共用材质，放进 `fx/` 或 `character/` 都名不符实。
+> 已同步登记 §3.2 与 §16。
+
+迁移批次（**每批一个独立提交，每批都必须先跑校验再提交**）：
+
+| 批次 | 移动内容 | 同批必改项 | 校验 |
+|---|---|---|---|
+| **0** | —（不移动任何文件） | — | 采集"后 S0.6 时代"确定性基线：`--shots`（默认 6 机位）两次独立进程 sha256 必须相同，sha256 记入 `docs/ENGINEERING.md` |
+| **1** | `scripts/core/` 7 个脚本（含 3 个 autoload 与 `main.gd`） | `project.godot` 的 3 条 autoload 路径；`GUARD_WHITELIST` 中 `main.gd` / `capture.gd` 条目 | `s0_2_boot` + `s0_2_scene_api`（19 符号）+ `s0_2_guard` + `s0_6_clock` + `B-` 6 机位逐位一致 |
+| **2** | `scripts/world/` 5 个脚本 | `scenes/main.tscn` 的 `ext_resource` 路径；`GUARD_WHITELIST` 中 `terrain.gd` 条目 | 同上 + `B-` |
+| **3** | `scripts/actors/player.gd`、`scripts/ui/` 2 个脚本 | `scenes/main.tscn` 引用 | 同上 + `B-` |
+| **4** | `shaders/common/`（toon、outline）、`shaders/terrain/water.gdshader` | `scripts/core/style.gd` 与 `scripts/world/water.gd` 里的 `load()` 着色器路径 | 同上 + `B-` |
+| **5** | —（文档） | `docs/ENGINEERING.md`（目录职责 + 映射表 + 基线 sha256）、§15 台账、`docs/成果.md` | 全量 `verify.gd --all`（窗口 + headless） |
+
+回滚点：每批各自一个提交，出问题用 `git revert <该批提交>`；**禁止** `reset --hard` / `push --force`。
+
+⚠️ 执行陷阱（已在验证脚本侧确认）：
+
+1. **`.uid` 文件必须与其 `.gd` 同批、同目录移动**，否则 `res://` 引用解析失败或产生重复 UID。
+2. **`GUARD_WHITELIST` 按「精确路径 + 行号」登记** → 移动白名单内的文件时，必须在**同一提交**内更新条目，
+   否则 `s0_2_guard` 会立刻误报"未登记违例"。涉及：`main.gd`、`capture.gd`、`terrain.gd`。
+3. 全仓共 **25 处** `res://scripts|shaders|scenes` 引用需同步改写（`project.godot` 4 处、
+   `scenes/main.tscn` 的 `ext_resource`、脚本内 `load()/preload()`、`tools/` 内的加载路径）。
+4. `tools/verify.gd` 的 `_walk()` 已确认**递归**扫描 `GUARD_SCAN_DIRS`，脚本进子目录后守卫不会漏扫。
 
 **验收标准**
 - `A-` headless 启动主场景 60 帧无 `ERROR`/`SCRIPT ERROR` 日志（可复用 `s0_2_boot`）。
@@ -1270,7 +1322,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ⏳ 未开始 | — |
+| S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | 🚧 进行中 | 执行方案与目录映射表见 §5 S0.1（2026-10-16 对齐定稿） |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
 | S0.3 | 全局服务骨架 | S0.2 | ⏳ 未开始 | — |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
@@ -1374,6 +1426,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-16 | **S0.6 验收通过 → `✅ 已验收`**，验收证据记入提交 `457a7d2` + `953fd0d`；§3.4 的 `B-` 约定**收紧为逐位一致**（实测 0.0000%，比原定 `< 0.1%` 更严）；§5 S0.1 的 `B-` 前置条件解除，并补 `C-` 口径说明（基线被 vsync 封顶 60fps，只能拦"跌破上限"级劣化）；§5 S0.6 增补实测结论；§15 台账 S0.6 填证据、S0.1 依赖改为「前置 S0.6 已验收」；修正 §4 合计步数（M0 5→6，合计 53→54，v1.3 漏改） | 四项 `A-` 与 `C-` 全绿：两独立进程同参数截图 0 像素差异且 sha256 相同，`--yaw`/`--frames` 反向对照均正确触发（排除空图假通过与"动画被冻结"） | 用户（本会话批准执行 S0.6） |
 | 2026-10-16 | 规范守卫新增规则 **`unfreezable_time`**：着色器内建 `TIME`（`.gdshader`）与 GDScript `Time.get_ticks_msec/usec`（`.gd`）一律判违例；测量用墙钟（`capture.gd` 的 `_benchmark` 计时、`terrain.gd` 的 `gen_ms` 统计）按既有白名单机制逐条登记理由。`tools/verify.gd` 新增 `_exec_user()`：强制在游戏侧参数前插入 `--`，并以 `--quit-after` 兜底 | 防止后续步骤重新引入不可冻结时间源；另实测缺失 `--` 会让 `OS.get_cmdline_user_args()` 为空、`capture.gd` 收不到 `--shots` 便不 `quit()`，而 `OS.execute` 无超时 ⇒ 整个验收套件静默挂死（实测 10 分钟），现退化为"清单没写出"的显式失败 | 用户（本会话批准执行 S0.6） |
 | 2026-10-16 | **登记既有缺陷（本次未修）**：`tools/verify.gd` 的 `_case_baseline` 未把 `--out=` 透传给 `baseline.gd` 子进程 | 用 `--out=` 重定向报告目录时 `s0_2_baseline` 只得 3/7（找不到 baseline JSON）；默认目录下 15/15，故 S0.2 的既有验收结论不受影响。是否单独修复待用户决定 | 待用户决定 |
+| 2026-10-16 | **S0.1 执行方案登记**（§5 S0.1）：目录映射表（15 个脚本 + 3 个着色器逐项定去向）、6 批迁移顺序与独立提交/回滚点、4 条执行陷阱；`shaders/` 约定**增补子目录 `common/`**（§3.2 同步改写）；`scenes/main.tscn` 在 S0.1 **不移动**（改名留到 S1.2）；§15 台账 S0.1 置 `🚧 进行中` | 与本会话对齐后定稿：① 全部按 §3.2 九目录归类、不新增 scripts 子目录；② `toon`/`outline` 归入新增的 `shaders/common/`（放 `fx/` 或 `character/` 名不符实）；③ 主场景留到 S1.2 与 `main.gd` 拆分一起改名；④ 5 批迁移、每批独立提交并各自跑 A-/B- 校验 | 用户（本会话四选一，均取推荐项） |
 
 ---
 
