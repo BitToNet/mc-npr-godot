@@ -18,9 +18,9 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-Style="*res://scripts/style.gd"
-Capture="*res://scripts/capture.gd"
-Clock="*res://scripts/render_clock.gd"
+Style="*res://scripts/core/style.gd"
+Capture="*res://scripts/core/capture.gd"
+Clock="*res://scripts/core/render_clock.gd"
 
 [shader_globals]
 

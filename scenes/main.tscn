@@ -1,13 +1,13 @@
 [gd_scene load_steps=10 format=3]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/core/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/terrain.gd" id="2_terrain"]
 [ext_resource type="Script" path="res://scripts/water.gd" id="3_water"]
 [ext_resource type="Script" path="res://scripts/scatter.gd" id="4_scatter"]
 [ext_resource type="Script" path="res://scripts/clouds.gd" id="5_clouds"]
 [ext_resource type="Script" path="res://scripts/day_night.gd" id="6_daynight"]
 [ext_resource type="Script" path="res://scripts/player.gd" id="7_player"]
-[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="8_rig"]
+[ext_resource type="Script" path="res://scripts/core/camera_rig.gd" id="8_rig"]
 [ext_resource type="Script" path="res://scripts/ui_panel.gd" id="9_ui"]
 
 [node name="Main" type="Node3D"]

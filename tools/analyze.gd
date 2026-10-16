@@ -12,7 +12,7 @@ extends SceneTree
 func _load_style() -> Node:
 	var st: Node = root.get_node_or_null("Style")
 	if st == null:
-		var s = load("res://scripts/style.gd").new()
+		var s = load("res://scripts/core/style.gd").new()
 		s.name = "Style"
 		root.add_child(s)
 		st = s

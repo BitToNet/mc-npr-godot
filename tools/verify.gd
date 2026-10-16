@@ -100,7 +100,7 @@ const BARE_RAND_FUNCS := ["randf", "randi", "randf_range", "randi_range"]
 ## 每条必须写清理由；守卫报告会**显式列出**命中白名单的行，不静默放过。
 const GUARD_WHITELIST := [
 	{
-		"path": "res://scripts/main.gd",
+		"path": "res://scripts/core/main.gd",
 		"rule": "bare_randi",
 		"reason": "演示场景的『随机重生成』交互（main.gd:48 auto_new_seed_on_start、"
 				+ "main.gd:89 _on_regenerate 的 randi()）。属 §3.2 既有文件不重写范围，"
@@ -108,7 +108,7 @@ const GUARD_WHITELIST := [
 				+ "一律不得再引入裸 randi()，必须走 Rng 服务。",
 	},
 	{
-		"path": "res://scripts/capture.gd",
+		"path": "res://scripts/core/capture.gd",
 		"rule": "unfreezable_time",
 		"reason": "capture.gd 的 Time.get_ticks_usec() 只用于 _benchmark 的墙钟计时窗口"
 				+ "（性能探针本身就该量真实时间），不参与任何画面动画。"
