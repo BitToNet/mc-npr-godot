@@ -68,9 +68,9 @@ var _toon_materials: Array[ShaderMaterial] = []
 
 
 func _ready() -> void:
-	toon_shader = load("res://shaders/toon.gdshader")
-	outline_shader = load("res://shaders/outline.gdshader")
-	water_shader = load("res://shaders/water.gdshader")
+	toon_shader = load("res://shaders/common/toon.gdshader")
+	outline_shader = load("res://shaders/common/outline.gdshader")
+	water_shader = load("res://shaders/terrain/water.gdshader")
 	build_ramp(band_count)
 	InputSetup.ensure()
 
