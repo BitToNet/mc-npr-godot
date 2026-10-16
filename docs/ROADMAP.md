@@ -192,25 +192,48 @@ Main.rebuild(seed)                             # 世界重建入口
 | 内存 | 场景切换后回落到基线 ±5%；20 分钟游玩进程内存漂移 < 5% |
 | 生成/切场景 | 世界生成 < 800ms；进出战斗 < 1.2s |
 
-### 3.4 验收工具链（S0.2 建成后全程使用）
+### 3.4 验收工具链（S0.2 建于 2026-10-16，全程使用）
+
+以下命令均已**实机跑通**（S0.2 验收证据见 §15 台账）：
 
 ```powershell
-$GODOT = "G:\godot_project\_godotengine\Godot_v4.7-stable_win64_console.exe"
+$GODOT  = "G:\godot_project\_godotengine\Godot_v4.7-stable_win64_console.exe"
 $GODOTG = "G:\godot_project\_godotengine\Godot_v4.7-stable_win64.exe"
-$P = "G:\godot_project\mc-npr-godot"
+$P      = "G:\godot_project\mc-npr-godot"
 
-# A- / C- 类：headless 断言用例（退出码 0 = 全绿）
+# A- / C- 类：全部断言用例（headless；C- 类用例自动跳过并记原因）退出码 0 = 全绿
+& $GODOT --headless --path $P --script res://tools/verify.gd -- --all
+
+# A- / C- 类：含 C- 类性能用例时**必须去掉 --headless**（headless 无渲染指标）
+& $GODOT --path $P --script res://tools/verify.gd -- --all
+
+# 单用例  /  列出全部用例
 & $GODOT --headless --path $P --script res://tools/verify.gd -- --case=<case_id>
+& $GODOT --headless --path $P --script res://tools/verify.gd -- --list
 
-# C- 类：性能基线
-& $GODOT --path $P -- --bench --out=res://.verify/bench
+# C- 类：性能基线（四项指标 + 是否落盘；窗口模式）
+& $GODOT --path $P --script res://tools/baseline.gd -- --label=main
 
-# B- 类：视觉证据截图（既有工具，S0.2 扩展 --case=）
+# B- 类：视觉证据截图（必须显式给 --shots/--shot=/--capture 才会触发）
+& $GODOTG --path $P -- --shots --case=<batch> --warmup=60 --frames=15 --out=res://.shots
 & $GODOTG --path $P -- --shot=<name> --time=0.5 --mode=FOLLOW --size=36 --out=res://.shots
 
-# B- 类：图像比对（S0.2 新增）
-& $GODOT --headless --path $P --script res://tools/img_diff.gd -- --a=<png> --b=<png>
+# B- 类：图像比对（退出码 0=在容差内 / 1=超容差或尺寸不一致 / 2=用法错误）
+& $GODOT --headless --path $P --script res://tools/img_diff.gd -- --a=<png> --b=<png> [--tol=0.001]
 ```
+
+**取证约定**
+
+- 所有报告落 `res://.verify/`（已入 `.gitignore`）；截图与截图清单落 `res://.shots/`。
+- `capture.gd` 每批截图额外产出 `<out>/<case>.json` 清单（每张图的尺寸 + sha256 + 相机参数），
+  供 `B-` 证据链锚定。
+- ⚠️ **`--case=` / `--out=` 是 verify 与 capture 共用的参数名**。为免验收运行器顺带触发一次截图批次
+  （其 `quit(1)` 会覆盖运行器退出码），`capture.gd` 只在显式给出
+  `--shots` / `--shot=` / `--capture` / `--bench` 时才工作，`--case=` / `--out=` / `--frames=` / `--warmup=`
+  只作修饰符。
+- ⚠️ **`B-` 阈值目前不可用**：实测同参数、同构建的两次独立渲染差异为 **1.62%–5.67%**
+  （水波 `TIME`、云漂移 `Time.get_ticks_msec()`、植被风摆 `TIME` 都不可冻结），
+  远高于下文曾写的 `< 0.1%`。需先裁定 Q13 再据以修订各步 `B-` 门禁，**不得**直接沿用 0.1%。
 
 ---
 
@@ -246,32 +269,42 @@ $P = "G:\godot_project\mc-npr-godot"
 - 生成 `docs/ENGINEERING.md` 记录目录职责与迁移映射表（旧路径 → 新路径）。
 
 **验收标准**
-- `A-` headless 启动主场景 60 帧无 `ERROR`/`SCRIPT ERROR` 日志（verify 用例 `s0_1_boot`）。
-- `A-` 既有公开 API 仍可解析：`Terrain.height_at` / `Style.toon` / `Main.rebuild` 等 12 个符号逐一点名断言存在。
-- `B-` 同 seed 同参数截图与重组前基线一致（`img_diff` 差异像素比 < 0.1%）。
-- `C-` `--bench` FPS 相对重组前基线下降 ≤ 3%。
+- `A-` headless 启动主场景 60 帧无 `ERROR`/`SCRIPT ERROR` 日志（可复用 `s0_2_boot`）。
+- `A-` 既有公开 API 仍可解析：`Terrain.height_at` / `Style.toon` / `Main.rebuild` 等 19 个符号逐一点名断言存在（可复用 `s0_2_scene_api`）。
+- `B-` 同 seed 同参数截图与重组前基线一致。
+  > ⚠️ **门禁阈值待裁定（Q13）**：实测同构建两次独立渲染差异为 1.62%–5.67%，
+  > 原定「`img_diff` 差异像素比 < 0.1%」**当前不可能通过**。在 Q13 裁定前，本项不得判为通过。
+- `C-` `--bench` FPS 相对重组前基线下降 ≤ 3%（基线用 `tools/baseline.gd` 采集）。
 
-**依赖与风险**：无依赖。风险：`.uid` 文件与 `res://` 路径引用遗漏 → 靠 `A-`/`B-` 拦截。
+**依赖与风险**：无依赖。风险：`.uid` 文件与 `res://` 路径引用遗漏 → 靠 `A-`/`B-` 拦截；
+`B-` 阈值不可达（见上）。
 **状态**：⏳ 未开始
 
 ### S0.2 验收工具链 v1（verify 运行器 + 图像比对 + 性能基线）
 
 **计划描述**
-- `tools/verify.gd`（`extends SceneTree`，仿 `tools/diag.gd`）：`--case=<id>` 注册表、断言 API、JSON 报告落 `res://.verify/`、退出码 0/1、支持 `--all`。
-- `tools/img_diff.gd`：两图差异像素比（无外部依赖，纯 `Image` API）。
+- `tools/verify.gd`（`extends SceneTree`，仿 `tools/diag.gd`）：`--case=<id>` 注册表、断言 API、JSON 报告落 `res://.verify/`、退出码 0/1/2、支持 `--all` / `--list` / `--out=`。
+- `tools/img_diff.gd`：两图差异像素比（无外部依赖，纯 `Image` API + sha256 锚点）。
 - `tools/baseline.gd`：采集并落盘性能基线（FPS / ms/frame / 内存 / 三角面数 / 绘制调用）。
-- `capture.gd` 扩展：`--case=<name>` 命名规则、输出目录参数统一、批量案例表。
-- 规范守卫用例：静态扫描 `scenes/ scripts/ shaders/`，禁止 `BoxMesh`/`CSGBox3D`/白名单外 `StandardMaterial3D`/裸 `randf()`/裸 `randi()`。
-- `.gitignore` 增加 `.verify/`、`.shots/`。
+- `capture.gd` 扩展：`--shots --case=<name>` 命名批次、`--frames=` / `--warmup=`、截图清单 JSON、输出目录参数统一。
+- 规范守卫用例：静态扫描 `scenes/ scripts/ shaders/`，禁止 `BoxMesh`/`CSGBox3D`/白名单外 `StandardMaterial3D`/裸 `randf()`/裸 `randi()`；白名单命中项必须显式列出并附理由。
+- `.gitignore` 增加 `.verify/`（`.shots/` 原已有）。
 
 **验收标准**
 - `A-` 故意失败的断言能让用例退出码 = 1；正常用例 = 0；JSON 报告含每条断言与耗时。
 - `A-` `img_diff` 对同一文件输出 `0.0000%`；对人工改动后副本输出 > 0%。
-- `A-` 规范守卫用例能各自捕获 1 个人造违例（临时造一个 `BoxMesh` 用例，断言失败后删除）。
+- `A-` 规范守卫用例能各自捕获 1 个人造违例（5 类违例逐类造例，断言后删除）。
 - `C-` `baseline.gd` 输出含 FPS、ms/frame、内存、三角面数四项且方差 < 5%（连续 3 次采样）。
 
-**依赖与风险**：S0.1。风险：`SceneTree` 脚本无法访问 autoload → 用例改用「加载主场景 + await」模式，写在用例基类里。
-**状态**：⏳ 未开始
+**依赖与风险**：原定依赖 S0.1；经用户批准**前置执行**（见 §16）。
+风险已由探针落实并修正（原猜测有误）：
+
+- ~~「`SceneTree` 脚本无法访问 autoload」~~ → 实际是**编译期标识符不可解析**（`Identifier not found: Style`），
+  而 autoload **节点**确实挂在 root 上。⇒ 运行器内禁止书写 autoload 标识符，改用
+  `get_root().get_node("Style")`；全局 `class_name`（`MeshUtil`/`Terrain`）不受影响。
+- 「加载主场景 + await」模式**实测可行**，无需子进程 hack；`add_child` 后须 `await` 一帧再查节点组。
+- headless 下渲染指标恒为 0 ⇒ C- 类用例在 headless 下必须**跳过**而非判失败。
+**状态**：🧪 待验收
 
 ### S0.3 全局服务骨架（GameState / EventBus / SceneRouter / SaveSystem v1）
 
@@ -1174,6 +1207,7 @@ $P = "G:\godot_project\mc-npr-godot"
 | Q10 | 存档是否需要云同步 / 多存档位与自动存档？ | 影响 SaveSystem 设计（越早越省） | **S0.3 前** |
 | Q11 | 音频与音乐资产来源（本规划只留接口位）？ | 影响 S2.8 与 S6.1 的验收标准 | S2.8 前 |
 | Q12 | 是否允许为了手感把「横版」做成可微调纵深（2.5D → 2.7D）？ | 影响 S2.1 镜头与 S2.5 纵深闪避 | S2.1 前 |
+| Q13 | **`B-` 视觉门禁怎么定？** 实测同构建两次渲染差异 1.62%–5.67%（水波/云/风摆用 `TIME` 与 `Time.get_ticks_msec()`，不可冻结），原 0.1% 阈值不可达。三选一：(a) 用「同构建噪声底」做相对门禁（先测 N 次噪声底，要求改动差异 ≤ 噪声底 + 余量）；(b) 增加 `--static` 截图模式，屏蔽水/云/植被后要求逐位一致；(c) 立项把动画时钟改成可注入（`TIME` → `u_time` uniform），换取真正可复现渲染 | `B-` 是 S0.1 与后续每步美术回归的唯一自动化拦截手段；阈值不成立则所有 `B-` 项都无法判定 | **S0.1 前（阻塞）** |
 
 ---
 
@@ -1187,7 +1221,7 @@ $P = "G:\godot_project\mc-npr-godot"
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
 | S0.1 | 目录与工程结构重组 | — | ⏳ 未开始 | — |
-| S0.2 | 验收工具链 v1 | S0.1 | ⏳ 未开始 | — |
+| S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | 🧪 待验收 | `tools/verify.gd` `--all`（窗口）6/6 用例 87/87 断言通过、退出码 0；报告 `res://.verify/*.json`（gitignored）；用例见 `res://.verify/_all.json` |
 | S0.3 | 全局服务骨架 | S0.2 | ⏳ 未开始 | — |
 | S0.4 | 调试与观测层 | S0.3 | ⏳ 未开始 | — |
 | S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ⏳ 未开始 | — |
@@ -1280,6 +1314,10 @@ $P = "G:\godot_project\mc-npr-godot"
 |---|---|---|---|
 | 2026-10-16 | 创建本文 v1.0；确认 D1–D4；定稿 M0–M6 共 53 步与验收标准 | 用户提出玩法扩展规划需求，本次仅做规划 | 用户（待审阅） |
 | 2026-10-16 | v1.0 → v1.1：执行闭环由四步扩为五步，新增第 ⑤ 步「提交推送」；§15 台账「验收证据」列追加提交哈希要求；同步写入 `AGENTS.md`【二、版本控制与提交推送规范】 | 用户要求"每次阶段性修改验收通过后和单块功能完成后，做一次提交和推送，提交内容尽量详细" | 用户（本会话明确要求） |
+| 2026-10-16 | v1.1 → v1.2：**S0.2 前置到 S0.1 之前执行**；§15 台账 S0.2 依赖改为「—（原 S0.1，批准前置）」；§5 S0.2 风险条目按探针实测结论改写 | S0.1 的验收项本身引用 `verify` 用例与 `img_diff`（S0.2 交付物），存在依赖倒置；§3.4 亦称工具链「S0.2 建成后全程使用」。用户在本会话选择「先做 S0.2 验收工具链」 | 用户（本会话明确选择） |
+| 2026-10-16 | §3.4 验收工具链改为**实机跑通**的命令与取证约定；补充 `--case=`/`--out=` 在 verify 与 capture 间的归属规则（capture 仅在显式 `--shots`/`--shot=`/`--capture`/`--bench` 时工作） | 两工具共用同一 `OS.get_cmdline_user_args()` 命名空间，实测出现 verify 子进程被 capture 顺带触发、`quit(1)` 覆盖运行器退出码的缺陷 | 用户（本会话授权执行 S0.2） |
+| 2026-10-16 | 新增 **Q13**：`B-` 视觉门禁阈值裁定；§5 S0.1 的 `B-` 项加注「阈值待裁定，裁定前不得判通过」；S0.1 `A-` 项符号数按实际契约更正为 19 个，并标注可复用 `s0_2_boot` / `s0_2_scene_api` | 实测同参数、同构建的两次独立渲染差异为 **1.62%–5.67%**（`shaders/toon.gdshader` 与 `shaders/water.gdshader` 用 `TIME`，`scripts/clouds.gd` 直接读 `Time.get_ticks_msec()`），原定 `< 0.1%` 客观不可达；不改阈值会让 S0.1 被一个恒失败的门禁阻塞 | **待用户裁定（Q13）**，本次仅登记与加注，未修改阈值本身 |
+| 2026-10-16 | 附录 A 中 `scripts/capture.gd` 一行补注：触发条件由「任何取景参数」收紧为「显式截图标志」 | 同 §3.4 的缺陷修复，避免验收运行器被截图批次抢占退出码 | 用户（本会话授权执行 S0.2） |
 
 ---
 
@@ -1294,7 +1332,7 @@ $P = "G:\godot_project\mc-npr-godot"
 | `scripts/camera_rig.gd` | 保留（战略层可扩多档缩放）；Boss 战另建横版相机 | S1.2、S2.1 |
 | `scripts/input_setup.gd` | 扩展为「大地图 / 战斗 / 指挥」三套上下文 binding | S0.4、S2.2、S4.5 |
 | `scripts/style.gd` | 仅新增调色板项与少量材质参数，**不重构** | 全程 |
-| `scripts/capture.gd` | 扩展 `--case=` 与批量案例表 | S0.2 |
+| `scripts/capture.gd` | 扩展 `--case=` 批量案例表与截图清单 JSON；**触发条件收紧**：仅 `--shots`/`--shot=`/`--capture`/`--bench` 才启动截图批次，`--case=`/`--out=` 降为修饰符（避免与 verify 抢占退出码） | S0.2（已完成） |
 | `scripts/ui_panel.gd` | 保留为调试面板；新 UI 抽取公共控件工厂 | S0.4、S1.5 |
 | `scripts/scatter.gd` | 保留；其 MultiMesh 模式被 S4.3 复用为性能范本 | S4.3 |
 

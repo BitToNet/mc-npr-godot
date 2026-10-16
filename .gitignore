@@ -18,6 +18,9 @@ mono_crash.*.json
 # Capture output from the in-game screenshot tool (scripts/capture.gd)
 .shots/
 
+# verify.gd / baseline.gd / img_diff.gd 报告与临时产物（S0.2）
+.verify/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

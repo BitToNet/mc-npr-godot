@@ -3,9 +3,45 @@ extends Node
 ##
 ##   Godot --path . -- --shots
 ##   Godot --path . -- --shot=noon --time=0.5 --mode=follow --size=30
+##   Godot --path . -- --shots --case=s0_boot     # S0.2: named batch case table
+##   Godot --path . -- --shots --case=s0_boot --frames=24 --warmup=60
 ##
 ## Writes PNGs into res://.shots/ then quits, so the art direction can be
 ## reviewed as real rendered frames instead of guesses.
+##
+## S0.2 additions (all additive — the legacy `--shots` / `--shot=` behaviour and
+## the default 6-shot batch are byte-for-byte unchanged):
+##   * `--shots --case=<name>`  pick a named batch from CASES (unknown name = exit 1)
+##   * `--frames=<n>`   settle frames after applying a shot (default 10)
+##   * `--warmup=<n>`   warm-up frames before the first shot (default 40)
+##   * a machine-readable manifest `<out>/<case>.json` listing every PNG with
+##     size + sha256, so B- class evidence can be anchored and diffed later.
+##
+## ⚠️ Trigger flags vs modifiers: only `--shots` / `--shot=` / `--capture` /
+## `--bench` (plus the legacy look flags `--outline= --bands= --ink= --nodof
+## --nowater --noenv`) turn the capture batch on. `--case=` / `--out=` /
+## `--frames=` / `--warmup=` are modifiers only. They must NOT self-trigger,
+## because `tools/verify.gd` uses the same `--case=` / `--out=` names for the
+## acceptance runner; otherwise a verify subprocess would additionally launch a
+## screenshot batch whose `quit(1)` clobbers the runner's exit code.
+
+## Named batch table.  "default" must stay identical to the historic 6-shot run
+## so existing art-regression baselines keep comparing apples to apples.
+const CASES := {
+	"default": [
+		{"name": "01_dawn", "time": 0.275, "mode": "FOLLOW", "size": 40.0, "yaw": 45.0},
+		{"name": "02_noon", "time": 0.50, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
+		{"name": "03_dusk", "time": 0.735, "mode": "FOLLOW", "size": 38.0, "yaw": 52.0},
+		{"name": "04_night", "time": 0.92, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
+		{"name": "05_closeup", "time": 0.40, "mode": "FREE", "size": 16.0, "yaw": 35.0},
+		{"name": "06_wide", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0},
+	],
+	## S0.1 art-regression gate: the canonical "before/after reorg" viewpoint.
+	"s0_boot": [
+		{"name": "s0_boot_follow", "time": 0.50, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
+		{"name": "s0_boot_wide", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0},
+	],
+}
 
 var _enabled := false
 var _shots: Array = []
@@ -13,6 +49,10 @@ var _out_dir := "res://.shots"
 var _quit := true
 var _bench := false
 var _single := {}
+var _case_name := ""
+var _manifest_label := ""
+var _frames := 10
+var _warmup := 40
 
 
 func _ready() -> void:
@@ -20,7 +60,7 @@ func _ready() -> void:
 	var single := _single
 	var want := false
 	for a in args:
-		if a == "--shots":
+		if a == "--shots" or a == "--capture":
 			want = true
 		elif a.begins_with("--shot="):
 			want = true
@@ -55,47 +95,100 @@ func _ready() -> void:
 			want = true
 			single["nodof"] = true
 		elif a.begins_with("--out="):
-			want = true
+			# 仅作修饰符，不再单独触发截图批次：`--case=` / `--out=` 与
+			# tools/verify.gd 的验收运行器同名同源（都读 OS.get_cmdline_user_args），
+			# 若它们本身就能唤醒 Capture，跑验收用例时会连带触发一次截图批次，
+			# 并由 Capture 的 get_tree().quit(1) 覆盖掉运行器的退出码。
+			# ⇒ 想截图必须显式给出 --shots / --shot= / --capture / --bench。
 			_out_dir = a.split("=", true, 1)[1]
+		elif a.begins_with("--case="):
+			_case_name = a.split("=", true, 1)[1]
+		elif a.begins_with("--frames="):
+			_frames = a.split("=", true, 1)[1].to_int()
+		elif a.begins_with("--warmup="):
+			_warmup = a.split("=", true, 1)[1].to_int()
 		elif a == "--noquit":
 			_quit = false
 	if not want:
 		set_process(false)
 		return
+	if _case_name != "" and not CASES.has(_case_name):
+		# A silent fallback to the default batch would make a mistyped case name
+		# look like a successful run — fail loudly instead.
+		printerr("[capture] 未知 --case='", _case_name, "'；可用：",
+				", ".join(PackedStringArray(CASES.keys())))
+		get_tree().quit(1)
+		return
 	_enabled = true
-	_shots = [single] if not single.is_empty() else [
-		{"name": "01_dawn", "time": 0.275, "mode": "FOLLOW", "size": 40.0, "yaw": 45.0},
-		{"name": "02_noon", "time": 0.50, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
-		{"name": "03_dusk", "time": 0.735, "mode": "FOLLOW", "size": 38.0, "yaw": 52.0},
-		{"name": "04_night", "time": 0.92, "mode": "FOLLOW", "size": 36.0, "yaw": 45.0},
-		{"name": "05_closeup", "time": 0.40, "mode": "FREE", "size": 16.0, "yaw": 35.0},
-		{"name": "06_wide", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0},
-	]
+	if _case_name != "":
+		_shots = (CASES[_case_name] as Array).duplicate(true)
+		_manifest_label = _case_name
+	elif not single.is_empty():
+		_shots = [single]
+		_manifest_label = String(single.get("name", "single"))
+	else:
+		_shots = (CASES["default"] as Array).duplicate(true)
+		_manifest_label = "default"
 	call_deferred("_run")
 
 
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(_out_dir)
 	# let the world build + a few frames of wave/wind animation settle
-	for i in 40:
+	for i in _warmup:
 		await get_tree().process_frame
 	if _bench:
 		await _benchmark()
 		if _quit:
 			get_tree().quit()
 		return
+	var manifest: Array = []
 	for shot in _shots:
 		_apply(shot)
-		for i in 10:
+		for i in _frames:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
 		var img := get_viewport().get_texture().get_image()
 		var path := "%s/%s.png" % [_out_dir, String(shot.get("name", "shot"))]
 		var err := img.save_png(path)
 		print("[capture] ", path, " -> ", error_string(err))
+		if err == OK:
+			manifest.append({
+				"name": String(shot.get("name", "shot")),
+				"path": path,
+				"width": img.get_width(),
+				"height": img.get_height(),
+				"sha256": FileAccess.get_sha256(path),
+				"params": shot,
+			})
+	_write_manifest(manifest)
 	print("[capture] done")
 	if _quit:
 		get_tree().quit()
+
+
+## Machine-readable sidecar for B- class evidence: which PNGs, which camera
+## parameters, and a sha256 per image so a later diff can be anchored.
+func _write_manifest(manifest: Array) -> void:
+	var case_label := _manifest_label if _manifest_label != "" else "default"
+	var path := "%s/%s.json" % [_out_dir, case_label]
+	var payload := {
+		"kind": "capture_manifest",
+		"case": case_label,
+		"godot": Engine.get_version_info()["string"],
+		"started_at": Time.get_datetime_string_from_system(),
+		"out_dir": _out_dir,
+		"warmup_frames": _warmup,
+		"settle_frames": _frames,
+		"shots": manifest,
+	}
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		printerr("[capture] 无法写清单 ", path)
+		return
+	f.store_string(JSON.stringify(payload, "  ", false))
+	f.close()
+	print("[capture] manifest ", path, " (", manifest.size(), " shots)")
 
 
 ## Steady state performance probe: warms up, then reports averaged FPS for a
