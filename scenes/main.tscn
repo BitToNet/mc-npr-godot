@@ -6,9 +6,9 @@
 [ext_resource type="Script" path="res://scripts/world/scatter.gd" id="4_scatter"]
 [ext_resource type="Script" path="res://scripts/world/clouds.gd" id="5_clouds"]
 [ext_resource type="Script" path="res://scripts/world/day_night.gd" id="6_daynight"]
-[ext_resource type="Script" path="res://scripts/player.gd" id="7_player"]
+[ext_resource type="Script" path="res://scripts/actors/player.gd" id="7_player"]
 [ext_resource type="Script" path="res://scripts/core/camera_rig.gd" id="8_rig"]
-[ext_resource type="Script" path="res://scripts/ui_panel.gd" id="9_ui"]
+[ext_resource type="Script" path="res://scripts/ui/ui_panel.gd" id="9_ui"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
