@@ -30,6 +30,10 @@ GameState="*res://scripts/core/game_state.gd"
 ; last.  It has no `_ready`, subscribes to nothing and writes no file until a save
 ; is requested (ROADMAP §3.5 "不做自动存档"); `s0_3_no_autosave` asserts that.
 SaveSystem="*res://scripts/core/save_system.gd"
+; S0.3 batch 3 — the only node allowed to call `change_scene_to_file()` (the spec guard
+; rule `scene_change_owner` enforces that).  It has no `_ready` and no `_process`, so its
+; position in this list carries no ordering requirement.
+SceneRouter="*res://scripts/core/scene_router.gd"
 
 [shader_globals]
 

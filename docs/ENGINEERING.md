@@ -4,7 +4,7 @@
 > 与执行陷阱。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录。
 >
 > ⚠️ **本文件尚未完成**：按 `ROADMAP` §5 S0.5，本文件还需补齐**命名规范、信号约定、
-> 数据表格式、autoload 上限（当前 7 / 上限 10）、允许/禁止清单**；S0.5 另产出
+> 数据表格式、autoload 上限（当前 8 / 上限 10）、允许/禁止清单**；S0.5 另产出
 > `docs/ART_PIPELINE.md`（含「新建合规物件」6 步模板与 3 个反例 + 内嵌截图）。
 > 当前内容仅覆盖 S0.1 的交付范围。
 
@@ -14,12 +14,13 @@
 
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
-| `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做） |
-| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
+| `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换） |
+| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板）、`ui_slider.gd`（方形滑块） |
-| `scripts/battle/`、`scripts/legion/`、`scripts/data/`、`scripts/fx/` | **待建** | 分别在 M2 / M4 / M1 / M3 建目录 |
+| `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
+| `scripts/legion/`、`scripts/data/`、`scripts/fx/` | **待建** | 分别在 M4 / M1 / M3 建目录 |
 | `shaders/common/` | 全场景共用着色器 | `toon.gdshader`（3 阶阶梯硬光影）、`outline.gdshader`（逆壳描边） |
 | `shaders/terrain/` | 地形/水体专用 | `water.gdshader` |
 | `shaders/character/`、`shaders/fx/` | **待建** | 角色与特效着色器（M3 起） |
@@ -133,7 +134,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 **判定方式**：`--out=res://.shots/<任意>` 重采一次，与上表**逐机位 sha256 相等**即为通过
 （`B-` 自 S0.6 起按**逐位一致**判定，不再用百分比容差）。
 
-**复核结果（2026-10-16）**：批次 1 / 2 / 3 / 4 与最终回归，**每批 6/6 全等**。
+**复核结果（2026-10-16）**：S0.1 批次 1 / 2 / 3 / 4 与最终回归，以及 S0.3 批次 1 / 2 / 3，
+**每批 6/6 全等**。
 
 ---
 
@@ -150,6 +152,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 7 | **`JSON.parse_string()` 解析失败会打引擎级 `ERROR`** | 坏存档是**正常输入**（玩家能改、磁盘能坏、`s0_3_atomic` 的并发样本），却让 `--headless` 日志出现 `ERROR: Parse JSON failed...`，掩盖真正的错误 | 一律改用 `JSON.new()` + `parse()` 实例接口（返回 `Error`、不打日志），自己把原因写进返回值与信号 |
 | 8 | **`OS.create_process()` 的子进程不继承 stdout** | 子进程 `print()` 一行都不到父进程日志里（实测 `[probe] ...` 全部丢失），退出码之外无证据 | 子进程的结论必须**落成文件**（`_probe_loop_summary.json` / `_probe_read_snapshot.json`），父进程读文件断言 |
 | 9 | **子进程只认 `--` 之后的 `--out=`** | 父进程用 `--out=res://.verify/<批次>` 隔离报告，子进程仍写默认目录 ⇒ `s0_2_baseline` 整例失败（且假如目录里恰有旧报告，会变成**假通过**） | 任何产出报告的子进程都要显式透传 `--out=`，并在运行前删除旧报告 + 断言其不存在 |
+| 10 | **`change_scene_to_file()` 是"帧末生效"，不是"立即换场景"** | 调用返回 `err=0` 后，`SceneTree.current_scene` 在**第 1 帧仍是旧场景**（`--script` 实测为 `null`），**第 2 帧**才是新场景；旧场景及其节点组也不会当帧释放。若调用后立刻查场景状态，会把"已提交的意图"当成"已发生的事实" | 三处一起做：① 断言必须"等到目标场景真的成为 `current_scene` 再多等 2 帧"（`_await_route()`，绝不固定 `await N` 帧）；② 路由器用 `_expected_path` 标记"在飞行中"，此时拒绝第二次切换（否则引擎只保留最后一次请求，栈与屏幕会不一致）；③ 但 `current_route()` 仍如实返回**已提交的意图**，不因旧场景还在就撒谎 |
+| 11 | **`SceneTree` 子类里没有 `get_tree()`** | `tools/verify.gd` 继承 `SceneTree`，写 `get_tree().current_scene` / `get_tree().get_node_count()` 直接**解析期报错**（`Function "get_tree()" not found in base self`），整个套件无法加载 | 直接用 `self` 上的成员与方法：`current_scene` / `get_node_count()` / `get_first_node_in_group()`。同一原因，autoload 标识符在 `--script` 里也不参与编译，必须 `get_root().get_node_or_null("Name")` |
+| 12 | **节点自动名含全局计数器，不可作为结构指纹** | 同一场景加载两次，未命名节点拿到的是 `@MeshInstance3D@28` 与 `@MeshInstance3D@64`（计数器随进程增长），直接把 `name` 拿去哈希会得出"两次不一样"的错误结论 | 归一化：名字以 `@` 开头时改用 `get_class()`，再按子节点顺序逐条记录 `名字或类:类:子节点数`。归一后 92 条指纹跨次加载**逐位一致**（`fe520385…`）。`s0_3_router` 用它把"回到世界节点数 ±0"升级成"结构逐条相同" |
 
 ---
 
@@ -204,3 +209,29 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > 170 样本 → 17 + 22 次；193 样本 → 28 + 25 次）。结论不是加回滚备份，
 > 而是**读者有界重试**——实测把并发读的失败数从 42 压到 **0**，且**从头到尾没有一次半截内容**
 > （两轮 131 / 140 个可读样本全部是完整合法 JSON）。
+
+### 6.4 S0.3 批次 3 验收时点（autoload 7 → 8；新增路由与占位战斗场景）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **14 用例 / 失败 0 / 跳过 0 / 460 断言全通过** / 退出码 0（50.0s） |
+| headless `tools/verify.gd --all` | 14 用例 / 失败 0 / 跳过 2（`s0_2_baseline`、`s0_6_repro` 需 GPU）/ 退出码 0（13.9s） |
+| 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 **0 条** `ERROR` / `WARNING` / `SCRIPT ERROR` |
+| 新增用例 `s0_3_router` | **70/70**：路由表与 API 契约（8 个公开符号）/ 切换落地前的同帧语义 / `world`→`battle`→`world` 后**节点数 ±0（101 → 101）** / 世界子树**结构指纹逐条一致（92 条，`fe520385…`）** / **seed 派生值一致**（`spawn_point` + `height_at` 两次采样 + `Scatter.stats` 树石数）/ 三类越界的显式拒绝（理由各自指名）/ `route_changed` 恰好 4 次且被拒调用一次不播报 / 占位场景合规（正交相机、242 三角面、`Style.toon()` 且 `next_pass` 非空）/ "场景被外部释放后路由归空" |
+| `s0_3_state` | 由 74 → **76/76**：autoload 契约 7 → 8，新增 `SceneRouter` 存在性与"无 `_ready`/`_process`，与其它服务无顺序依赖"的说明性断言 |
+| `s0_2_guard` | 由 16 → **19/19**：新增第 8 类违例规则 `scene_change_owner`（唯一属主 `res://scripts/core/scene_router.gd`），带正负对照（路由器路径 0 命中、`res://scripts/world/terrain.gd` 内同一句恰好 1 命中） |
+| `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**（新增 autoload 与占位场景对 `main.tscn` 渲染零影响），manifest `det=True hz=60.0 t=2.5 frame=150` |
+| 占位场景目视复核 | `.shots/s0_3_stub/battle_stub.png`（1600×900，sha256 `79b0610b…`）：正交视角下的面着色沙面 + 岩色底座 + 逆壳描边 + 一行 Label，无立方体、无体素。**临时截图脚本未入库**（M2 真战斗场景会带正式机位），故这只算一次性目检 |
+| `C-` 性能（3 次采样极差） | FPS **0.083%** / ms-per-frame **0.084%** / 静态内存 **0.416%** / 三角面 **0.000%** / 绘制调用 **0.000%**（全部 < 5%）；`fps_mean 59.97–60.02` / `ms_per_frame 16.662–16.676` / `primitives 219978` / `draw_calls 96` / `memory_static 91.25–91.63 MB` / `objects 1778–1782` |
+| autoload 数量 | **8** / 上限 10（`Style` `Capture` `Clock` `Rng` `EventBus` `GameState` `SaveSystem` `SceneRouter`） |
+
+> `primitives 219978` 与 `draw_calls 96` 自 §6.1 起四次验收完全不变，是"新增服务与占位场景都不在
+> `main.tscn` 的渲染路径上"的第三种独立证据（前两种是 `B-` 6 机位 sha256 全等、`s0_3_router` 的
+> 结构与 seed 一致性）。`memory_static` 91.15~92.02 → 91.25~91.63 MB、`objects 1776~1779` →
+> 1778~1782，增量即 `SceneRouter` 节点与其脚本。
+>
+> **本批最值得记住的设计结论**：浅栈 + **显式越界失败**比"能回退到任意深度"更适合当前规模。
+> 只有两个路由时，栈深上限（2）本身就隐含了"不能再进"，故把深度检查放在来源检查**之前**，
+> 让拒绝理由说"栈已满"而不是"来源不对"——否则深度上限这条规则永远不可观测、等于没写。
+> 同理，"回到世界是不是同一片世界"若不查结构与 seed，只查节点总数，那么"重建出一片同规模的
+> 另一片地形"也会通过——**弱断言会让错误的实现在验收里活下来**。

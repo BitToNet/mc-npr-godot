@@ -1,0 +1,37 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/battle/battle_stub.gd" id="1_stub"]
+
+[node name="BattleStub" type="Node3D"]
+script = ExtResource("1_stub")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707, 0.404, -0.579, 0, 0.82, 0.573, 0.707, -0.405, 0.579, 0, 30, 0)
+shadow_enabled = true
+directional_shadow_mode = 0
+directional_shadow_max_distance = 60.0
+
+[node name="Plinth" type="MeshInstance3D" parent="."]
+
+[node name="Arena" type="MeshInstance3D" parent="."]
+
+[node name="Camera" type="Camera3D" parent="."]
+projection = 1
+current = true
+size = 22.0
+near = 0.05
+far = 200.0
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Notice" type="Label" parent="UI"]
+offset_left = 0.0
+offset_top = 24.0
+offset_right = 1152.0
+offset_bottom = 56.0
+theme_override_colors/font_color = Color(0.0745098, 0.0627451, 0.105882, 1)
+theme_override_font_sizes/font_size = 20
+text = "战斗占位场景（S0.3 批次 3 路由靶子）— M2 用真战斗场景替换"
+horizontal_alignment = 1

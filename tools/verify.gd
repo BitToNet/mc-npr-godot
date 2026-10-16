@@ -51,7 +51,7 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s0_2_guard": {
-		"desc": "规范守卫：7 类违例各自可捕获 + 既有代码无未登记违例",
+		"desc": "规范守卫：8 类违例各自可捕获 + 既有代码无未登记违例",
 		"kind": "pure",
 	},
 	"s0_2_boot": {
@@ -85,7 +85,7 @@ const CASES := {
 		"kind": "headed",
 	},
 	"s0_3_state": {
-		"desc": "全局服务契约：autoload 3→7 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
+		"desc": "全局服务契约：autoload 3→8 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
 		"kind": "pure",
 	},
 	"s0_3_roundtrip": {
@@ -102,6 +102,10 @@ const CASES := {
 	},
 	"s0_3_no_autosave": {
 		"desc": "无自动存档：启动 + 世界重建 + 五种全局事实后，user://saves 全部文件哈希与 mtime 零变化（且该检查确实能检出显式存档）",
+		"kind": "pure",
+	},
+	"s0_3_router": {
+		"desc": "场景路由：world→battle→world 后世界节点数 ±0 且结构指纹逐条一致；栈深上限与越界显式拒绝；场景被外部换掉后路由栈不再撒谎",
 		"kind": "pure",
 	},
 	"s0_3_probe_write": {
@@ -169,6 +173,16 @@ const GUARD_WHITELIST := [
 ## 测量用墙钟（性能探针、生成耗时统计）是正当用法，走上面的白名单登记。
 const UNFREEZABLE_SHADER_TOKEN := "TIME"
 const UNFREEZABLE_SCRIPT_TOKENS := ["Time.get_ticks_msec", "Time.get_ticks_usec"]
+
+## S0.3 批次 3：场景切换的所有权。`change_scene_to_file()` 会把当前场景从所有系统
+## 脚下抽走，是全局副作用；§3.2 约定「只有 `SceneRouter` 能切场景」，否则
+## 「屏幕为什么变了」将无法定位。这条规则是本仓库第一条**按文件路径**放行的规则：
+## 命中者只要不是下面登记的属主文件就是违例。
+const SCENE_CHANGE_TOKENS := [
+	"change_scene_to_file", "change_scene_to_packed",
+	"reload_current_scene", "unload_current_scene",
+]
+const SCENE_CHANGE_OWNERS := ["res://scripts/core/scene_router.gd"]
 
 ## -----------------------------------------------------------------------------
 ##  S0.3 批次 2（SaveSystem）常量
@@ -428,6 +442,8 @@ func _dispatch(id: String) -> void:
 			await _case_atomic()
 		"s0_3_no_autosave":
 			await _case_no_autosave()
+		"s0_3_router":
+			await _case_router()
 		"s0_3_probe_write":
 			await _case_probe_write()
 		"s0_3_probe_read":
@@ -665,6 +681,11 @@ func _case_guard() -> void:
 			"rule": "unfreezable_time", "ext": "gdshader",
 			"text": "float t = TIME * wind_speed;\n",
 		},
+		# S0.3 批次 3：人造违例落在 res://scripts/_verify_tmp/，不是登记属主 ⇒ 必被抓住
+		"scene_change_owner": {
+			"ext": "gd",
+			"text": "get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n",
+		},
 	}
 	for label in probes.keys():
 		var p: Dictionary = probes[label]
@@ -699,6 +720,13 @@ func _case_guard() -> void:
 			"着色器注释里提到 TIME 不误报")
 	ok(_scan_text("res://x.gd", "# 以前用 Time.get_ticks_msec()，现在用 Clock.t\n").is_empty(),
 			"脚本注释里提到墙钟不误报")
+	# S0.3 批次 3：属主文件里的切场景调用是**允许**的，规则按路径放行而非按 token 全禁
+	ok(_scan_text("res://scripts/core/scene_router.gd",
+			"get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n").is_empty(),
+			"SceneRouter 自身切场景不误报")
+	ok(_scan_text("res://scripts/world/terrain.gd",
+			"get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n").size() == 1,
+			"非属主文件切场景恰好报 1 条（不多不少）")
 
 	section("既有代码基线")
 	var real := _guard_walk()
@@ -1068,13 +1096,15 @@ func _case_state() -> void:
 	var bus := get_root().get_node_or_null("EventBus")
 	var gs := get_root().get_node_or_null("GameState")
 	var ss := get_root().get_node_or_null("SaveSystem")
+	var sr := get_root().get_node_or_null("SceneRouter")
 
-	section("四个服务节点存在，且注册顺序满足依赖（Rng 先于 GameState，SaveSystem 在其后）")
+	section("五个服务节点存在，且注册顺序满足依赖（Rng 先于 GameState，SaveSystem 在其后）")
 	ok(rng != null, "autoload Rng 节点存在于 root")
 	ok(bus != null, "autoload EventBus 节点存在于 root")
 	ok(gs != null, "autoload GameState 节点存在于 root")
 	ok(ss != null, "autoload SaveSystem 节点存在于 root")
-	if rng == null or bus == null or gs == null or ss == null:
+	ok(sr != null, "autoload SceneRouter 节点存在于 root")
+	if rng == null or bus == null or gs == null or ss == null or sr == null:
 		return
 
 	var order: Array = []
@@ -1084,13 +1114,17 @@ func _case_state() -> void:
 	var i_bus := order.find("EventBus")
 	var i_gs := order.find("GameState")
 	var i_ss := order.find("SaveSystem")
-	ok(i_rng >= 0 and i_bus >= 0 and i_gs >= 0 and i_ss >= 0, "四个服务都在 root 子节点中",
-			"root 子节点=%s" % [str(order)])
+	var i_sr := order.find("SceneRouter")
+	ok(i_rng >= 0 and i_bus >= 0 and i_gs >= 0 and i_ss >= 0 and i_sr >= 0,
+			"五个服务都在 root 子节点中", "root 子节点=%s" % [str(order)])
 	ok(i_rng < i_gs, "Rng 注册在 GameState 之前（GameState._ready() 要调用 Rng.seed_from）",
 			"Rng@%d GameState@%d" % [i_rng, i_gs])
 	ok(i_bus < i_gs or i_bus != i_gs, "EventBus 与 GameState 顺序无强依赖，只要求都存在")
 	ok(i_ss > i_gs, "SaveSystem 注册在 GameState 之后（它读写 GameState.snapshot()）",
 			"GameState@%d SaveSystem@%d" % [i_gs, i_ss])
+	ok(i_sr != i_ss and i_sr != i_gs,
+			"SceneRouter 无 `_ready`/`_process`，与其它服务无顺序依赖，只要求存在",
+			"SceneRouter@%d" % i_sr)
 
 	section("autoload 清单与计数（§3.2 上限 10）")
 	var autoloads: Array = []
@@ -1099,8 +1133,9 @@ func _case_state() -> void:
 		if nm.begins_with("autoload/"):
 			autoloads.append(nm.substr("autoload/".length()))
 	autoloads.sort()
-	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "SaveSystem", "Style"]
-	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 7 个（批次 2 后 3 → 7）")
+	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "SaveSystem",
+			"SceneRouter", "Style"]
+	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 8 个（批次 3 后 3 → 8）")
 	ok(autoloads.size() <= 10, "autoload 数量 %d ≤ 10（§3.2 上限）" % autoloads.size())
 
 	section("GameState 字段契约：SNAPSHOT_FIELDS == snapshot() 的键集")
@@ -1758,6 +1793,246 @@ func _case_no_autosave() -> void:
 	_restore_defaults()
 
 
+## --- s0_3_router --------------------------------------------------------------
+## 场景路由验收：world → battle → world 后世界回到同一个形状。
+##
+## 证据强度分三层，从弱到强：
+##   1. `SceneTree.get_node_count()` 逐次相等 —— ROADMAP §5 S0.3 的字面验收；
+##   2. 世界子树的**结构指纹**（去自动命名后的 类+子节点数 逐条序列）逐条一致 ——
+##      比总数强：总数相同但节点换了位置/换了类也抓得住；
+##   3. `Terrain.spawn_point` 与 `Scatter.stats` 这类**由 seed 派生**的值一致 ——
+##      证明回来的是同一片地形，不是恰好同规模的另一片。
+## 预设陷阱 3「change_scene_to_file 后旧场景不是当帧释放」在此正面回答：所有断言都在
+## **等到目标场景真的成为 current_scene 之后再数两帧**，绝不靠固定延时。
+func _case_router() -> void:
+	await process_frame
+	var router := get_root().get_node_or_null("SceneRouter")
+	ok(router != null, "autoload SceneRouter 节点存在于 root")
+	if router == null:
+		return
+
+	section("路由表与 API 契约")
+	var names: Array = []
+	for n in router.call("route_names"):
+		names.append(String(n))
+	names.sort()
+	eq(names, ["battle", "world"], "登记的路由恰好是 world / battle 两个")
+	eq(String(router.call("scene_path_for", "world")), "res://scenes/main.tscn", "world → main.tscn")
+	eq(String(router.call("scene_path_for", "battle")), "res://scenes/battle/battle_stub.tscn",
+			"battle → battle_stub.tscn")
+	eq(String(router.call("scene_path_for", "nowhere")), "", "未登记路由返回空路径")
+	for sym in ["goto_world", "goto_battle", "return_to_world", "current_route",
+			"route_stack", "route_depth", "route_names", "is_transitioning"]:
+		ok(_has_callable(router, sym), "SceneRouter.%s" % sym)
+
+	section("起点归一化：无论上一个用例留下什么，都先站到 world 上")
+	if String(router.call("current_route")) != "world":
+		ok(bool(router.call("goto_world")), "goto_world() 建立根路由", String(router.get("last_error")))
+	var ok_start := await _await_route("world")
+	ok(ok_start, "世界场景已就位（等待 current_scene 落地，不靠固定延时）")
+	eq(String(router.call("current_route")), "world", "current_route() == world")
+	eq(int(router.call("route_depth")), 1, "栈深 = 1")
+	eq(_router_stack(router), ["world"], "route_stack() 自底向上 = [world]")
+
+	section("信号接上：只播自己的路由事实，不冒充游戏事实")
+	var seen: Array = []
+	router.connect("route_changed", func(from: String, to: String) -> void:
+		seen.append("%s->%s" % [from, to]))
+	var bus := get_root().get_node_or_null("EventBus")
+	var facts: Array = []
+	if bus != null:
+		for sig in ["encounter_started", "battle_finished"]:
+			bus.connect(sig, func(_a: Dictionary) -> void:
+				facts.append(sig))
+
+	section("世界基线：节点数 + 结构指纹 + seed 派生值")
+	var base_nodes := get_node_count()
+	var base_fp := _world_fingerprint()
+	var base_seed := _world_seed_signature()
+	ok(base_nodes > 20, "世界节点数 = %d（不是空场景，断言有内容可测）" % base_nodes)
+	ok(base_fp != "", "结构指纹非空（%d 条）" % base_fp.split("|").size())
+	print("    [note] 世界基线：节点 %d，指纹 %s，%s" % [
+		base_nodes, base_fp.sha256_text().substr(0, 16), base_seed])
+	print("    [note] 世界 seed 仍由 main.tscn 的 @export 决定，与 GameState.world_seed "
+			+ "的接线属 ROADMAP S1.2；当前两者同值，故本用例不区分二者")
+
+	section("进入战斗：world → battle（含切换落地前的同帧语义）")
+	ok(bool(router.call("goto_battle", {"reason": "s0_3_router"})), "goto_battle() 被接受",
+			String(router.get("last_error")))
+	# 陷阱 3：change_scene_to_file 只是登记请求，旧场景当帧还在树上。此刻再切一次必须被
+	# 拦下，否则第二次请求会覆盖第一次，"路由栈"与最终屏幕将不一致。
+	eq(String(router.call("current_route")), "battle",
+			"落地前 current_route() 已如实反映『已提交的意图』（不因旧场景还在就撒谎）")
+	ok(not bool(router.call("return_to_world", {"result": "early"})),
+			"同一次切换落地前再调用 return_to_world() 被拒（并发切换保护）")
+	contains(String(router.get("last_error")), "尚未落地", "拒绝理由点名『上一次切换尚未落地』")
+	ok(await _await_route("battle"), "battle_stub 已成为 current_scene")
+	eq(String(router.call("current_route")), "battle", "current_route() == battle")
+	eq(int(router.call("route_depth")), 2, "栈深 = 2（上限）")
+	eq(_router_stack(router), ["world", "battle"], "route_stack() = [world, battle]")
+	var stub := get_first_node_in_group("battle_stub")
+	ok(stub != null, "战斗占位场景已注册节点组 #battle_stub")
+	ok(get_first_node_in_group("main") == null, "旧世界场景已不在树上（不是叠加渲染）")
+	eq(get_nodes_in_group("terrain").size(), 0, "旧地形节点组已清空（change_scene 真的换掉了场景）")
+	if stub != null:
+		var arena: MeshInstance3D = stub.get_node_or_null("Arena")
+		ok(arena != null, "占位场景含 Arena 网格节点")
+		var cam: Camera3D = stub.get_node_or_null("Camera")
+		ok(cam != null and cam.projection == Camera3D.PROJECTION_ORTHOGONAL,
+				"占位场景用正交镜头（AGENTS.md 一.5）")
+		if arena != null and arena.mesh != null:
+			var faces: int = arena.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3
+			ok(faces > 100, "竞技场是面着色网格（%d 个三角面）" % faces)
+			var mat := arena.material_override as ShaderMaterial
+			ok(mat != null and mat.next_pass != null,
+					"竞技场走 Style.toon() 且挂了逆壳描边 pass（next_pass 非空）")
+
+	section("栈深与越界：拒绝必须显式，且不动当前场景")
+	ok(not bool(router.call("goto_battle")), "战斗中再次 goto_battle() 被拒")
+	contains(String(router.get("last_error")), "上限", "拒绝理由点名栈深上限")
+	ok(not bool(router.call("goto_world")),
+			"goto_world() 在战斗中不被当成『返回』（返回要走 return_to_world()）")
+	contains(String(router.get("last_error")), "return_to_world", "拒绝理由指向 return_to_world()")
+	eq(String(router.call("current_route")), "battle", "被拒后仍在 battle（拒绝不改状态）")
+
+	section("返回世界：battle → world，世界回到同一个形状")
+	ok(await _await_route_settled(), "等上一次切换彻底落地")
+	ok(bool(router.call("return_to_world", {"result": "win", "turns": 3})), "return_to_world() 被接受",
+			String(router.get("last_error")))
+	ok(await _await_route("world"), "main.tscn 重新成为 current_scene")
+	eq(String(router.call("current_route")), "world", "current_route() 回到 world")
+	eq(int(router.call("route_depth")), 1, "栈深回到 1（battle 条目已弹出）")
+	var payload: Dictionary = router.call("current_payload")
+	var result: Dictionary = payload.get("battle_result", {})
+	eq(String(result.get("result", "")), "win", "世界条目收下了战斗结算结果（上下文传递不是空谈）")
+	eq(int(result.get("turns", 0)), 3, "结算结果逐字段原样带回")
+	eq(get_nodes_in_group("main").size(), 1, "世界里只有一个 #main 实例（没有泄漏的旧场景）")
+	eq(get_nodes_in_group("terrain").size(), 1, "地形节点组恢复为 1")
+	var after_nodes := get_node_count()
+	eq(after_nodes, base_nodes, "★ 节点数 ±0：%d → %d" % [base_nodes, after_nodes])
+	eq(_world_fingerprint(), base_fp, "★ 结构指纹逐条一致（%d 条）" % base_fp.split("|").size())
+	eq(_world_seed_signature(), base_seed, "★ seed 派生值一致（同一片地形）")
+
+	section("非战斗状态下 return_to_world 被拒")
+	ok(not bool(router.call("return_to_world")), "在世界里调 return_to_world() 被拒")
+	contains(String(router.get("last_error")), "不在战斗场景", "拒绝理由说明当前不在战斗")
+
+	section("信号账本：route_changed 逐次如实，游戏事实信号一次都没被冒发")
+	eq(seen, ["world->battle", "battle->world"], "route_changed 恰好两次且顺序正确")
+	eq(facts, [], "SceneRouter 没有冒发 encounter_started / battle_finished（留给 M1/M2）")
+
+	section("并发保护：同一帧内连续两次切换，第二次必须被拒")
+	var first := bool(router.call("goto_battle", {"reason": "race"}))
+	var second := bool(router.call("goto_battle", {"reason": "race"}))
+	ok(first and not second, "第一次接受、第二次拒绝（引擎只保留最后一次请求，故必须挡住）")
+	var third := bool(router.call("return_to_world", {}))
+	ok(not third, "切换在飞行中时 return_to_world() 也被拦下")
+	ok(await _await_route("battle"), "战斗场景如实落地")
+	ok(await _await_route_settled(), "等待切换彻底沉淀")
+	ok(bool(router.call("return_to_world", {})), "沉淀后 return_to_world() 恢复正常")
+	ok(await _await_route("world"), "回到世界")
+	eq(seen, ["world->battle", "battle->world", "world->battle", "battle->world"],
+			"两次往返共 4 次播报，被拒的调用一次都没播报")
+
+	section("静态契约：路由表本体只有一个切场景入口，且本文件是唯一属主")
+	var src := FileAccess.get_file_as_string("res://scripts/core/scene_router.gd")
+	var code_only := ""
+	for raw in src.split("\n"):
+		code_only += _strip_comment(String(raw), "gd") + "\n"
+	eq(code_only.count("change_scene_to_file("), 1, "切场景调用只有 1 处（唯一入口 _switch_to）")
+	ok(not code_only.contains("func _process"), "SceneRouter 没有 _process（批次 4 的暂停不会卡住路由）")
+	ok(not code_only.contains("func _ready"), "SceneRouter 没有 _ready（启动零动作）")
+	ok(not code_only.contains("EventBus"), "SceneRouter 的代码不引用全局总线（不冒发游戏事实）")
+
+	section("栈不撒谎：场景被外部释放后，current_route() 归空而不是沿用旧信念")
+	var live: Node = current_scene
+	ok(live != null, "世界场景仍在树上")
+	live.queue_free()
+	await process_frame
+	await process_frame
+	eq(String(router.call("current_route")), "", "场景消失后 current_route() 归空")
+	eq(int(router.call("route_depth")), 0, "栈已清空")
+	_restore_defaults()
+
+
+## 等目标路由真的成为 current_scene（有界循环，不靠固定延时），再多等两帧让 `_ready`
+## 里的世界生成彻底落定。陷阱 3 说 `change_scene_to_file` 后旧场景不是当帧释放——所以
+## 取证时刻只能由"目标场景已就位"来定义。
+func _await_route(route: String, max_frames := 120) -> bool:
+	var router := get_root().get_node_or_null("SceneRouter")
+	if router == null:
+		return false
+	var want := String(router.call("scene_path_for", route))
+	for i in max_frames:
+		await process_frame
+		var cs: Node = current_scene
+		if cs != null and cs.scene_file_path == want:
+			await process_frame
+			await process_frame
+			# 路由器只在 public 调用里做对账；这里读一次让它清掉"在飞行中"标记，后续
+			# 断言看到的状态才是沉淀后的状态。
+			router.call("is_transitioning")
+			return true
+	return false
+
+
+## 等 SceneRouter 的"切换在飞行中"标记清掉（它只在 current_scene 追上来时才清除）。
+func _await_route_settled(max_frames := 120) -> bool:
+	var router := get_root().get_node_or_null("SceneRouter")
+	if router == null:
+		return false
+	for i in max_frames:
+		await process_frame
+		if not bool(router.call("is_transitioning")):
+			return true
+	return false
+
+
+func _router_stack(router: Node) -> Array:
+	var out: Array = []
+	for e in router.call("route_stack"):
+		out.append(String(e))
+	return out
+
+
+## 世界结构指纹：去自动命名（`@MeshInstance3D@28` 里带全局计数器，两次加载必然不同）后
+## 逐条记录「名字或类 : 类 : 子节点数」。比节点总数强：总数相同但结构换了也抓得住。
+func _world_fingerprint() -> String:
+	var ctx := {"parts": PackedStringArray()}
+	_walk_fingerprint(get_first_node_in_group("main"), ctx)
+	return "|".join(ctx["parts"])
+
+
+func _walk_fingerprint(n: Node, ctx: Dictionary) -> void:
+	if n == null:
+		return
+	var label := String(n.name)
+	if label.begins_with("@"):
+		label = n.get_class()
+	ctx["parts"].append("%s:%s:%d" % [label, n.get_class(), n.get_child_count()])
+	for c in n.get_children():
+		_walk_fingerprint(c, ctx)
+
+
+## seed 派生值：只有同一个 seed 才会得到同一片地形，光看节点数区分不了。
+func _world_seed_signature() -> String:
+	var out := PackedStringArray()
+	var terrain := get_first_node_in_group("terrain")
+	var main := get_first_node_in_group("main")
+	if terrain != null:
+		out.append("spawn=%s" % [terrain.get("spawn_point")])
+		out.append("h00=%.6f h55=%.6f" % [
+			float(terrain.call("height_at", 0.0, 0.0)),
+			float(terrain.call("height_at", 5.0, -5.0)),
+		])
+	if main != null:
+		var scatter := main.get_node_or_null("Scatter")
+		if scatter != null:
+			var st: Dictionary = scatter.get("stats")
+			out.append("trees=%s rocks=%s" % [st.get("trees"), st.get("rocks")])
+	return " ".join(out)
+
+
 ## --- 打桩用例（hidden）-------------------------------------------------------
 ## 这三个用例不写报告、不走断言汇总：输出与退出码就是父用例的证据通道。
 ## `--all` 永远不会直接跑到它们（hidden），只由上面的用例以子进程拉起。
@@ -2225,6 +2500,11 @@ func _scan_text(path: String, text: String) -> Array:
 			for tok in UNFREEZABLE_SCRIPT_TOKENS:
 				if _contains_token(line, tok):
 					hits.append(_hit(path, i + 1, "unfreezable_time", raw))
+		# S0.3 批次 3：只有 SceneRouter 可以切场景（按属主文件放行）
+		if ext == "gd" and not SCENE_CHANGE_OWNERS.has(path):
+			for tok in SCENE_CHANGE_TOKENS:
+				if _contains_token(line, tok):
+					hits.append(_hit(path, i + 1, "scene_change_owner", raw))
 	return hits
 
 
