@@ -51,7 +51,7 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s0_2_guard": {
-		"desc": "规范守卫：5 类违例各自可捕获 + 既有代码无未登记违例",
+		"desc": "规范守卫：7 类违例各自可捕获 + 既有代码无未登记违例",
 		"kind": "pure",
 	},
 	"s0_2_boot": {
@@ -76,6 +76,14 @@ const CASES := {
 		"kind": "pure",
 		"hidden": true,
 	},
+	"s0_6_clock": {
+		"desc": "可复现时钟：确定性模式 t==frame/hz、实时模式随 delta 前进、reset 归零、全局着色器参数被注册",
+		"kind": "pure",
+	},
+	"s0_6_repro": {
+		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
+		"kind": "headed",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -99,7 +107,30 @@ const GUARD_WHITELIST := [
 				+ "S0.2 不扩大改动面；后续新增模块（core/world/actors/battle/legion）"
 				+ "一律不得再引入裸 randi()，必须走 Rng 服务。",
 	},
+	{
+		"path": "res://scripts/capture.gd",
+		"rule": "unfreezable_time",
+		"reason": "capture.gd 的 Time.get_ticks_usec() 只用于 _benchmark 的墙钟计时窗口"
+				+ "（性能探针本身就该量真实时间），不参与任何画面动画。"
+				+ "S0.6 禁止的是『驱动画面运动的时间』走不可冻结的来源；"
+				+ "测量用墙钟属正当用法，故登记而不改写。",
+	},
+	{
+		"path": "res://scripts/terrain.gd",
+		"rule": "unfreezable_time",
+		"reason": "terrain.gd 的 Time.get_ticks_msec() 只用于统计 stats[\"gen_ms\"]"
+				+ "（生成耗时，只写进日志与 stats 字典），不参与任何画面动画。"
+				+ "同 capture.gd，属测量用墙钟的正当用法。",
+	},
 ]
+
+## S0.6：不可冻结的时间来源。凡驱动**画面运动**的时间都必须走 Clock
+## （scripts/render_clock.gd）；这两类来源永远无法让截图逐位复现：
+##   * 着色器内建 `TIME` —— 真实引擎时间，`Engine.time_scale` 之外无接口可注入；
+##   * GDScript 的 `Time.get_ticks_msec/usec()` —— 墙钟，连 time_scale 都够不着。
+## 测量用墙钟（性能探针、生成耗时统计）是正当用法，走上面的白名单登记。
+const UNFREEZABLE_SHADER_TOKEN := "TIME"
+const UNFREEZABLE_SCRIPT_TOKENS := ["Time.get_ticks_msec", "Time.get_ticks_usec"]
 
 ## -----------------------------------------------------------------------------
 ##  运行时状态
@@ -308,6 +339,10 @@ func _dispatch(id: String) -> void:
 			await _case_probe_pass()
 		"s0_2_probe_fail":
 			await _case_probe_fail()
+		"s0_6_clock":
+			await _case_clock()
+		"s0_6_repro":
+			await _case_repro()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -511,28 +546,39 @@ func _case_guard() -> void:
 	section("违例检测能力（人造违例，逐类验证后立即删除）")
 	var tmp_dir := "res://scripts/_verify_tmp"
 	DirAccess.make_dir_recursive_absolute(tmp_dir)
-	var probe_path := tmp_dir.path_join("guard_probe.gd")
 
-	# 规则名 → 造例文本（键名与守卫规则名一致，便于逐条断言）
+	# 规则名 → 造例（键名与守卫规则名一致，便于逐条断言）
 	var probes := {
-		"box_mesh": "var m := BoxMesh.new()\n",
-		"csg_box": "var n := CSGBox3D.new()\n",
-		"standard_material": "var s := StandardMaterial3D.new()\n",
-		"bare_randf": "var f := randf()\n",
-		"bare_randi": "var i := randi()\n",
+		"box_mesh": {"ext": "gd", "text": "var m := BoxMesh.new()\n"},
+		"csg_box": {"ext": "gd", "text": "var n := CSGBox3D.new()\n"},
+		"standard_material": {"ext": "gd", "text": "var s := StandardMaterial3D.new()\n"},
+		"bare_randf": {"ext": "gd", "text": "var f := randf()\n"},
+		"bare_randi": {"ext": "gd", "text": "var i := randi()\n"},
+		# S0.6 的两条分流都要能被抓住：脚本侧墙钟 + 着色器侧内建 TIME
+		"unfreezable_time_gd": {
+			"rule": "unfreezable_time", "ext": "gd",
+			"text": "var t := Time.get_ticks_msec()\n",
+		},
+		"unfreezable_time_shader": {
+			"rule": "unfreezable_time", "ext": "gdshader",
+			"text": "float t = TIME * wind_speed;\n",
+		},
 	}
-	for rule in probes.keys():
-		var f := FileAccess.open(probe_path, FileAccess.WRITE)
-		f.store_string(String(probes[rule]))
+	for label in probes.keys():
+		var p: Dictionary = probes[label]
+		var rule := String(p.get("rule", label))
+		var probe_file := tmp_dir.path_join("guard_probe.%s" % String(p["ext"]))
+		var f := FileAccess.open(probe_file, FileAccess.WRITE)
+		f.store_string(String(p["text"]))
 		f.close()
 		var hits := _guard_walk()
 		var found := false
 		for h in hits:
-			if h["rule"] == rule and String(h["path"]).ends_with("guard_probe.gd"):
+			if h["rule"] == rule and String(h["path"]).ends_with("guard_probe.%s" % String(p["ext"])):
 				found = true
-		ok(found, "守卫可捕获人造违例：%s" % rule,
-				"写入 %s 后未检出" % probe_path)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(probe_path))
+		ok(found, "守卫可捕获人造违例：%s" % label,
+				"写入 %s 后未检出" % probe_file)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(probe_file))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_dir))
 	ok(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(tmp_dir)),
 			"人造违例临时目录已清理")
@@ -542,6 +588,15 @@ func _case_guard() -> void:
 			"rng.randf()/rng.randi_range() 等成员调用不误报")
 	ok(_scan_text("res://x.gd", "# BoxMesh 出现在注释里不算违例\n").is_empty(),
 			"注释中的关键字不误报")
+	# S0.6：正确的时间写法不得被误报，否则守卫会逼着人绕开它
+	ok(_scan_text("res://x.gd", "c.position.x += drift * Clock.dt\n").is_empty(),
+			"Clock.dt / Clock.t 不误报")
+	ok(_scan_text("res://x.gdshader", "float t = render_time * wind_speed;\n").is_empty(),
+			"着色器里的 render_time 不误报")
+	ok(_scan_text("res://x.gdshader", "// the builtin TIME is banned here\n").is_empty(),
+			"着色器注释里提到 TIME 不误报")
+	ok(_scan_text("res://x.gd", "# 以前用 Time.get_ticks_msec()，现在用 Clock.t\n").is_empty(),
+			"脚本注释里提到墙钟不误报")
 
 	section("既有代码基线")
 	var real := _guard_walk()
@@ -692,6 +747,200 @@ func _case_baseline() -> void:
 				"样本=%s mean=%.3f" % [str(vals), mean])
 
 
+## --- s0_6_clock --------------------------------------------------------------
+## Clock 是 autoload，本模式只能用节点路径取（见文件头约束 1）。
+func _case_clock() -> void:
+	await process_frame
+	var clock := get_root().get_node_or_null("Clock")
+	section("Clock autoload 存在且 API 完整")
+	ok(clock != null, "autoload Clock 节点存在于 root")
+	if clock == null:
+		return
+	for sym in ["set_deterministic", "reset", "is_reproducible"]:
+		ok(_has_callable(clock, sym), "Clock.%s" % sym)
+	var props := {}
+	var scr: Script = clock.get_script()
+	if scr != null:
+		for p in scr.get_script_property_list():
+			props[String(p["name"])] = true
+	for prop in ["t", "dt", "frame", "deterministic", "hz", "shader_param_ok"]:
+		ok(props.has(prop), "Clock.%s 属性存在" % prop,
+				"脚本属性表=%s" % [str(props.keys())])
+
+	section("确定性模式：t == frame / hz（计算而非累加）")
+	clock.call("set_deterministic", true, 60.0)
+	eq(clock.get("t"), 0.0, "set_deterministic 后 t 归零（确定性批次必须从已知状态开始）")
+	eq(clock.get("frame"), 0, "set_deterministic 后 frame 归零")
+	eq(clock.get("hz"), 60.0, "hz 记录为 60")
+	var f0: int = clock.get("frame")
+	for i in 12:
+		await process_frame
+	var f1: int = clock.get("frame")
+	ok(f1 > f0, "跑 12 帧后 frame 递增", "f0=%d f1=%d" % [f0, f1])
+	var expect_t := float(f1) / 60.0
+	near(clock.get("t"), expect_t, 0.000001,
+			"t 严格等于 frame/hz（t=%.9f 期望=%.9f）" % [clock.get("t"), expect_t])
+	near(clock.get("dt"), 1.0 / 60.0, 0.000001, "确定性模式 dt 恒为 1/60")
+	ok(clock.call("is_reproducible"), "is_reproducible() 为真（着色器参数也已注册）")
+
+	section("hz 可变：30Hz 下 t == frame/30")
+	clock.call("set_deterministic", true, 30.0)
+	for i in 6:
+		await process_frame
+	var f2: int = clock.get("frame")
+	near(clock.get("t"), float(f2) / 30.0, 0.000001,
+			"30Hz：t=%.9f 期望=%.9f" % [clock.get("t"), float(f2) / 30.0])
+
+	section("实时模式：t 随真实 delta 前进，量级与墙钟一致（交互行为不回归）")
+	clock.call("set_deterministic", false)
+	await process_frame
+	var t_rt0: float = clock.get("t")
+	var w0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - w0 < 400:
+		await process_frame
+	var wall := float(Time.get_ticks_msec() - w0) / 1000.0
+	var dt_rt: float = float(clock.get("t")) - t_rt0
+	ok(dt_rt > 0.0, "实时模式 t 递增", "%.6f -> %.6f" % [t_rt0, clock.get("t")])
+	ok(clock.get("dt") > 0.0, "实时模式 dt 为正的真实帧步长", "dt=%s" % [clock.get("dt")])
+	# 量级校验：Clock.t 就是把真实 delta 累起来，二者应基本重合。
+	# 容差放宽到 35%，因为 await process_frame 的调度与墙钟采样点并不完全对齐。
+	var rel := absf(dt_rt - wall) / maxf(wall, 0.0001)
+	ok(rel < 0.35, "实时模式 Δt 与墙钟相对误差 < 35%",
+			"时钟 Δt=%.4fs 墙钟=%.4fs 误差=%.1f%%" % [dt_rt, wall, rel * 100.0])
+
+	section("reset() 归零")
+	clock.call("reset")
+	eq(clock.get("t"), 0.0, "reset 后 t = 0")
+	eq(clock.get("frame"), 0, "reset 后 frame = 0")
+	eq(clock.get("dt"), 0.0, "reset 后 dt = 0")
+
+	section("全局着色器参数已声明（防止动画被冻结却看起来『可复现』）")
+	ok(clock.get("shader_param_ok"),
+			"project.godot 的 [shader_globals] 声明了 render_time",
+			"未声明：着色器会停在 render_time=0，画面看起来是冻结的")
+	ok(ProjectSettings.has_setting("shader_globals/render_time"),
+			"ProjectSettings.has_setting('shader_globals/render_time')")
+	var decl: Variant = ProjectSettings.get_setting("shader_globals/render_time")
+	ok(decl is Dictionary and String((decl as Dictionary).get("type", "")) == "float",
+			"声明类型为 float", "decl=%s" % [str(decl)])
+	print("    [note] 该参数**真的进入着色器**由 s0_6_repro 的『帧数 15 vs 200 必须不同』实质验证；")
+	print("    [note] RenderingServer.global_shader_parameter_get_list() 是编辑器专用 API，")
+	print("    [note] 运行期调用会报 'should never be used outside the editor'，故此处不做列表断言。")
+
+	section("现场还原")
+	clock.call("set_deterministic", false)
+	ok(not clock.get("deterministic"), "用例结束后恢复实时模式，不污染后续用例")
+
+
+## --- s0_6_repro --------------------------------------------------------------
+## 两次**独立进程**的同参数截图必须逐位一致。这是 S0.2 里那条实测 1.62%–5.67%
+## 噪声底的正面修复证据，也是 `B-` 门禁能否使用的前提。
+## 反向对照同样重要：若两次都是空图/冻结图，逐位一致就毫无意义。
+func _case_repro() -> void:
+	await process_frame
+	var base := _opt_out.path_join("repro")
+	DirAccess.make_dir_recursive_absolute(base)
+	var shot_args := PackedStringArray([
+		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
+	])
+
+	section("两次独立进程、同参数截图")
+	var shas: Array = []
+	for label in ["a", "b"]:
+		var out_dir := base.path_join(label)
+		var out: Array = []
+		var extra := shot_args.duplicate()
+		extra.append("--out=" + out_dir)
+		var exit_code := _exec_user(PackedStringArray(), extra, out)
+		eq(exit_code, 0, "截图批次 %s 退出码 = 0" % label)
+		var man := _read_json(out_dir.path_join("s0_boot.json"))
+		ok(not man.is_empty(), "批次 %s 写出了清单" % label)
+		if not man.is_empty():
+			# 清单里自证这批是可复现的，否则字节一致无从谈起
+			var ck: Dictionary = man.get("clock", {})
+			ok(bool(ck.get("deterministic", false)),
+					"批次 %s 的清单声明 deterministic=true" % label)
+			ok(bool(ck.get("shader_param_ok", false)),
+					"批次 %s 的清单声明 shader_param_ok=true（时间真的进了着色器）" % label)
+		var shots: Array = man.get("shots", [])
+		ok(shots.size() == 2, "批次 %s 产出 2 张图" % label, "实际 %d" % shots.size())
+		for s in shots:
+			shas.append({
+				"label": label,
+				"name": String(s.get("name", "")),
+				"sha": String(s.get("sha256", "")),
+				"size": int(s.get("width", 0)) * int(s.get("height", 0)),
+			})
+
+	section("逐位一致（sha256 相同）")
+	for name in ["s0_boot_follow", "s0_boot_wide"]:
+		var ha := ""
+		var hb := ""
+		for e in shas:
+			if e["name"] == name and e["label"] == "a":
+				ha = e["sha"]
+			elif e["name"] == name and e["label"] == "b":
+				hb = e["sha"]
+		ok(ha != "" and hb != "", "两次都拿到了 %s 的 sha256" % name)
+		ok(ha == hb, "%s 两次 sha256 逐位一致" % name, "A=%s B=%s" % [ha, hb])
+		var wh := 0
+		for e in shas:
+			if e["name"] == name:
+				wh = int(e["size"])
+		eq(wh, 1600 * 900, "%s 为 1600x900（不是空图）" % name)
+
+	section("img_diff 复核：验收标准原文口径（差异 = 0.0000%）")
+	var idiff := load("res://tools/img_diff.gd")
+	for name in ["s0_boot_follow", "s0_boot_wide"]:
+		var pa := base.path_join("a").path_join(name + ".png")
+		var pb := base.path_join("b").path_join(name + ".png")
+		var r: Dictionary = idiff.diff(pa, pb)
+		eq(int(r.get("changed_pixels", -1)), 0, "%s 差异像素 = 0" % name)
+		eq(float(r.get("ratio_pct", -1.0)), 0.0, "%s 差异 = 0.0000%%" % name)
+		eq(String(r.get("verdict", "")), "pass", "%s img_diff 判定 PASS" % name)
+		eq(String(r.get("a_sha256", "x")), String(r.get("b_sha256", "y")),
+				"%s 两次 sha256 相同（img_diff 内部复核）" % name)
+
+	section("反向对照 1：改一个相机参数必须不同（排除『两张都是同一张空图』）")
+	var ctl_dir := base.path_join("ctl")
+	var ctl_out: Array = []
+	var ctl_exit := _exec_user(PackedStringArray(), PackedStringArray([
+		"--shot=ctl_follow", "--time=0.5", "--mode=FOLLOW", "--size=36", "--yaw=52",
+		"--warmup=60", "--frames=15", "--out=" + ctl_dir,
+	]), ctl_out)
+	eq(ctl_exit, 0, "对照组截图退出码 = 0")
+	var ctl_man := _read_json(ctl_dir.path_join("ctl_follow.json"))
+	var ctl_shots: Array = ctl_man.get("shots", [])
+	ok(ctl_shots.size() == 1, "对照组产出 1 张图")
+	var ctl_sha := ""
+	if ctl_shots.size() == 1:
+		ctl_sha = String(ctl_shots[0].get("sha256", ""))
+	var base_sha := ""
+	for e in shas:
+		if e["name"] == "s0_boot_follow" and e["label"] == "a":
+			base_sha = e["sha"]
+	ok(ctl_sha != "" and base_sha != "", "对照组与基准组都有 sha256")
+	ok(ctl_sha != base_sha, "yaw 45 -> 52 后图像不同（画面确实随参数变化）")
+
+	section("反向对照 2：改帧数必须不同（证明时间真在驱动动画，而非动画被冻结）")
+	var live_dir := base.path_join("live")
+	var live_out: Array = []
+	var live_exit := _exec_user(PackedStringArray(), PackedStringArray([
+		"--shot=live_follow", "--time=0.5", "--mode=FOLLOW", "--size=36", "--yaw=45",
+		"--warmup=20", "--frames=200", "--out=" + live_dir,
+	]), live_out)
+	eq(live_exit, 0, "长帧数组截图退出码 = 0")
+	var live_man := _read_json(live_dir.path_join("live_follow.json"))
+	var live_shots: Array = live_man.get("shots", [])
+	var live_sha := ""
+	if live_shots.size() == 1:
+		live_sha = String(live_shots[0].get("sha256", ""))
+	ok(live_sha != "", "长帧数组写出了 sha256")
+	# 同 warmup=60/frames=15 的基准量 t=1.5s；这里 frames=200 -> t=3.667s
+	ok(live_sha != base_sha,
+			"帧数 15 -> 200 后图像不同（render_time 真的在驱动风摆/水波）")
+
+
 ## --- 诊断用例 ----------------------------------------------------------------
 func _case_probe_pass() -> void:
 	await process_frame
@@ -752,6 +1001,26 @@ func _exec_godot(extra: PackedStringArray, out_lines: Array) -> int:
 	var args := PackedStringArray(["--path", _project_dir()])
 	args.append_array(extra)
 	return OS.execute(OS.get_executable_path(), args, out_lines, true)
+
+
+## 启动子进程并把**游戏侧**参数放在 `--` 之后。
+##
+## ⚠️ `--` 不是可选的分隔符。Godot 只把 `--` 之后的参数交给
+## `OS.get_cmdline_user_args()`；少了它，`capture.gd` 收不到 `--shots`，
+## 既不会触发截图也不会 `quit()`，子进程会一直跑主场景——
+## 实测后果是整个验收套件静默挂死（`OS.execute` 没有超时）。
+## 因此本函数强制插入 `--`，并通过 `--quit-after` 兜底：
+## 万一将来还有谁忘了回归，子进程最多跑 `safety_frames` 帧就退出，
+## 表现为"清单没写出"的**显式失败**，而不是无限等待。
+##
+## engine_args 放 `--` 之前（`--headless` / `--script res://...` 之类）。
+func _exec_user(engine_args: PackedStringArray, user_args: PackedStringArray,
+		out_lines: Array, safety_frames: int = 3600) -> int:
+	var args := PackedStringArray(["--quit-after", str(safety_frames)])
+	args.append_array(engine_args)
+	args.append("--")
+	args.append_array(user_args)
+	return _exec_godot(args, out_lines)
 
 
 func _write_json(path: String, data: Dictionary) -> void:
@@ -828,6 +1097,14 @@ func _scan_text(path: String, text: String) -> Array:
 			if _has_bare_rand(line, fn):
 				var rule := "bare_randf" if fn.begins_with("randf") else "bare_randi"
 				hits.append(_hit(path, i + 1, rule, raw))
+		# S0.6：不可冻结的时间来源（按扩展名分流）
+		if ext == "gdshader" or ext == "shader":
+			if _contains_token(line, UNFREEZABLE_SHADER_TOKEN):
+				hits.append(_hit(path, i + 1, "unfreezable_time", raw))
+		elif ext == "gd":
+			for tok in UNFREEZABLE_SCRIPT_TOKENS:
+				if _contains_token(line, tok):
+					hits.append(_hit(path, i + 1, "unfreezable_time", raw))
 	return hits
 
 
