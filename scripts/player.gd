@@ -77,8 +77,17 @@ func _physics_process(delta: float) -> void:
 			_squash = 0.34
 
 	var target_y := gh + HOVER + _air
-	var y := lerpf(position.y, target_y, 1.0 - exp(-18.0 * delta)) if _grounded else target_y
-	position = Vector3(nx, y, nz)
+	# S0.6: an exponential approach is only reproducible if the number of physics
+	# ticks is fixed, and it is not — how many ticks fit into the settle window
+	# follows real frame pacing.  Deterministic capture therefore snaps straight to
+	# the resting height and drops any pending squash, so the figurine's pose is a
+	# pure function of (seed, no input).  Interactive play keeps the smoothing.
+	if Clock.deterministic:
+		position = Vector3(nx, target_y, nz)
+		_squash = 0.0
+	else:
+		var y := lerpf(position.y, target_y, 1.0 - exp(-18.0 * delta)) if _grounded else target_y
+		position = Vector3(nx, y, nz)
 
 	if dir.length() > 0.05:
 		facing = lerp_angle(facing, atan2(dir.x, dir.z), 1.0 - exp(-TURN_RATE * delta))
@@ -89,7 +98,15 @@ func _physics_process(delta: float) -> void:
 func _animate(delta: float) -> void:
 	if _model == null:
 		return
-	_anim_t += delta * (5.0 + speed_ratio * 9.0)
+	# S0.6: this runs from _physics_process, and the number of physics ticks that
+	# fit into the settle window is not fixed (it follows real frame pacing), so an
+	# accumulated phase was not reproducible.  In deterministic capture the phase is
+	# instead a pure function of the render frame count.  The interactive branch is
+	# untouched, so gameplay feel is exactly what it was.
+	if Clock.deterministic:
+		_anim_t = Clock.t * (5.0 + speed_ratio * 9.0)
+	else:
+		_anim_t += delta * (5.0 + speed_ratio * 9.0)
 	_squash = lerpf(_squash, 0.0, 1.0 - exp(-9.0 * delta))
 	_model.rotation.y = facing
 	var bob := sin(_anim_t * 2.0) * 0.055 * speed_ratio

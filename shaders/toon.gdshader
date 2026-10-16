@@ -31,6 +31,13 @@ uniform float wind_strength = 0.0;   // sway amplitude in metres (multiplied by 
 uniform float wind_speed = 1.0;
 uniform float wind_top_bias : hint_range(0.0, 4.0) = 1.0;
 
+// S0.6: the builtin TIME could not be frozen, which made every screenshot differ
+// from the next one by 1.6 %–5.7 % of its pixels and left the whole `B-` visual
+// gate unusable.  This global uniform is written once per frame by
+// scripts/render_clock.gd, so frame N always means the same instant.
+// (Global uniforms take their default from project.godot's [shader_globals].)
+global uniform float render_time;
+
 varying vec3 v_color;
 varying float v_wind_mask;
 varying float v_instance_tint;
@@ -46,7 +53,7 @@ void vertex() {
 		mask *= mask;
 		v_wind_mask = mask;
 		float phase = INSTANCE_CUSTOM.x * 6.28318;
-		float t = TIME * wind_speed;
+		float t = render_time * wind_speed;
 		float s = sin(t * 1.9 + phase + VERTEX.x * 0.5 + VERTEX.z * 0.35);
 		float c = cos(t * 1.35 + phase * 1.7 + VERTEX.z * 0.6);
 		float amp = wind_strength * wind * mask;

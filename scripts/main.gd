@@ -70,7 +70,12 @@ func _process(_delta: float) -> void:
 		"clock": day_night.clock_string(),
 		"trees": scatter.stats.get("trees", 0),
 		"rocks": scatter.stats.get("rocks", 0),
-		"fps": Engine.get_frames_per_second(),
+		# S0.6: the HUD is inside the captured viewport, so a live FPS readout would
+		# put a different number in every screenshot and keep a baseline from ever
+		# being byte-reproducible.  In deterministic capture the step rate is the
+		# only meaningful figure anyway, so report that instead of a wall-clock
+		# measurement.  Interactive play still shows the real FPS.
+		"fps": Clock.hz if Clock.deterministic else Engine.get_frames_per_second(),
 	})
 
 

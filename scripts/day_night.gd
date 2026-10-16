@@ -86,9 +86,12 @@ func setup(sun_light: DirectionalLight3D, env_owner: WorldEnvironment) -> void:
 	apply()
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
+	# S0.6: the sun drives every shadow in the scene, so its advance comes off the
+	# render clock.  With a real delta, two identical runs ended up with the sun at
+	# marginally different bearings and the shadow edges landed on other pixels.
 	if auto_cycle:
-		time_of_day = fmod(time_of_day + delta / maxf(day_length, 1.0), 1.0)
+		time_of_day = fmod(time_of_day + Clock.dt / maxf(day_length, 1.0), 1.0)
 		apply()
 
 

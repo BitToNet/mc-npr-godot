@@ -5,9 +5,18 @@ extends Node
 ##   Godot --path . -- --shot=noon --time=0.5 --mode=follow --size=30
 ##   Godot --path . -- --shots --case=s0_boot     # S0.2: named batch case table
 ##   Godot --path . -- --shots --case=s0_boot --frames=24 --warmup=60
+##   Godot --path . -- --shots --case=s0_boot --clock-hz=30   # 时钟步长
+##   Godot --path . -- --shots --case=s0_boot --realtime      # 关掉可复现性
 ##
 ## Writes PNGs into res://.shots/ then quits, so the art direction can be
 ## reviewed as real rendered frames instead of guesses.
+##
+## S0.6 — reproducibility.  A capture batch now runs on the deterministic render
+## clock (`scripts/render_clock.gd`) by default, so the same case run twice in two
+## separate processes yields **byte-identical** PNGs and the `B-` gate can use a
+## tight `img_diff` threshold.  `--realtime` restores real frame deltas for
+## eyeballing motion (and makes captures non-reproducible again, by design).
+## `--bench` always measures on the real clock.
 ##
 ## S0.2 additions (all additive — the legacy `--shots` / `--shot=` behaviour and
 ## the default 6-shot batch are byte-for-byte unchanged):
@@ -53,6 +62,8 @@ var _case_name := ""
 var _manifest_label := ""
 var _frames := 10
 var _warmup := 40
+var _realtime := false
+var _clock_hz := 60.0
 
 
 func _ready() -> void:
@@ -107,6 +118,13 @@ func _ready() -> void:
 			_frames = a.split("=", true, 1)[1].to_int()
 		elif a.begins_with("--warmup="):
 			_warmup = a.split("=", true, 1)[1].to_int()
+		elif a == "--realtime":
+			# S0.6 escape hatch: keep the clock on real frame deltas.  Captures then
+			# stop being byte-reproducible (that is the whole point of --realtime),
+			# so it is only for eyeballing motion, never for B- evidence.
+			_realtime = true
+		elif a.begins_with("--clock-hz="):
+			_clock_hz = a.split("=", true, 1)[1].to_float()
 		elif a == "--noquit":
 			_quit = false
 	if not want:
@@ -134,6 +152,19 @@ func _ready() -> void:
 
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(_out_dir)
+	# S0.6 — reproducibility contract.  Captures run on the deterministic clock by
+	# default so that the same case twice produces byte-identical PNGs; the warm-up
+	# then covers a fixed number of *frames*, not a wall-clock duration, so the
+	# animation phase at the shutter is a pure function of the frame count.
+	# `--bench` is a wall-clock perf probe, so it keeps interactive clock semantics.
+	var use_det := (not _realtime) and (not _bench)
+	Clock.set_deterministic(use_det, _clock_hz)
+	if _bench:
+		print("[capture] 时钟=真实 delta（--bench 性能探针）")
+	elif use_det:
+		print("[capture] 时钟=确定性 %.1fHz（可复现；--realtime 可关闭）" % _clock_hz)
+	else:
+		print("[capture] 时钟=真实 delta（--realtime，截图不保证可复现）")
 	# let the world build + a few frames of wave/wind animation settle
 	for i in _warmup:
 		await get_tree().process_frame
@@ -180,6 +211,15 @@ func _write_manifest(manifest: Array) -> void:
 		"out_dir": _out_dir,
 		"warmup_frames": _warmup,
 		"settle_frames": _frames,
+		# S0.6: without this the manifest cannot tell a reproducible capture from a
+		# --realtime one, which matters when the file is used as B- evidence.
+		"clock": {
+			"deterministic": Clock.deterministic,
+			"hz": Clock.hz,
+			"t": Clock.t,
+			"frame": Clock.frame,
+			"shader_param_ok": Clock.shader_param_ok,
+		},
 		"shots": manifest,
 	}
 	var f := FileAccess.open(path, FileAccess.WRITE)

@@ -65,7 +65,11 @@ func mode_name() -> String:
 	return MODE_NAMES[mode]
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
+	# S0.6: every step below moves the camera, so it must run off the render clock.
+	# A real frame delta made the damped follow land on a slightly different focus
+	# point each run, which showed up as whole-pixel shifts in a screenshot.
+	var delta := Clock.dt
 	if Input.is_action_pressed("zoom_in"):
 		ortho_size = clampf(ortho_size - delta * 24.0, 12.0, 56.0)
 	if Input.is_action_pressed("zoom_out"):

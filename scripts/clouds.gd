@@ -67,7 +67,10 @@ func build(world_seed: int) -> void:
 		_phases.append(rng.randf_range(0.0, TAU))
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
+	# S0.6: drift off the render clock, not off the real frame delta.  A variable
+	# frame pacing used to shift every puff (and therefore every cloud shadow on
+	# the island) between two otherwise identical runs.
 	var ray := _view_ray()
 	var origin: Vector3 = ray[0]
 	var axis: Vector3 = ray[1]
@@ -75,10 +78,12 @@ func _process(delta: float) -> void:
 		var c := _clouds[i]
 		if not is_instance_valid(c):
 			continue
-		c.position.x += drift * _speeds[i] * delta
-		c.rotation.y += delta * 0.02 * _speeds[i]
+		c.position.x += drift * _speeds[i] * Clock.dt
+		c.rotation.y += Clock.dt * 0.02 * _speeds[i]
 		# gentle bobbing so the shadow edges keep sliding over the terrain
-		c.position.y += sin(Time.get_ticks_msec() * 0.00035 + _phases[i]) * delta * 0.35
+		# (was Time.get_ticks_msec() * 0.00035, i.e. wall-clock in ms; that equals
+		#  Clock.t * 0.35 for `t` in seconds — same rate, freezable clock)
+		c.position.y += sin(Clock.t * 0.35 + _phases[i]) * Clock.dt * 0.35
 		if c.position.x > SPAN:
 			c.position.x = -SPAN
 		# fade the puff away as it drifts across the lens axis

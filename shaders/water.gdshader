@@ -19,6 +19,11 @@ uniform float rim_wave : hint_range(0.0, 1.0) = 0.16;
 uniform float shade_min : hint_range(0.0, 1.0) = 0.62;
 uniform float sparkle : hint_range(0.0, 1.0) = 0.0;
 
+// S0.6: see shaders/toon.gdshader — the builtin TIME is replaced by the global
+// uniform written every frame by scripts/render_clock.gd, so that a screenshot
+// is byte-reproducible and the `B-` visual gate becomes usable.
+global uniform float render_time;
+
 varying vec3 v_color;
 varying float v_foam;
 varying float v_rim;
@@ -30,7 +35,7 @@ void vertex() {
 	v_rim = UV2.x;
 	v_wave = UV2.y;
 
-	float t = TIME * wave_speed;
+	float t = render_time * wave_speed;
 	// broad rolling swell + a finer chop + a bobbing rim so the tile edge breathes
 	float swell = sin(t * 1.1 + VERTEX.x * 0.22 + VERTEX.z * 0.16);
 	float chop = sin(t * 2.3 + VERTEX.x * 0.75 - VERTEX.z * 0.55) * 0.45;
@@ -48,7 +53,7 @@ void fragment() {
 	base = mix(base, base * 1.25 + vec3(0.02), 0.55);
 
 	// foam line where the water meets the beach
-	float foam = smoothstep(0.35, 0.95, v_foam + sin(TIME * 2.4 + v_wave * 6.0) * 0.12);
+	float foam = smoothstep(0.35, 0.95, v_foam + sin(render_time * 2.4 + v_wave * 6.0) * 0.12);
 	base = mix(base, foam_color.rgb, foam * 0.85);
 
 	ALBEDO = base;
@@ -57,7 +62,7 @@ void fragment() {
 
 	if (sparkle > 0.001) {
 		// soft twinkle only: a spatial term here reads as painted stripes
-		float s = sin(TIME * 1.7 + v_wave * 0.6) * 0.5 + 0.5;
+		float s = sin(render_time * 1.7 + v_wave * 0.6) * 0.5 + 0.5;
 		EMISSION += vec3(1.0, 1.0, 1.0) * pow(s, 6.0) * sparkle * 0.12;
 	}
 }
