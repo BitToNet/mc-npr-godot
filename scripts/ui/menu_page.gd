@@ -26,15 +26,17 @@ signal closed
 
 const GRID_SCRIPT := preload("res://scripts/ui/save_grid.gd")
 
-const INK := Color("13101b")
-const PAPER := Color("fff9e8")
-const YELLOW := Color("ffe45c")
-const CYAN := Color("6fe3e1")
-const PINK := Color("ff8fb1")
-const GREEN := Color("7ed957")
-const LILAC := Color("c3b1ff")
-const MUTED := Color("6b6480")
-const BACKDROP := Color(0.07, 0.06, 0.10, 0.62)
+## S0.4 批次 1：调色板与控件构造已收进 `res://scripts/ui/ui_kit.gd`（唯一来源）。
+## 这里保留同名别名，调用点一行不改（纯重构；视觉等价由 sha256 逐位不变判定）。
+const INK := UiKit.INK
+const PAPER := UiKit.PAPER
+const YELLOW := UiKit.YELLOW
+const CYAN := UiKit.CYAN
+const PINK := UiKit.PINK
+const GREEN := UiKit.GREEN
+const LILAC := UiKit.LILAC
+const MUTED := UiKit.MUTED
+const BACKDROP := UiKit.BACKDROP
 
 var _font: SystemFont
 var _open := false
@@ -504,52 +506,16 @@ func _build_confirm(root: Control) -> void:
 
 
 func _build_font() -> void:
-	_font = SystemFont.new()
-	_font.font_names = PackedStringArray([
-		"PingFang SC", "Hiragino Sans GB", "Heiti SC", "Noto Sans CJK SC",
-		"Source Han Sans SC", "Microsoft YaHei", "Arial Unicode MS", "Sans-Serif"])
-	_font.font_weight = 700
-	_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	_font = UiKit.font()
 
 
 func _sb(bg: Color, border: int, shadow: int, offset: Vector2, pad: int) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = INK
-	sb.set_border_width_all(border)
-	sb.set_corner_radius_all(0)
-	sb.shadow_color = INK
-	sb.shadow_size = shadow
-	sb.shadow_offset = offset
-	sb.anti_aliasing = false
-	sb.set_content_margin_all(pad)
-	return sb
+	return UiKit.sb(bg, border, shadow, offset, pad)
 
 
 func _label(text: String, size: int, col: Color = INK) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", col)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return l
+	return UiKit.label(_font, text, size, col)
 
 
 func _button(text: String, accent: Color) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(0, 48)
-	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# 焦点环会让同一状态出现两种像素；截图门禁要求逐位一致，故不要焦点环
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_override("font", _font)
-	b.add_theme_font_size_override("font_size", 18)
-	b.add_theme_color_override("font_color", INK)
-	b.add_theme_color_override("font_hover_color", INK)
-	b.add_theme_color_override("font_pressed_color", INK)
-	b.add_theme_stylebox_override("normal", _sb(accent, 4, 6, Vector2(5, 5), 10))
-	b.add_theme_stylebox_override("hover", _sb(accent.lightened(0.14), 4, 6, Vector2(5, 5), 10))
-	b.add_theme_stylebox_override("pressed", _sb(accent.darkened(0.14), 4, 0, Vector2(1, 1), 10))
-	b.add_theme_stylebox_override("focus", _sb(accent, 4, 6, Vector2(5, 5), 10))
-	return b
+	return UiKit.button_page(_font, text, accent)

@@ -11,7 +11,10 @@ extends Control
 
 signal value_changed(v: float)
 
-const INK := Color("13101b")
+## S0.4 批次 1：颜色收归 `res://scripts/ui/ui_kit.gd`（唯一来源）。本控件是手绘的
+## （不走 StyleBox），故只需要这一个常量；轨迹/抓手的两个色值仍留在下方
+## `track_fill` / `track_bg` 的默认值里（它们是可被调用方覆盖的实例属性）。
+const INK := UiKit.INK
 const TRACK_H := 18
 const BORDER := 3
 const SHADOW := 4

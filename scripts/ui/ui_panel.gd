@@ -14,13 +14,16 @@ signal camera_pressed
 signal autocycle_pressed
 signal time_scrubbed(t: float)
 
-const INK := Color("13101b")
-const PAPER := Color("fff9e8")
-const YELLOW := Color("ffe45c")
-const CYAN := Color("6fe3e1")
-const PINK := Color("ff8fb1")
-const GREEN := Color("7ed957")
-const LILAC := Color("c3b1ff")
+## S0.4 批次 1：调色板与控件构造已收进 `res://scripts/ui/ui_kit.gd`（唯一来源）。
+## 这里保留同名别名，调用点一行不改 —— 纯重构的等价性由"参数完全没变"直接保证，
+## 再由 6 机位 + 菜单 4 张的 sha256 逐位不变兜底。
+const INK := UiKit.INK
+const PAPER := UiKit.PAPER
+const YELLOW := UiKit.YELLOW
+const CYAN := UiKit.CYAN
+const PINK := UiKit.PINK
+const GREEN := UiKit.GREEN
+const LILAC := UiKit.LILAC
 
 var _font: SystemFont
 var _btn_seed: Button
@@ -88,57 +91,20 @@ func _ready() -> void:
 # widgets
 # ---------------------------------------------------------------------------
 func _build_font() -> void:
-	_font = SystemFont.new()
-	_font.font_names = PackedStringArray([
-		"PingFang SC", "Hiragino Sans GB", "Heiti SC", "Noto Sans CJK SC",
-		"Source Han Sans SC", "Microsoft YaHei", "Arial Unicode MS", "Sans-Serif"])
-	_font.font_weight = 700
-	_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	_font = UiKit.font()
 
 
 func _sb(bg: Color, border: int = 4, shadow: int = 0, offset := Vector2.ZERO,
 		pad := 14) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = INK
-	sb.set_border_width_all(border)
-	sb.set_corner_radius_all(0)
-	sb.shadow_color = INK
-	sb.shadow_size = shadow
-	sb.shadow_offset = offset
-	sb.anti_aliasing = false
-	sb.set_content_margin_all(pad)
-	return sb
+	return UiKit.sb(bg, border, shadow, offset, pad)
 
 
 func _label(text: String, size: int, col: Color = INK) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", col)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return l
+	return UiKit.label(_font, text, size, col)
 
 
 func _button(text: String, accent: Color) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(0, 46)
-	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_override("font", _font)
-	b.add_theme_font_size_override("font_size", 17)
-	b.add_theme_color_override("font_color", INK)
-	b.add_theme_color_override("font_hover_color", PAPER)
-	b.add_theme_color_override("font_pressed_color", INK)
-	b.add_theme_color_override("font_focus_color", INK)
-	b.add_theme_stylebox_override("normal", _sb(accent, 4, 6, Vector2(5, 5), 10))
-	b.add_theme_stylebox_override("hover", _sb(INK, 4, 6, Vector2(5, 5), 10))
-	b.add_theme_stylebox_override("pressed", _sb(accent.darkened(0.12), 4, 0, Vector2(1, 1), 10))
-	b.add_theme_stylebox_override("focus", _sb(accent, 4, 6, Vector2(5, 5), 10))
-	b.add_theme_stylebox_override("disabled", _sb(accent.darkened(0.3), 4, 0, Vector2.ZERO, 10))
-	return b
+	return UiKit.button_hud(_font, text, accent)
 
 
 func _build_panel() -> Control:

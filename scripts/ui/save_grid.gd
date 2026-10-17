@@ -15,8 +15,9 @@ extends PanelContainer
 ## 全部由引擎提供，S0.4 的键盘导航可以直接复用 `card(slot).grab_focus()`。
 ##
 ## 视觉语言与 `scripts/ui/ui_panel.gd` 同源（厚墨边、硬投影、纯色块、零圆角）。
-## 两处样式助手暂时各留一份：抽公共 `UiStyle` 属于 S0.5 工程规范的活，
-## 本批不顺手重构（一次提交只承载一件事）。
+## 样式助手在 **S0.4 批次 1** 已收进 `res://scripts/ui/ui_kit.gd`（当时这里写的是
+## "抽公共 UiStyle 属于 S0.5 的活"，后按 ROADMAP 附录 A 调整为 S0.4 落地）；
+## 本文件只保留同名薄包装，调用点未改。
 
 signal slot_pressed(slot: int)
 
@@ -26,12 +27,12 @@ const CARD_SIZE := Vector2(296, 104)
 const EMPTY_LABEL := "空槽位"
 const BROKEN_LABEL := "损坏的存档"
 
-const INK := Color("13101b")
-const PAPER := Color("fff9e8")
-const YELLOW := Color("ffe45c")
-const PINK := Color("ff8fb1")
-const GREY := Color("cdc7bb")
-const MUTED := Color("6b6480")
+const INK := UiKit.INK
+const PAPER := UiKit.PAPER
+const YELLOW := UiKit.YELLOW
+const PINK := UiKit.PINK
+const GREY := UiKit.GREY
+const MUTED := UiKit.MUTED
 
 var _font: SystemFont
 var _cards: Array = []
@@ -41,12 +42,7 @@ var _selected := 0
 
 
 func _ready() -> void:
-	_font = SystemFont.new()
-	_font.font_names = PackedStringArray([
-		"PingFang SC", "Hiragino Sans GB", "Heiti SC", "Noto Sans CJK SC",
-		"Source Han Sans SC", "Microsoft YaHei", "Arial Unicode MS", "Sans-Serif"])
-	_font.font_weight = 700
-	_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	_font = UiKit.font()
 	add_theme_stylebox_override("panel", _sb(PAPER, 5, 10, Vector2(8, 8), 16))
 
 	var col := VBoxContainer.new()
@@ -175,24 +171,8 @@ func _apply_card_style(btn: Button, kind: String, selected: bool) -> void:
 
 
 func _sb(bg: Color, border: int, shadow: int, offset: Vector2, pad: int) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = INK
-	sb.set_border_width_all(border)
-	sb.set_corner_radius_all(0)
-	sb.shadow_color = INK
-	sb.shadow_size = shadow
-	sb.shadow_offset = offset
-	sb.anti_aliasing = false
-	sb.set_content_margin_all(pad)
-	return sb
+	return UiKit.sb(bg, border, shadow, offset, pad)
 
 
 func _label(text: String, size: int, col: Color = INK) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_override("font", _font)
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", col)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return l
+	return UiKit.label(_font, text, size, col)
