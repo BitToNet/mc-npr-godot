@@ -39,6 +39,36 @@ extends SceneTree
 
 const REPORT_DIR := "res://.verify"
 
+## 自旋固定微秒数，返回实际耗时（毫秒）。用于给"量法分辨率"做标尺。
+func _spin_us(usec: int) -> float:
+	var t0 := Time.get_ticks_usec()
+	while Time.get_ticks_usec() - t0 < usec:
+		pass
+	return float(Time.get_ticks_usec() - t0) / 1000.0
+
+
+## 直接量叠加层**自己**每帧的 CPU 成本（毫秒/帧）。
+##
+## 为什么不用"开层/关层的帧时间差"：实测（2026-10-19）这条路在本工程里没有分辨率 ——
+## vsync 开着时差值是**负**的（关层 18.75 / 开层 17.84 ms，量到的是 vsync 等待+抖动）；
+## 关掉 vsync 改用逐帧墙钟后，注入一个确定的 2ms/帧 自旋负载，只回收 41%（量到 0.82ms）。
+## 也就是说帧时间差对 0.5ms 量级既测不准也测不出，拿它写断言等于没写。
+##
+## 改为把叠加层的每帧工作**单独计时**：`_push_sample()` 每帧一次，`_refresh()` 每
+## `REFRESH_EVERY` 帧一次，与 `_process()` 的真实节奏一致。这是可归因的成本，
+## 不掺 vsync、不掺其它节点的抖动。
+func _time_overlay_frame(dbg: Node, frames: int) -> float:
+	for i in 3:   # 预热：首次 Label 排版/字体缓存不计入
+		dbg.call("_push_sample")
+		dbg.call("_refresh")
+	var t0 := Time.get_ticks_usec()
+	for i in frames:
+		dbg.call("_push_sample")
+		if i % 6 == 0:
+			dbg.call("_refresh")
+	var dt := float(Time.get_ticks_usec() - t0)
+	return dt / float(maxi(frames, 1)) / 1000.0
+
 ## 用例注册表。kind：pure = headless 可跑；headed = 需要真实 GPU/窗口。
 ## hidden：不参与 --all（供本文件自检使用的诊断用例）。
 const CASES := {
@@ -84,8 +114,19 @@ const CASES := {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
 	},
+	"s0_4_overlay": {
+		"desc": "调试观测层契约：叠加层默认隐藏、F3/F1 只改观测不改世界（结构指纹+Rng 状态逐项不变）、"
+				+ "F1 后画面与『无 UI』基线逐位相同、发布构建热键闸门真的删 action、CSV 两进程逐位一致且 --obs-csv= 不触发截图",
+		"kind": "pure",
+	},
+	"s0_4_cost": {
+		"desc": "调试层开销：120 实体场景下直接给叠加层每帧工作计时（_push_sample 每帧 + _refresh 每 6 帧）"
+				+ " < 0.5ms，并用 0.5ms/2ms 自旋标尺证明这套计时可分辨该量级；"
+				+ "反向对照『开层后 draw_calls 必须上升』；外加 B- 两张截图两轮逐位一致且互不相同",
+		"kind": "headed",
+	},
 	"s0_3_state": {
-		"desc": "全局服务契约：autoload 3→8 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
+		"desc": "全局服务契约：autoload 3→9 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
 		"kind": "pure",
 	},
 	"s0_3_roundtrip": {
@@ -464,6 +505,10 @@ func _dispatch(id: String) -> void:
 			await _case_clock()
 		"s0_6_repro":
 			await _case_repro()
+		"s0_4_overlay":
+			await _case_overlay()
+		"s0_4_cost":
+			await _case_debug_cost()
 		"s0_3_state":
 			await _case_state()
 		"s0_3_roundtrip":
@@ -863,6 +908,26 @@ func _case_scene_api() -> void:
 ## --- s0_2_baseline -----------------------------------------------------------
 func _case_baseline() -> void:
 	await process_frame
+	section("--out 透传：换目录跑，报告必须落在新目录（回归锚点）")
+	# `93c25e6` 修好了"`_case_baseline` 不把 `--out=` 传给 baseline.gd"这个缺陷，
+	# 但当时只靠"默认目录刚好也能过"没被抓住。这条断言把修好的行为钉死：
+	# 只有当 `--out=` 真的透传到子进程，报告才会出现在**非默认**目录里。
+	var nondefault := _opt_out.path_join("outprobe")
+	DirAccess.make_dir_recursive_absolute(nondefault)
+	var stray := nondefault.path_join("baseline_verify_outprobe.json")
+	if FileAccess.file_exists(stray):
+		DirAccess.remove_absolute(stray)
+	var p_out: Array = []
+	var p_code := _exec_godot(PackedStringArray([
+		"--script", "res://tools/baseline.gd", "--", "--label=verify_outprobe",
+		"--out=" + nondefault,
+	]), p_out)
+	eq(p_code, 0, "显式 --out 的子进程退出码 = 0")
+	ok(FileAccess.file_exists(stray),
+			"报告落在显式指定的目录（说明 --out= 真的被透传，而不是被子进程忽略）", stray)
+	ok(not FileAccess.file_exists(REPORT_DIR.path_join("baseline_verify_outprobe.json")),
+			"默认报告目录里没有这份文件（不是'两个目录都写'的假通过）")
+
 	section("连续 3 次窗口模式采样")
 	var reports: Array = []
 	for i in 3:
@@ -1115,6 +1180,434 @@ func _case_repro() -> void:
 			"帧数 15 -> 200 后图像不同（render_time 真的在驱动风摆/水波）")
 
 
+## --- s0_4_overlay -------------------------------------------------------------
+## S0.4 批次 2：调试与观测层（ROADMAP §5 S0.4）。
+##
+## 五组最值钱的断言：
+##   ① **默认隐藏**：一条 `visible=false` 决定 S0.4 之前录的 6 机位基线还成不成立。
+##      验收用例在**同一个进程**里先证明"关着"，再去证明"开着"的样子。
+##   ② **开关只改观测，不改世界**（§5 S0.4 的 `A-` 原文）：结构指纹、seed 派生量、
+##      Rng 子流内部状态、GameState 世界字段逐项不变。这条不是形式主义 ——
+##      调试层最容易犯的错就是"顺手读一下随机数"或"顺手重建世界"。
+##   ③ **F1 是"拿掉"而不是"调透明"**：截图口径见 `s0_4_cost`（像素证据）。
+##      这里先定状态语义：F1 压住叠加层时**不改变**它的开关状态，且不删节点。
+##   ④ **菜单开着时 F1 先关菜单**：菜单是 `paused` 的唯一来源，藏掉菜单不解除暂停
+##      会留下"看不见但世界停住"的假死态。这条只能靠"暂停真的解除了"来证。
+##   ⑤ **发布构建门禁**：`ensure_debug_hotkeys(false)` 必须**删除** action，
+##      并且此后按键真的没反应；同时全项目只允许 `input_setup.gd` 一处判断构建类型。
+func _case_overlay() -> void:
+	await process_frame
+	var dbg := get_root().get_node_or_null("Debug")
+	var clock := get_root().get_node_or_null("Clock")
+	var gs := get_root().get_node_or_null("GameState")
+	var rng := get_root().get_node_or_null("Rng")
+	if not ok(dbg != null, "autoload Debug 节点存在于 root（本步新增，autoload 8 → 9）"):
+		return
+	if not ok(clock != null and gs != null and rng != null, "Clock / GameState / Rng 就位",
+			"clock=%s gs=%s rng=%s" % [clock, gs, rng]):
+		return
+
+	# 前置条件自带，不依赖"进程恰好是新的"（`--all` 里前面的用例会留下全局状态）。
+	_restore_defaults()
+	dbg.call("set_overlay", false)
+	dbg.call("set_ui_hidden", false)
+
+	section("装配：默认隐藏、层号最高、整层不吃输入")
+	eq(bool(dbg.get("overlay_on")), false, "叠加层默认关闭")
+	eq(bool(dbg.get("hud_hidden")), false, "默认不隐藏 HUD")
+	eq(bool(dbg.call("is_panel_visible")), false,
+			"默认整层不可见（S0.4 之前录的 6 机位基线继续逐位有效的前提）")
+	var main := await _load_main()
+	if not ok(main != null, "主场景可加载"):
+		return
+	var hud := main.get_node_or_null("UI") as CanvasLayer
+	var menu := main.get_node_or_null(MENU_NODE) as CanvasLayer
+	var dlay := dbg.get_node_or_null("DebugLayer") as CanvasLayer
+	if not ok(dlay != null, "Debug 自带 CanvasLayer（跨场景常驻，不挂在 main.tscn 上）"):
+		main.queue_free()
+		return
+	var consts: Dictionary = dbg.get_script().get_script_constant_map()
+	eq(dlay.layer, int(consts.get("LAYER", -1)),
+			"层号 == 脚本常量 LAYER（验收用例不另抄一份数字）")
+	ok(hud != null and menu != null and dlay.layer > menu.layer and menu.layer > hud.layer,
+			"层序 HUD < 菜单 < 调试层（遮挡靠 layer，不靠节点顺序）",
+			"hud=%s menu=%s debug=%s" % [hud.layer if hud else -1,
+					menu.layer if menu else -1, dlay.layer])
+	var droot := dlay.get_node_or_null("Root") as Control
+	ok(droot != null and droot.mouse_filter == Control.MOUSE_FILTER_IGNORE,
+			"调试层整层 MOUSE_FILTER_IGNORE（绝不抢游戏本来该收到的点击）")
+	ok(get_nodes_in_group("hud").size() >= 1, "HUD 已注册到组 #hud（F1 按组找属主，不硬编码路径）")
+
+	section("开关只改观测，不改世界（§5 S0.4 的 A- 原文）")
+	rng.call("stream", "s0_4_probe")   # 保证至少有一条子流可观测
+	var fp0 := _world_fingerprint()
+	var sig0 := _world_seed_signature()
+	var facts0 := _world_facts(gs)
+	var rng0 := _rng_states(rng)
+	var on := bool(dbg.call("toggle_overlay"))
+	eq(on, true, "toggle_overlay() -> 开")
+	ok(bool(dbg.call("is_panel_visible")), "开层后整层真的可见")
+	for i in 20:
+		await process_frame
+	ok(_debug_label(dbg, "Scene").contains("SCENE"), "面板显示了场景/路由行")
+	ok(_debug_label(dbg, "Entities").contains("NODES"), "面板显示了节点计数行")
+	ok(_debug_label(dbg, "ClockLine").length() > 0, "面板显示了时钟行")
+	eq(bool(dbg.call("toggle_overlay")), false, "再切一次 -> 关")
+	ok(not bool(dbg.call("is_panel_visible")), "关层后整层不可见")
+	for i in 20:
+		await process_frame
+	eq(_world_fingerprint(), fp0, "开关两轮后世界结构指纹逐条一致")
+	eq(_world_seed_signature(), sig0, "seed 派生量（spawn/高度/植被计数）不变")
+	eq(_world_facts(gs), facts0, "GameState 世界字段不变")
+	eq(_rng_states(rng), rng0, "Rng 子流内部状态不变（调试层没有偷抽随机数）")
+
+	section("F1：隐藏全部 UI，且不改变叠加层开关状态、不删节点")
+	dbg.call("set_overlay", true)
+	ok(bool(dbg.call("is_panel_visible")), "前置：叠加层开着")
+	eq(bool(dbg.call("toggle_ui_hidden")), true, "toggle_ui_hidden() -> 隐藏")
+	ok(not bool(dbg.call("is_panel_visible")), "F1 同时压住调试层自己")
+	ok(hud != null and not hud.visible, "HUD 层被隐藏")
+	ok(bool(dbg.call("is_overlay_on")), "F1 不改变叠加层开关状态（只是压住）")
+	eq(_world_fingerprint(), fp0, "F1 不删节点（隐藏 != 卸载）")
+	ok(hud != null and hud.can_process(), "隐藏后 HUD 仍在处理（visible 不等于 process_mode）")
+	eq(bool(dbg.call("toggle_ui_hidden")), false, "再按一次 -> 恢复")
+	ok(hud != null and hud.visible, "HUD 恢复可见")
+
+	section("菜单开着时按 F1：先关菜单解除暂停，不留『看不见但世界停住』")
+	await _press_escape()
+	ok(menu != null and bool(menu.call("is_open")), "前置：ESC 打开了菜单")
+	ok(paused, "前置：树处于暂停")
+	dbg.call("set_ui_hidden", true)
+	ok(menu != null and not bool(menu.call("is_open")), "F1 后菜单已关闭")
+	ok(not paused, "暂停已解除（否则就是假死态）")
+	ok(main.can_process(), "主场景恢复处理")
+	ok(hud != null and not hud.visible, "HUD 仍然隐藏（F1 的语义没有被菜单改写）")
+	dbg.call("set_ui_hidden", false)
+
+	section("发布构建门禁：闸门关掉后 action 被删除，按键真的没反应")
+	ok(OS.is_debug_build(), "本进程是 Debug 构建（编辑器二进制），所以下面『开着』这一半有效")
+	ok(InputMap.has_action(InputSetup.ACTION_DEBUG_OVERLAY)
+			and InputMap.has_action(InputSetup.ACTION_DEBUG_HIDE_UI),
+			"Debug 构建下两个调试 action 已注册")
+	InputSetup.ensure_debug_hotkeys(false)
+	ok(not InputMap.has_action(InputSetup.ACTION_DEBUG_OVERLAY)
+			and not InputMap.has_action(InputSetup.ACTION_DEBUG_HIDE_UI),
+			"ensure_debug_hotkeys(false) 后 action 被**删除**（不是留着不注册）")
+	var before_on := bool(dbg.call("is_overlay_on"))
+	var before_hidden := bool(dbg.call("is_ui_hidden"))
+	await _press_key(KEY_F3)
+	eq(bool(dbg.call("is_overlay_on")), before_on, "闸门关掉后按 F3 完全没反应")
+	await _press_key(KEY_F1)
+	eq(bool(dbg.call("is_ui_hidden")), before_hidden, "闸门关掉后按 F1 完全没反应")
+	InputSetup.ensure_debug_hotkeys(true)
+	ok(InputMap.has_action(InputSetup.ACTION_DEBUG_OVERLAY), "恢复闸门（后续用例不受影响）")
+
+	section("单一闸门：全项目只有 input_setup.gd 一处判断构建类型")
+	var gate_hits := _code_token_hits("res://scripts", "OS.is_debug_build")
+	ok(gate_hits.size() == 1, "OS.is_debug_build 在 res://scripts 的代码行里只出现 1 次（注释不算）",
+			"命中：%s" % [str(gate_hits)])
+	if gate_hits.size() > 0:
+		eq(String(gate_hits[0]["path"]), "res://scripts/core/input_setup.gd",
+				"闸门就在 input_setup.gd")
+		ok(String(gate_hits[0]["code"]).contains("ensure_debug_hotkeys"),
+				"那一行确实是把构建类型喂给 ensure_debug_hotkeys()")
+
+	section("确定性口径：环境量在确定性模式下不落盘（B- 逐位复现的前提）")
+	clock.call("set_deterministic", true, 60.0)
+	await process_frame
+	var row: Dictionary = dbg.call("sample_row")
+	eq(String(row.get("draw_calls", "x")), "", "确定性模式 draw_calls 留空")
+	eq(String(row.get("prims", "x")), "", "确定性模式 prims 留空")
+	eq(String(row.get("ms_process", "x")), "", "确定性模式 ms_process 留空")
+	eq(int(row.get("nodes", -1)), int(dbg.call("stats")["nodes"]),
+			"行里的节点数与 stats() 一致（同一份事实）")
+	# ⚠️ 本用例直接加载主场景，路由器的栈是空的（启动时主场景本来就由引擎直接加载，
+	# 不经 SceneRouter）——所以这里断言的是"字段与路由器同源"，而不是写死 world。
+	# 面板/CSV 不许自己发明一份场景事实。
+	var sr := get_root().get_node_or_null("SceneRouter")
+	eq(String(row.get("scene", "x")), String(dbg.call("scene_label")),
+			"CSV 的 scene 列与面板同源（标签只算一次）")
+	eq(String(dbg.call("stats")["route"]), String(sr.call("current_route")),
+			"stats().route 保留路由器的原值（不改写事实）")
+	eq(String(row.get("stack", "x")), ">".join(sr.call("route_stack")),
+			"CSV 的 stack 列 == 路由器的栈（自底向上、'>' 连接）")
+	eq(int(row.get("depth", -1)), int(sr.call("route_depth")), "depth 列 == route_depth()")
+	clock.call("set_deterministic", false, 60.0)
+	await process_frame
+	var row2: Dictionary = dbg.call("sample_row")
+	ok(String(row2.get("ms_process", "")) != "", "实时模式 ms_process 有真实值（C- 取证靠它）")
+	eq(int(row2.get("frame", -1)), 0, "实时模式 frame 不再前进（Clock 的既有契约）")
+
+	section("CSV：确定性模式下两个独立进程逐位一致")
+	var base := _opt_out.path_join("obs")
+	DirAccess.make_dir_recursive_absolute(base)
+	var csv_shas: Array = []
+	for label in ["a", "b"]:
+		var dir := base.path_join("det_" + String(label))
+		var csv := dir.path_join("obs.csv")
+		if FileAccess.file_exists(csv):
+			DirAccess.remove_absolute(csv)
+		var out: Array = []
+		var code := _exec_user(PackedStringArray(), PackedStringArray([
+			"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
+			"--obs-csv=" + csv, "--out=" + dir,
+		]), out)
+		eq(code, 0, "带 --obs-csv= 的截图批次 %s 退出码 = 0" % label)
+		ok(FileAccess.file_exists(csv), "批次 %s 写下了 CSV" % label)
+		csv_shas.append(FileAccess.get_sha256(csv) if FileAccess.file_exists(csv) else "")
+	ok(String(csv_shas[0]) != "" and String(csv_shas[0]) == String(csv_shas[1]),
+			"两份 CSV sha256 逐位一致（确定性模式下 CSV 是可复现证据）",
+			"A=%s B=%s" % [csv_shas[0], csv_shas[1]])
+	var det_lines := _read_lines(base.path_join("det_a").path_join("obs.csv"))
+	ok(det_lines.size() > 10, "CSV 有表头 + 每帧一行", "行数=%d" % det_lines.size())
+	if det_lines.size() > 0:
+		eq(String(det_lines[0]), "frame,t_s,dt_ms,scene,stack,depth,nodes,draw_calls,prims,ms_process",
+				"表头 == 脚本里的列定义（两边不许各写一份）")
+
+	section("--obs-csv= 是纯修饰符：单独出现不触发截图、不抢退出码")
+	var solo_dir := base.path_join("solo")
+	DirAccess.make_dir_recursive_absolute(solo_dir)
+	var solo_csv := solo_dir.path_join("solo.csv")
+	if FileAccess.file_exists(solo_csv):
+		DirAccess.remove_absolute(solo_csv)
+	var solo_out: Array = []
+	# ⚠️ 必须**窗口模式**：headless 用的是 dummy 渲染器，`RENDER_TOTAL_DRAW_CALLS_IN_FRAME`
+	# 恒为 0、`TIME_PROCESS` 也没有意义 —— 那样"列里有值"会退化成"列里是 0.000"，
+	# 断言看起来通过、证据其实全假（实测踩过一次）。
+	var solo_code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--obs-csv=" + solo_csv, "--quit-after=90",
+	]), solo_out, 400)
+	eq(solo_code, 0, "只带 --obs-csv= 的进程退出码 = 0（没有被截图批次抢走）")
+	ok(FileAccess.file_exists(solo_csv), "CSV 落盘")
+	var solo_lines := _read_lines(solo_csv)
+	ok(solo_lines.size() >= 60, "至少 60 帧数据", "行数=%d" % solo_lines.size())
+	var env_rows := 0
+	var draw_rows := 0
+	for i in range(1, solo_lines.size()):
+		var cols := String(solo_lines[i]).split(",")
+		if cols.size() < 10:
+			continue
+		if float(String(cols[9])) > 0.0:
+			env_rows += 1
+		if int(String(cols[7])) > 0:
+			draw_rows += 1
+	ok(env_rows >= 30, "实时模式 ms_process 列有**非零**实测值（C- 取证靠它）",
+			"ms_process>0 的行数=%d" % env_rows)
+	ok(draw_rows >= 30, "实时模式 draw_calls 列有非零实测值（证明是窗口模式真在渲染）",
+			"draw_calls>0 的行数=%d" % draw_rows)
+	ok(not _dir_has_json(solo_dir), "--obs-csv= 没有触发截图批次（该目录无任何清单）")
+
+	section("清理：状态复位，别把全局残留留给后面的用例")
+	dbg.call("set_overlay", false)
+	dbg.call("set_ui_hidden", false)
+	_restore_defaults()
+	InputSetup.ensure_debug_hotkeys(true)
+	main.queue_free()
+	await process_frame
+	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+
+
+## --- s0_4_cost ----------------------------------------------------------------
+## S0.4 批次 2：调试层的开销（`C-`）与 B- 像素证据。
+##
+## ① 开销：120 个真实 `MeshInstance3D`（`MeshUtil.blob()` + `Style.toon()`，含反向外壳
+##    描边）做夹具在场，**直接给叠加层自己的每帧工作计时**（`_push_sample()` 每帧 +
+##    `_refresh()` 每 6 帧），5 轮 × 400 帧取中位数，要求 < 0.5ms。
+##    为什么不量"开层/关层的帧时间差"：实测它在本工程没有分辨率 —— vsync 开着时差值
+##    是负的（关层 18.75 / 开层 17.84ms，量到的是 vsync 等待）；关掉 vsync 改逐帧墙钟后，
+##    注入确定的 2ms/帧 自旋负载只回收 41%（2.000 → 0.817）。这种断言叠加层再贵也会绿。
+##    另外附一条**标尺**：用同一口径注入 0.5ms / 2ms 自旋，回收率≈100%，证明 0.5ms
+##    这个阈值确实可分辨 —— 否则"< 0.5ms"是一句不可证伪的话。
+## ② 反向对照：开层后 `draw_calls` 必须真的上升 —— 否则"开销 < 0.5ms"可能只是
+##    "面板压根没画"。
+## ③ B-：两张截图（叠加层开 / 全隐藏）× 两轮独立进程逐位一致、两图不同；再用像素
+##    统计证明 F1 是**把 UI 从渲染里拿掉**：F1 后的图里 UI 面板的精确底色像素为 0，
+##    而有 HUD 的同机位基准图里它成千上万。这是"拿掉"与"调透明/盖一层"的分水岭。
+func _case_debug_cost() -> void:
+	await process_frame
+	var dbg := get_root().get_node_or_null("Debug")
+	var clock := get_root().get_node_or_null("Clock")
+	if not ok(dbg != null and clock != null, "Debug / Clock autoload 就位"):
+		return
+	_restore_defaults()
+	dbg.call("set_overlay", false)
+	dbg.call("set_ui_hidden", false)
+
+	section("夹具：120 个真实实体（MeshUtil.blob + Style.toon，含反向外壳描边）")
+	var main := await _load_main()
+	if not ok(main != null, "主场景可加载"):
+		return
+	var terrain := get_first_node_in_group("terrain")
+	var style := get_root().get_node_or_null("Style")
+	if not ok(terrain != null and style != null, "terrain / Style 就位"):
+		main.queue_free()
+		return
+	var holder := Node3D.new()
+	holder.name = "DebugCostEntities"
+	main.add_child(holder)
+	var mesh := MeshUtil.blob(0.45, 5, 7)
+	ok(mesh != null and mesh.get_surface_count() > 0, "夹具网格由 MeshUtil.blob() 生成（非 BoxMesh）")
+	var mat: ShaderMaterial = style.call("toon", {"tint": style.call("pal", "grass")})
+	ok(mat != null and mat.shader != null, "夹具材质由 Style.toon() 生成（带 3 阶梯度）")
+	var made := 0
+	for i in 120:
+		var mi := MeshInstance3D.new()
+		var gx := float(i % 12) - 5.5
+		var gz := float(int(i / 12)) - 5.0
+		var y := float(terrain.call("height_at", gx, gz))
+		mi.mesh = mesh
+		mi.material_override = mat
+		mi.position = Vector3(gx * 1.8, y + 0.7, gz * 1.8)
+		holder.add_child(mi)
+		made += 1
+	eq(made, 120, "120 个 MeshInstance3D 已挂到主场景")
+	for i in 20:
+		await process_frame   # 让网格上传/着色器编译/阴影贴图先稳定下来
+
+	section("量法：直接给叠加层的每帧工作计时（帧时间差在本工程没有分辨率）")
+	# 这一节是本用例最贵的一课，留作证据：
+	#  ① vsync 开着时"开层/关层帧时间差"是**负**的（关层 18.75 / 开层 17.84 ms）——
+	#    它量的是 vsync 等待与抖动，不是叠加层成本。
+	#  ② 关掉 vsync 改成逐帧墙钟后，注入一个确定的 2ms/帧 自旋负载，**只回收 41%**
+	#    （注入 2.000 量到 0.817）。即帧时间差对 0.5ms 量级既测不准也测不出。
+	#  ⇒ 断言"开层 < 0.5ms"若建立在帧时间差上，叠加层再贵也会绿（沉默的绿灯）。
+	#  改为把叠加层自己的每帧工作单独计时：`_push_sample()` 每帧、`_refresh()` 每
+	#  REFRESH_EVERY 帧，与 `_process()` 的真实节奏一致，成本可归因、不掺其它节点。
+	# vsync 仍要关：它不改变被测代码，但会让 CPU 空转等待，干扰同机其它测量。
+	var vsync_before := DisplayServer.window_get_vsync_mode()
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	for i in 10:
+		await process_frame
+
+	section("开销：叠加层每帧 CPU 成本 < 0.5ms（120 实体场景在场）")
+	dbg.call("set_overlay", true)
+	var ov_med: Array = []
+	var ov_max := 0.0
+	for r in 5:
+		var ms: float = _time_overlay_frame(dbg, 400)
+		ov_med.append(ms)
+		ov_max = maxf(ov_max, ms)
+	dbg.call("set_overlay", false)
+	var ov_sorted := ov_med.duplicate()
+	ov_sorted.sort()
+	var ov_use: float = float(ov_sorted[ov_sorted.size() / 2])
+	print("    · 叠加层每帧成本 5 轮：%s（中位数 %.4f ms，最大 %.4f ms）"
+			% [str(ov_med), ov_use, ov_max])
+	ge(ov_use, 0.0, "叠加层成本可测（%.4f ms/帧）" % ov_use)
+	ok(ov_use < 0.5, "叠加层每帧成本 %.4f ms < 0.5ms（§3.3 / §5 S0.4）" % ov_use,
+			"5 轮 %s" % str(ov_med))
+
+	section("灵敏度对照：这套计时能分辨 0.5ms 吗？")
+	# 一个计时器若连 0.5ms 的自旋都量不出来，用它判 0.5ms 就毫无意义。
+	# 这里用同一个 `Time.get_ticks_usec()` 口径注入已知量，验证回收率 ≈ 100%。
+	var probe_500: float = _spin_us(500)
+	var probe_2000: float = _spin_us(2000)
+	print("    · 标尺：注入 0.500 ms → 量到 %.4f ms；注入 2.000 ms → 量到 %.4f ms"
+			% [probe_500, probe_2000])
+	ok(probe_500 > 0.35, "0.5ms 量级可分辨（量到 %.4f ms）" % probe_500)
+	ok(probe_2000 > 1.6, "2ms 量级可分辨（量到 %.4f ms）" % probe_2000)
+	# 分辨率标定之后，"< 0.5ms" 才是一个**可证伪**的断言：真超标就会被量出来。
+	ok(ov_use < probe_500, "叠加层成本小于 0.5ms 标尺本身（%.4f < %.4f）" % [ov_use, probe_500])
+
+	section("反向对照：开层后 draw_calls 必须上升")
+	var draw_off: Array = []
+	var draw_on: Array = []
+	for b in 4:
+		var want_on := b % 2 == 1
+		dbg.call("set_overlay", want_on)
+		var m: Dictionary = await _sample_ms(60)
+		if want_on:
+			draw_on.append(float(m["draw_calls"]))
+		else:
+			draw_off.append(float(m["draw_calls"]))
+	dbg.call("set_overlay", false)
+	var mean_of := func(arr: Array) -> float:
+		var s := 0.0
+		for v in arr:
+			s += float(v)
+		return s / float(maxi(arr.size(), 1))
+	var dc_off: float = mean_of.call(draw_off)
+	var dc_on: float = mean_of.call(draw_on)
+	ok(dc_on > dc_off, "反向对照：开层后 draw_calls 上升（面板真的在画）",
+			"off=%.1f on=%.1f" % [dc_off, dc_on])
+	# 恢复 vsync：后面的 B- 截图用例跑在同一台机器上，渲染节奏不该被本用例改掉。
+	DisplayServer.window_set_vsync_mode(vsync_before)
+	for i in 10:
+		await process_frame
+	eq(DisplayServer.window_get_vsync_mode(), vsync_before, "vsync 模式已复原（不留全局副作用）")
+
+	section("B-：两张截图 × 两轮独立进程，逐位一致且互不相同")
+	var base := _opt_out.path_join("debug")
+	DirAccess.make_dir_recursive_absolute(base)
+	var shas := {}
+	for label in ["a", "b"]:
+		for case_id in ["s0_4_overlay", "s0_4_ui_hidden"]:
+			var dir := base.path_join("%s_%s" % [String(case_id), String(label)])
+			var out: Array = []
+			var code := _exec_user(PackedStringArray(), PackedStringArray([
+				"--shots", "--case=" + String(case_id), "--warmup=60", "--frames=15",
+				"--out=" + dir,
+			]), out)
+			eq(code, 0, "%s/%s 退出码 = 0" % [case_id, label])
+			var man := _read_json(dir.path_join(String(case_id) + ".json"))
+			var shots: Array = man.get("shots", [])
+			if ok(shots.size() == 1, "%s/%s 产出 1 张图" % [case_id, label],
+					"实际 %d" % shots.size()):
+				shas["%s/%s" % [String(case_id), String(label)]] = String(
+						shots[0].get("sha256", ""))
+	for case_id in ["s0_4_overlay", "s0_4_ui_hidden"]:
+		var ha := String(shas.get(String(case_id) + "/a", ""))
+		var hb := String(shas.get(String(case_id) + "/b", ""))
+		ok(ha != "" and ha == hb, "%s 两轮 sha256 逐位一致" % case_id, "A=%s B=%s" % [ha, hb])
+	ok(String(shas.get("s0_4_overlay/a", "")) != String(shas.get("s0_4_ui_hidden/a", "")),
+			"『叠加层开』与『全隐藏』必须不同（否则 F3 或 F1 根本没生效）")
+
+	section("B-：F1 是把 UI 从渲染里拿掉，而不是调透明度（像素证据）")
+	# 同机位、同 warmup/frames、同确定性时钟，唯一的差别就是 UI 在不在：
+	#   · `s0_boot_wide`  —— HUD 可见、调试层关闭（S0.4 之前的既有基线口径）
+	#   · `02_ui_hidden`  —— F3 开层后 F1 全隐藏
+	var ref_dir := base.path_join("boot_ref")
+	var ref_out: Array = []
+	var ref_code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
+		"--out=" + ref_dir,
+	]), ref_out)
+	eq(ref_code, 0, "基准批次（s0_boot，HUD 可见）退出码 = 0")
+	var ref_man := _read_json(ref_dir.path_join("s0_boot.json"))
+	var ref_shots: Array = ref_man.get("shots", [])
+	var ref_png := ref_dir.path_join("s0_boot_wide.png")
+	var ref_sha := ""
+	for s in ref_shots:
+		if String(s.get("name", "")) == "s0_boot_wide":
+			ref_sha = String(s.get("sha256", ""))
+	ok(ref_sha != "", "拿到同机位基准图的 sha256")
+	var hidden_png := base.path_join("s0_4_ui_hidden_a").path_join("02_ui_hidden.png")
+	var on_png := base.path_join("s0_4_overlay_a").path_join("01_overlay_on.png")
+	ok(FileAccess.file_exists(ref_png) and FileAccess.file_exists(hidden_png)
+			and FileAccess.file_exists(on_png), "三张 PNG 都在盘上")
+	ok(ref_sha != String(shas.get("s0_4_ui_hidden/a", "")),
+			"有 HUD 与 F1 全隐藏两张图**必须不同**（HUD 真的占了像素）")
+	# UI 面板底色（UiKit.PAPER #fff9e8）：3D 世界不用这个精确值（云是 #fffdf6、
+	# 奶油是 #fff3d6），所以"精确匹配计数"能干净地把 UI 从画面里区分出来。
+	var paper := Color("fff9e8")
+	var n_ref := _count_exact_color_px(ref_png, paper)
+	var n_hidden := _count_exact_color_px(hidden_png, paper)
+	var n_on := _count_exact_color_px(on_png, paper)
+	ok(n_ref > 0, "基准图里 UI 面板底色可见（%d 像素样本）" % n_ref)
+	ok(n_hidden == 0, "F1 后的图里 UI 面板底色 **0 像素**（UI 被拿掉，不是被调透明）",
+			"实测 %d" % n_hidden)
+	ok(n_on > n_ref, "开层后 UI 底色像素变多（调试面板自己也画出来了）",
+			"基准=%d 开层=%d" % [n_ref, n_on])
+
+	section("清理")
+	holder.queue_free()
+	await process_frame
+	main.queue_free()
+	await process_frame
+	_restore_defaults()
+	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+
+
 ## --- s0_3_state ---------------------------------------------------------------
 ## S0.3 批次 1：三个全局服务（Rng / EventBus / GameState）的契约。
 ## 本用例**只断言契约**，不验证存档往返（那是 s0_3_roundtrip 的事）。
@@ -1169,9 +1662,9 @@ func _case_state() -> void:
 		if nm.begins_with("autoload/"):
 			autoloads.append(nm.substr("autoload/".length()))
 	autoloads.sort()
-	var expected := ["Capture", "Clock", "EventBus", "GameState", "Rng", "SaveSystem",
-			"SceneRouter", "Style"]
-	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 8 个（批次 3 后 3 → 8）")
+	var expected := ["Capture", "Clock", "Debug", "EventBus", "GameState", "Rng",
+			"SaveSystem", "SceneRouter", "Style"]
+	eq(autoloads, expected, "project.godot 的 autoload 恰好是这 9 个（S0.4 批次 2 后 8 → 9）")
 	ok(autoloads.size() <= 10, "autoload 数量 %d ≤ 10（§3.2 上限）" % autoloads.size())
 
 	section("GameState 字段契约：SNAPSHOT_FIELDS == snapshot() 的键集")
@@ -2766,6 +3259,13 @@ func _restore_defaults() -> void:
 		# 所以"回到没有选中槽位"只能写回默认值。
 		ss.set("current_slot", 0)
 		ss.set("last_error", "")
+	# S0.4 批次 2：调试层也是"用例会改、下一个用例必须假设它是默认值"的全局事实
+	# （`s0_4_overlay` 会故意把调试热键的闸门关掉来验证发布门禁）。
+	var dbg := get_root().get_node_or_null("Debug")
+	if dbg != null:
+		dbg.call("set_overlay", false)
+		dbg.call("set_ui_hidden", false)
+	InputSetup.ensure_debug_hotkeys(OS.is_debug_build())
 
 
 ## 以子进程跑一个打桩用例并把 stdout 收回来。
@@ -2951,6 +3451,149 @@ func _read_json(path: String) -> Dictionary:
 	if parsed is Dictionary:
 		return parsed
 	return {}
+
+
+## 读文件为行数组（不存在的文件返回空数组）。CSV 断言用。
+func _read_lines(path: String) -> PackedStringArray:
+	if not FileAccess.file_exists(path):
+		return PackedStringArray()
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return PackedStringArray()
+	var txt := f.get_as_text()
+	f.close()
+	return txt.split("\n")
+
+
+func _dir_has_json(dir_path: String) -> bool:
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return false
+	for f in d.get_files_at(dir_path):
+		if String(f).to_lower().ends_with(".json"):
+			return true
+	return false
+
+
+## 只取"世界事实"字段。`game_time` / `playtime` **不能**进这个集合：它们本来就在走，
+## 拿它们当不变量样本会得到一条必然失败的断言（而那是用例的错，不是实现的错）。
+func _world_facts(gs: Node) -> Dictionary:
+	var snap: Dictionary = gs.call("snapshot")
+	var out := {}
+	for k in ["world_seed", "day_length", "party", "money", "food", "supply",
+			"scene_kind", "player_pos"]:
+		out[k] = snap.get(k)
+	return out
+
+
+## 每条已创建子流的内部状态。开关调试层若"顺手抽了个随机数"，这里必然变化。
+## 只遍历 `stream_names()` 再取 `stream()`，不会因为取值而**新建**子流。
+func _rng_states(rng: Node) -> String:
+	var names: Array = []
+	for n in (rng.call("stream_names") as PackedStringArray):
+		names.append(String(n))
+	names.sort()
+	var parts := PackedStringArray()
+	for n in names:
+		var gen: RandomNumberGenerator = rng.call("stream", String(n))
+		parts.append("%s=%d" % [String(n), gen.state])
+	return " ".join(parts)
+
+
+## 读调试面板上某个具名 Label 的正文（节点名在 `debug_layer.gd` 里固定）。
+func _debug_label(dbg: Node, label_name: String) -> String:
+	var l := dbg.get_node_or_null("DebugLayer/Root/Margin/Box/Panel/Col/" + label_name) as Label
+	return "" if l == null else l.text
+
+
+## 在目录树里找"代码行"（注释已剥离）中出现某 token 的位置。
+## `_strip_comment()` 是守卫用的同一个纯函数：注释里提到某个 API 不算"使用它"。
+func _code_token_hits(dir_path: String, token: String) -> Array:
+	var hits: Array = []
+	_code_token_walk(dir_path, token, hits)
+	return hits
+
+
+func _code_token_walk(dir_path: String, token: String, hits: Array) -> void:
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return
+	for sub in d.get_directories_at(dir_path):
+		_code_token_walk(dir_path.path_join(sub), token, hits)
+	for fname in d.get_files_at(dir_path):
+		if fname.get_extension().to_lower() != "gd":
+			continue
+		var p := dir_path.path_join(fname)
+		var fa := FileAccess.open(p, FileAccess.READ)
+		if fa == null:
+			continue
+		var lines := fa.get_as_text().split("\n")
+		fa.close()
+		for i in lines.size():
+			var code := _strip_comment(String(lines[i]), "gd")
+			if code.contains(token):
+				hits.append({"path": p, "line": i + 1, "code": code.strip_edges()})
+
+
+## 采样 `frames` 帧的**墙钟**耗时（毫秒）+ 平均 draw_calls / primitives。
+## 中位数是主判据：偶发一次 OS 调度或 GC 会把均值抬高，而那不是被测对象的成本。
+##
+## 为什么**不**用 `Performance.TIME_PROCESS`（本文件第二次被它坑）：
+## 实测（2026-10-19）它在 vsync 开启时量到的是"vsync 等待 + 抖动"（关层 18.75 /
+## 开层 17.84 ms ⇒ 差值为**负**），关掉 vsync 后又量化成 78.58 / 6.204 两个离散值 ——
+## 挂一个确定的 2ms/帧 负载上去，它给出 6.204，比空载还低。即这个监视器在本工程里
+## 对 0.5ms 量级**没有分辨率**，拿它写 `C-` 断言，叠加层再贵也会绿。
+## 改为直接量墙钟：`Time.get_ticks_usec()` 包住每一帧再除以帧数。`tools/**` 不在守卫
+## `unfreezable_time` 的扫描范围内（它只管 `res://scenes|scripts|shaders`），这里的墙钟是
+## **测量**、不是被渲染的时间源，不影响截图可复现性。vsync 必须先关掉，否则量到的
+## 仍是 16.7ms 的封顶而不是真实成本。
+func _sample_ms(frames: int) -> Dictionary:
+	var vals: Array = []
+	var draw_sum := 0.0
+	var prim_sum := 0.0
+	# 预热 2 帧：第一帧还带着上一段的状态切换开销，计进去会污染单帧样本。
+	for i in 2:
+		await process_frame
+	for i in frames:
+		var t0 := Time.get_ticks_usec()
+		await process_frame
+		vals.append(float(Time.get_ticks_usec() - t0) / 1000.0)
+		draw_sum += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
+		prim_sum += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
+	var sorted_vals := vals.duplicate()
+	sorted_vals.sort()
+	var n := sorted_vals.size()
+	var denom := float(maxi(n, 1))
+	var mean := 0.0
+	for v in vals:
+		mean += float(v)
+	return {
+		"median": float(sorted_vals[n / 2]) if n > 0 else 0.0,
+		"mean": mean / denom,
+		"max": float(sorted_vals[n - 1]) if n > 0 else 0.0,
+		"draw_calls": draw_sum / denom,
+		"prims": prim_sum / denom,
+	}
+
+
+## 统计 PNG 里"精确等于某颜色"的像素数。先降采样到 400×225（最近邻 = 只挑真实像素，
+## 不插值），每个色块仍留有成百上千个样本；全图 1.44M 像素 × 3 张在 GDScript 里要好几秒，
+## 而这里要回答的问题只是"这个颜色还在不在画面上"。文件不存在返回 -1（区别于 0）。
+func _count_exact_color_px(png_path: String, col: Color) -> int:
+	if not FileAccess.file_exists(png_path):
+		return -1
+	var img := Image.load_from_file(png_path)
+	if img == null:
+		return -1
+	img.resize(400, 225, Image.INTERPOLATE_NEAREST)
+	img.convert(Image.FORMAT_RGBA8)
+	var want := col.to_rgba32()
+	var n := 0
+	for y in 225:
+		for x in 400:
+			if img.get_pixel(x, y).to_rgba32() == want:
+				n += 1
+	return n
 
 
 ## =============================================================================
