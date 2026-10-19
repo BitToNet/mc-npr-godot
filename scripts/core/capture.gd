@@ -7,6 +7,7 @@ extends Node
 ##   Godot --path . -- --shots --case=s0_boot --frames=24 --warmup=60
 ##   Godot --path . -- --shots --case=s0_boot --clock-hz=30   # 时钟步长
 ##   Godot --path . -- --shots --case=s0_boot --realtime      # 关掉可复现性
+##   Godot --path . -- --shots --scene=res://<场景>.tscn   # S1.0b 指定取景场景
 ##
 ## Writes PNGs into res://.shots/ then quits, so the art direction can be
 ## reviewed as real rendered frames instead of guesses.
@@ -33,6 +34,17 @@ extends Node
 ## because `tools/verify.gd` uses the same `--case=` / `--out=` names for the
 ## acceptance runner; otherwise a verify subprocess would additionally launch a
 ## screenshot batch whose `quit(1)` clobbers the runner's exit code.
+##
+## S1.0b — `--scene=res://…` 指定**拍哪个场景**（缺省 = `run/main_scene`）。与
+## `--case=` / `--out=` 同级，是**纯修饰符**：单独出现不触发截图，也不抢退出码。
+## 具体命令写在 `docs/ENGINEERING.md` §4，本文件**不写死**那条路径 —— 产品码里出现
+## `scenes/dev/` 会被 `s0_5_doc_conventions` 的登记表拦下（只给 SceneRouter 留一个例外），
+## 这条门禁的用处正是"夹具场景别漏进正式构建"，不该为了抄一个路径就放宽它。
+## 实现见 `_swap_scene()`：手动换 `SceneTree.current_scene`，不调
+## `change_scene_to_*()`（`scene_change_owner` 只放行 `SceneRouter`，ROADMAP §3.2），
+## 也不去改 `run/main_scene`（实测引擎取该路径早于 autoload，改了不生效）。
+## `_swap_scene()` 里四条自证 + 路径先验都成立才继续，否则退出码 1 ——
+## 绝不静默拍成默认场景（那会让 `B-` 变成"另一张也对得上基线"的假通过）。
 
 ## Named batch table.  "default" must stay identical to the historic 6-shot run
 ## so existing art-regression baselines keep comparing apples to apples.
@@ -155,6 +167,8 @@ var _frames := 10
 var _warmup := 40
 var _realtime := false
 var _clock_hz := 60.0
+## S1.0b — `--scene=` 的值；空串表示"用 `run/main_scene`"。
+var _scene_override := ""
 
 
 func _ready() -> void:
@@ -212,6 +226,9 @@ func _ready() -> void:
 			_out_dir = a.split("=", true, 1)[1]
 		elif a.begins_with("--case="):
 			_case_name = a.split("=", true, 1)[1]
+		elif a.begins_with("--scene="):
+			# S1.0b — 取景场景。纯修饰符：不置 want（理由见文件头）。
+			_scene_override = a.split("=", true, 1)[1]
 		elif a.begins_with("--frames="):
 			_frames = a.split("=", true, 1)[1].to_int()
 		elif a.begins_with("--warmup="):
@@ -227,6 +244,12 @@ func _ready() -> void:
 			_quit = false
 	if not want:
 		set_process(false)
+		return
+	# S1.0b — 换场景**只在这一批真的要截图时**发生：只带 `--scene=` 的进程必须跟
+	# `--case=` / `--out=` 一样是空转（见文件头 trigger vs modifier）。
+	# 路径先验一遍：拼错必须在建任何东西、拍任何图之前就失败。
+	if _scene_override != "" and not _scene_arg_ok():
+		get_tree().quit(1)
 		return
 	if _case_name != "" and not CASES.has(_case_name):
 		# A silent fallback to the default batch would make a mistyped case name
@@ -248,7 +271,80 @@ func _ready() -> void:
 	call_deferred("_run")
 
 
+## S1.0b — `--scene=` 的路径先验（只验路径，不动场景）。
+func _scene_arg_ok() -> bool:
+	if not _scene_override.begins_with("res://"):
+		printerr("[capture] --scene= 只接受 res:// 路径，实际 '", _scene_override, "'")
+		return false
+	if not ResourceLoader.exists(_scene_override):
+		printerr("[capture] --scene='", _scene_override, "' 指向的场景不存在")
+		return false
+	return true
+
+
+## 当前真正加载的场景路径（未就绪时返回空串，绝不猜）。
+func _loaded_scene_path() -> String:
+	var cur := get_tree().current_scene
+	return "" if cur == null else cur.scene_file_path
+
+
+## S1.0b — 换成 `--scene=` 指定的场景，并自证换成了。
+##
+## 为什么不是 `change_scene_to_file()`：`scene_change_owner` 守卫只放行 `SceneRouter`
+## （ROADMAP §3.2），把 capture 加进属主清单等于给规则开后门 —— 而这条规则的用处正是
+## "切场景只能有一个入口"。这里做的是**取景工具换夹具**，不是游戏内转场，所以走
+## `SceneTree` 的公开成员手动换，且不改 `current_route`（那是 SceneRouter 的事实）。
+##
+## 为什么不是改 `run/main_scene` 让引擎一开始就加载它：**实测无效**。引擎在 autoload
+## 的 `_ready()` 之前就把主场景路径取走了，改设置只影响下一次开机；`--scene=<非默认场景>`
+## 因此会安静地加载默认场景。这条路已废弃，别回头捡。
+##
+## 顺序是硬要求：`add_child()` 会同步跑新场景的 `_ready()`（世界立刻建好），旧场景
+## 必须**同步** `free()` 掉 —— 不能 `queue_free()` 再 `await` 一帧：世界动画是**增量
+## 积分**（`clouds.gd` 的 `c.position.x += drift * Clock.dt`），多跑一帧就等于把云往前
+## 推一步，"`--scene=` 与缺省逐位相同"立刻不成立。实测踩过：只差这一帧，两张图肉眼
+## 一模一样、sha256 全不同。
+##
+## 也因为不 await，旧场景必须在 `free()` 之前把 `current_scene` 让出去，否则树里会留一个
+## 指向已释放对象的当前场景。
+func _swap_scene() -> bool:
+	var ps := load(_scene_override) as PackedScene
+	if ps == null:
+		printerr("[capture] --scene='", _scene_override, "' 不是可加载的 PackedScene")
+		return false
+	var old := get_tree().current_scene
+	var inst := ps.instantiate()
+	get_tree().root.add_child(inst)
+	get_tree().current_scene = inst
+	if old != null:
+		old.free()
+	# 自证四条，缺一条就说明"拍的还是原来那个场景"：
+	#   ① 当前场景就是新实例   ② 新实例路径就是要求的那个
+	#   ③ 旧场景真的没了       ④ 组里最多一台相机（不是新旧各一台）
+	if get_tree().current_scene != inst:
+		printerr("[capture] --scene='", _scene_override, "' 没有接管 current_scene")
+		return false
+	if inst.scene_file_path != _scene_override:
+		printerr("[capture] 新场景路径 '", inst.scene_file_path, "' != '", _scene_override, "'")
+		return false
+	if old != null and is_instance_valid(old):
+		printerr("[capture] 旧场景没有被释放，取景会抓到两台相机")
+		return false
+	var rigs := get_tree().get_nodes_in_group("camera_rig")
+	if rigs.size() > 1:
+		printerr("[capture] 场景换了但相机组里还有 ", rigs.size(), " 台")
+		return false
+	return true
+
+
 func _run() -> void:
+	# S1.0b — 换场景必须在 `Clock.set_deterministic()` **之前**，而且**不额外消耗帧**：
+	# 之后的确定性时钟会把 t/frame 归零，所以"换场景"与"缺省开机"两条路径在快门之前
+	# 走过的帧数与 dt 序列完全相同 —— `--scene=` 的哈希组与缺省逐位相同靠的是这个，
+	# 不是容差。
+	if _scene_override != "" and not _swap_scene():
+		get_tree().quit(1)
+		return
 	DirAccess.make_dir_recursive_absolute(_out_dir)
 	# S0.6 — reproducibility contract.  Captures run on the deterministic clock by
 	# default so that the same case twice produces byte-identical PNGs; the warm-up
@@ -314,6 +410,9 @@ func _write_manifest(manifest: Array) -> void:
 		"godot": Engine.get_version_info()["string"],
 		"started_at": Time.get_datetime_string_from_system(),
 		"out_dir": _out_dir,
+		# S1.0b — 清单自报"拍的是哪个场景"。少了这一条，一张图和它的 `--scene=`
+		# 参数之间就没有可核对的锚点，"指定场景"只能靠调用方自觉。
+		"scene": _loaded_scene_path(),
 		"warmup_frames": _warmup,
 		"settle_frames": _frames,
 		# S0.6: without this the manifest cannot tell a reproducible capture from a

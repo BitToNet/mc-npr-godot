@@ -1,7 +1,7 @@
 # Pocket Sandbox 玩法扩展规划（ROADMAP）
 
-> **文档版本**：v1.9 · 2026-10-19（版本变更一律登记在 §16）
-> **状态**：执行中 · M0 全部闭环（S0.1–S0.6 已验收）；**M1 进行中**（S1.0a ✅，S1.0b–d 待做）
+> **文档版本**：v2.0 · 2026-10-19（版本变更一律登记在 §16）
+> **状态**：执行中 · M0 全部闭环（S0.1–S0.6 已验收）；**M1 进行中**（S1.0a ✅ / S1.0b ✅，S1.0c–d 待做）
 > **性质**：本文是本项目玩法扩展的**唯一计划来源与验收台账**（single source of truth）。
 > 实现过程中的任何偏差、新增、删减，必须先回到本文更新，再动代码。
 > **目标定位**：中型商用游戏项目（Windows 桌面）。
@@ -843,7 +843,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 子步 | 动作 | 验收 | 状态 |
 |---|---|---|---|
 | S1.0a | `scenes/main.tscn` → `scenes/dev/diorama.tscn`（只改路径引用与 `run/main_scene`） | 6 机位 sha256 **仍逐位等于** `docs/ENGINEERING.md` §4 基线（证明"搬文件不改像素"） | ✅ 已完成（2026-10-19） |
-| S1.0b | `capture.gd` 支持 `--scene=res://…`（缺省仍是主场景） | 同参数两次独立进程截图 sha256 相同；`--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 | ⏳ 未开始 |
+| S1.0b | `capture.gd` 支持 `--scene=res://…`（缺省仍是主场景） | 同参数两次独立进程截图 sha256 相同；`--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 | ✅ 已完成（2026-10-19） |
 | S1.0c | 路由表加 `strategic`（新增空场景 `scenes/world/strategic_map.tscn`，`world` 暂时仍指 diorama） | `s0_3_router` 改断言后全绿；新增 `s1_0_routes`（表条目 / 路径存在 / `MAX_DEPTH` 不变 / 拒绝不改状态） | ⏳ 未开始 |
 | S1.0d | `world` 改指 `strategic_map.tscn`；diorama 降为仅供回归与取景 | 6 机位改为 `--scene=res://scenes/dev/diorama.tscn` 的**专用批次**（`.shots/diorama_*`）；新增 `s1_0_migration`（路由 → 文件 → 场景根类三者一致） | ⏳ 未开始 |
 
@@ -869,8 +869,21 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | `A-` 全量 | 窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0；headless `--all` 20 用例 / 0 失败 / 5 跳过（headed 用例按设计跳过）、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING` |
 | 附带修掉 | `s0_5_doc_conventions` 的"产品码不得引用 `dev/`"从零容忍改为**登记清单**：`scenes/dev/` 现允许 `scene_router.gd` 一处（S1.0d 后自然收紧回 0），并加反向对照证明清单不是恒真 |
 
+**S1.0b 落地与验收记录（2026-10-19）**
+
+| 项 | 结果 |
+|---|---|
+| 改动 | `scripts/core/capture.gd`：新增 `--scene=res://…`（**纯修饰符**，缺省仍取 `run/main_scene`）；`_swap_scene()` 换掉 `SceneTree.current_scene` 并自证四条（新实例接管 / 路径一致 / 旧场景已释放 / 相机组最多 1 台），任一不成立即退出码 1；截图清单新增 `scene` 字段自报"拍的是哪个场景" |
+| 为什么不用 `change_scene_to_*` | `scene_change_owner` 守卫只放行 `SceneRouter`（§3.2）。这里做的是**取景工具换夹具**，不是游戏内转场 —— 走 `SceneTree` 公开成员手动换，且不动 `current_route`；`s1_0_scene_arg` 反向断言 `SCENE_CHANGE_OWNERS` 仍只有 1 个属主、`capture.gd` 不在其中 |
+| `A-` 同参两次进程 | `--scene=res://scenes/dev/diorama.tscn` 两次独立进程各 2 张图：sha256 互等，且**与缺省批次逐位相同**（`10e29e93…` / `d56ada81…`） |
+| `A-` 反向对照 | 换成 `res://scenes/battle/battle_stub.tscn` 后 2 张图哈希**全变**（`79b0610b…`），清单 `scene` 同步改为该路径 —— 证明 `--scene=` 真的生效，而不是"缺省恰好也是它"的假绿 |
+| `A-` 新用例 | `s1_0_scene_arg` **32 断言 / 22442ms / PASS**（headed） |
+| `A-` 全量 | 窗口 `--all` **21 用例 / 0 失败 / 0 跳过 / 889 断言 / 131s**、退出码 0；headless `--all` 21 用例 / 0 失败 / 6 跳过（headed 用例按设计跳过）、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING` |
+| `B-` 6 机位 | 改完 `capture.gd` 后另跑两条独立进程（`.shots/s10b_cam_a` / `s10b_cam_b`），**6/6 仍与 `docs/ENGINEERING.md` §4 基线逐位相等** —— 默认路径一个字节都没动 |
+| 两个坑 | ① **改 `run/main_scene` 无效**：引擎在 autoload `_ready()` 之前就把主场景路径取走了，`--scene=<非默认场景>` 会静默加载默认场景；而自证若只比"当前场景 == 要求"，在指定值恰为默认场景时会**空洞通过** —— 这是本步最危险的假绿形状（`battle_stub` 反向对照就是专门防它的）。② **多等一帧足以毁掉逐位一致**：云是增量积分（`position.x += drift * Clock.dt`），`queue_free()` 后 `await process_frame` 会把云往前推一步，两张图肉眼一模一样、sha256 全不同 |
+
 **依赖与风险**：M0 全部。风险：一步同时动三处事实源 ⇒ 拆 4 子步、每步独立提交，任一步红即 `git revert` 该步，**不"边修边推进"**。
-**状态**：🚧 进行中（S1.0a ✅ / S1.0b–d ⏳）
+**状态**：🚧 进行中（S1.0a ✅ / S1.0b ✅ / S1.0c–d ⏳）
 
 ### S1.1 世界数据模型与程序化生成
 
@@ -1851,7 +1864,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| S1.0 | 场景与路由迁移 | M0 | 🚧 进行中 | **S1.0a ✅ 2026-10-19**（提交 `419785f`）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b–d ⏳ 未开始** |
+| S1.0 | 场景与路由迁移 | M0 | 🚧 进行中 | **S1.0a ✅ 2026-10-19**（提交 `419785f`）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b ✅ 2026-10-19**（提交 `待补`）：`capture.gd` 新增 `--scene=res://…` —— **纯修饰符**（与 `--case=`/`--out=` 同级，单独出现不触发批次也不抢退出码），`_swap_scene()` 手动换 `SceneTree.current_scene`（不碰 `change_scene_to_*`，属主仍只有 `SceneRouter`）并四条自证（新实例接管 / 路径一致 / 旧场景已释放 / 相机组 ≤1 台），任一不成立退出码 1；截图清单新增 `scene` 字段自报拍摄场景。证据：新用例 `s1_0_scene_arg` **32 断言 / 22.4s / PASS**（headed）——`--scene=diorama` 两次独立进程 × 2 图 sha256 互等**且与缺省逐位相同**（`10e29e93…` / `d56ada81…`），反向对照 `--scene=battle_stub` 2 图哈希全变（`79b0610b…`）、坏路径退出码 1、`--scene=` 独走不写清单；改完 `capture.gd` 后另跑两条独立进程，`B-` **6/6 仍与 §4 基线逐位相等**（默认路径零改动）；窗口 `--all` **21 用例 / 0 失败 / 0 跳过 / 889 断言 / 131s**、退出码 0。两个坑记在 §5：改 `run/main_scene` 对本次开机**无效**（引擎取路径早于 autoload，且自证会空洞通过）；`queue_free()` 后多等一帧会让云的增量积分前移一步 ⇒ 逐位一致立刻破产。**S1.0c–d ⏳ 未开始** |
 | S1.1 | 世界数据模型与程序化生成 | S1.0 | ⏳ 未开始 | — |
 | S1.2 | 战略地图场景与镜头 | S1.1 | ⏳ 未开始 | — |
 | S1.3 | 队伍棋子与移动 | S1.2 | ⏳ 未开始 | — |
@@ -1979,6 +1992,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 2026-10-19 | **v1.7 → v1.8：纳入 `docs/骑砍数据反推/` 六册作为 M1 设计输入；并修掉 §16 表内 3 处空行**。① 新增 §6 M1 开头的「设计参考」引用块：六册是《战团》Native 模块的逆向文档（编译脚本字节码 + 数据表 + `mb_warband.exe` 反编译），自带 **【实证】/【推断】/【未解】** 三级标签；明确其为**设计输入而非本项目规范**，只借结构与量级、不照抄数值，【未解】项不得填数。② 落地引用点写明是 S1.1 的 `data/world/gen_params.json` 初值与 `Canon` 钳制告警口径。③ 六册共 6 文件 / 460,554 字节 / 6,563 行，单独一个 `docs` 提交入库（不与代码改动混提） | 用户 2026-10-19 指示："`docs/骑砍数据反推`，是我反编译骑砍的代码反推出来的玩法和数值设计相关文档，可以作为大地图设计的参考。" 三级证据标签与本项目"不猜测"的验收文化同源，故正式登记为 M1 输入 | 用户 |
 | 2026-10-19 | **§16 表内 3 处空行修正**（格式缺陷，非内容变更）：v1.4→v1.5、v1.6→v1.7、v1.5→v1.6 三行之间各有 1 个空行，会把 Markdown 表格截断成 4 张独立表格。成因是 v1.7 那次"两行被合并成一行"的修复：拆分时在边界处留下了空行 | 复核 §16 表格时按行打印长度发现（`len=0` 夹在数据行之间）。**教训**：表格类编辑修完必须回读**相邻行**，只验证"被改的那行"看不出表格已被截断 | 自查（S1.0a 准备阶段） |
 | 2026-10-19 | **v1.8 → v1.9：S1.0a 落地并闭环（搬场景不改像素）**。① `git mv scenes/main.tscn scenes/dev/diorama.tscn`，Git 判定 **100% 相似度重命名**（场景内容零改动）；② 三处事实源 + 两处工具同步换路径：`project.godot` 的 `run/main_scene`、`SceneRouter.SCENES[world]`、`tools/baseline.gd`、`tools/verify.gd::_load_main()`，注释里的旧路径一并更新；③ `s0_3_router` 由 70 → **73 断言**，新增「`run/main_scene` == `scene_path_for("world")` == 文件真实存在」——把过去靠 `git diff` 人工核对的约定变成机器判定（三处漏一处即红）；④ `s0_5_doc_conventions` 的「产品码不得引用 `dev/`」由零容忍改为**登记清单**：`scenes/dev/` 允许 `scene_router.gd` 一处（S1.0d 后自然收紧回 0），并加反向对照证明清单不是恒真；⑤ §5 S1.0 子步表由 3 列补为 **4 列**（原先 S1.0a 行末尾多挂一个单元格，整表渲染错位）；⑥ §15 台账 S1.0 置 `🚧 进行中`（a ✅ / b–d ⏳），头部版本 v1.8 → v1.9 | `B-` 是"搬文件不改像素"的唯一硬证据：重采 `.shots/s10a_post`，**6/6 sha256 与 `ENGINEERING.md` §4 基线逐位相等**；窗口 `--all` **20 用例 / 0 失败 / 0 跳过**、headless 20 / 0 失败 / 5 跳过，均退出码 0 | 用户（本会话四问四答，均取推荐项：只收尾 S1.0a / 窗口全量校验 + 重采 6 机位 / 单个提交 / 两处缺陷同批修） |
+| 2026-10-19 | **v1.9 → v2.0：S1.0b 落地并闭环（`--scene=` 指定取景场景）**。① `scripts/core/capture.gd` 新增 `--scene=res://…`，定位为**纯修饰符**（与 `--case=` / `--out=` 同级：单独出现不触发批次、不抢退出码）；② `_swap_scene()` 手动换 `SceneTree.current_scene`（不调 `change_scene_to_*` —— `scene_change_owner` 属主仍只有 `SceneRouter`），并四条自证：新实例接管 / 新实例路径 == 要求 / 旧场景已释放 / 相机组最多 1 台，任一不成立退出码 1；③ 截图清单新增 `scene` 字段自报拍摄场景（图与参数可对账）；④ 新增用例 `s1_0_scene_arg` **32 断言**（headed）：缺省 / `--scene=diorama` ×2 / `--scene=battle_stub` 四个独立进程 + 坏路径退出码 1 + `--scene=` 独走不写清单 + `SCENE_CHANGE_OWNERS` 仍只有 1 个属主；⑤ §5 S1.0b 行置 ✅ 并补落地记录（含两个坑）；⑥ `docs/ENGINEERING.md` §4 基线命令补 `--scene=` 写法并声明"两种写法同一组哈希"；⑦ §15 台账 S1.0 置 `🚧 进行中（a✅ / b✅ / c–d ⏳）`，头部版本 v1.9 → v2.0 | `A-` `--scene=diorama` 两次独立进程 × 2 图 sha256 **互等且与缺省逐位相同**；`A-` 反向对照 `--scene=battle_stub` 2 图哈希**全变**；`B-` 改完 `capture.gd` 后另跑两条独立进程，6 机位 **6/6 仍与 §4 基线逐位相等**；窗口 `--all` **21 用例 / 0 失败 / 0 跳过**、headless 21 / 0 失败 / 6 跳过，均退出码 0 | 用户 2026-10-19 指示"接着做"（S1.0a 已闭环，按 §5 子步表推进 S1.0b） |
 
 ## 附录 A：本规划对现有代码的改动面预估
 
@@ -1992,6 +2006,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | `scripts/input_setup.gd` | 扩展为「大地图 / 战斗 / 指挥」三套上下文 binding | S0.4、S2.2、S4.5 |
 | `scripts/style.gd` | 仅新增调色板项与少量材质参数，**不重构** | 全程 |
 | `scripts/capture.gd` | 扩展 `--case=` 批量案例表与截图清单 JSON；**触发条件收紧**：仅 `--shots`/`--shot=`/`--capture`/`--bench` 才启动截图批次，`--case=`/`--out=` 降为修饰符（避免与 verify 抢占退出码） | S0.2（已完成） |
+| `scripts/capture.gd`（续） | **S1.0b 新增 `--scene=res://…`**（纯修饰符，缺省取 `run/main_scene`）：`_swap_scene()` 手动换 `SceneTree.current_scene` + 四条自证，清单新增 `scene` 字段。**不扩 `scene_change_owner` 属主**。S1.0d 之后这条参数成为 diorama 回归批次的唯一入口 | **S1.0b ✅**、S1.0d |
 | `scripts/ui_panel.gd` | 保留为调试面板；新 UI 抽取公共控件工厂 | S0.4、S1.5 |
 | `scripts/ui/menu_page.gd`、`scripts/ui/save_grid.gd`（新增） | 游戏内菜单页与 3×3 宫格组件（§3.5）；S0.4 在其上加调试入口、S6.3 在其上加槽位管理（删除/多分辨率） | S0.3 ✅、S0.4、S6.3 |
 | `scenes/main.tscn` → **`scenes/dev/diorama.tscn`** | 挂载 `MenuLayer`（默认隐藏）；**S1.0a 换路径**，S1.2 起不再是主场景；`world_seed` 与两套时钟的收编改到战略图入口 | S0.3 ✅、**S1.0**、S1.2 |

@@ -123,6 +123,12 @@ const CASES := {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
 	},
+	"s1_0_scene_arg": {
+		"desc": "capture.gd 的 --scene=res://…：同参两次独立进程逐位一致；--scene=diorama 的哈希组与缺省"
+				+ "完全相同；反向对照（换 battle_stub）哈希必变；清单自报 scene；坏路径退出码 1；"
+				+ "只带 --scene= 不触发批次也不抢退出码；守卫属主清单没有放宽",
+		"kind": "headed",
+	},
 	"s0_4_overlay": {
 		"desc": "调试观测层契约：叠加层默认隐藏、F3/F1 只改观测不改世界（结构指纹+Rng 状态逐项不变）、"
 				+ "F1 后画面与『无 UI』基线逐位相同、发布构建热键闸门真的删 action、CSV 两进程逐位一致且 --obs-csv= 不触发截图",
@@ -544,6 +550,8 @@ func _dispatch(id: String) -> void:
 			await _case_clock()
 		"s0_6_repro":
 			await _case_repro()
+		"s1_0_scene_arg":
+			await _case_scene_arg()
 		"s0_4_overlay":
 			await _case_overlay()
 		"s0_4_cost":
@@ -1221,6 +1229,106 @@ func _case_repro() -> void:
 	# 同 warmup=60/frames=15 的基准量 t=1.5s；这里 frames=200 -> t=3.667s
 	ok(live_sha != base_sha,
 			"帧数 15 -> 200 后图像不同（render_time 真的在驱动风摆/水波）")
+
+
+## --- s1_0_scene_arg ------------------------------------------------------------
+## S1.0b：`capture.gd` 的 `--scene=res://…`（ROADMAP §5 S1.0b）。
+##
+## 验收原文两条，这里逐条落到进程上：
+##   ① 同参数两次独立进程截图 sha256 相同 —— 说明 `--scene=` 是确定性通道；
+##   ② `--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 ——
+##      说明"换场景"没有顺带改变像素。②特别值钱：它同时证明了"世界生成是种子的纯
+##      函数"以及"换场景没有多跑一帧"（云是增量积分，多一帧哈希就变，实测踩过）。
+##
+## 另外三条防"假绿"，缺一条这个用例就只是自娱自乐：
+##   ③ **反向对照**：换一个真不一样的场景（`battle_stub`）哈希必须变 ——
+##      否则 `--scene=` 可能完全没生效，而 ② 仍然"通过"（因为默认场景恰好也是
+##      diorama）。这条是本用例的命门，曾经用"改 `run/main_scene`"实现时正是这样
+##      假绿的（引擎取该路径早于 autoload，改了不生效，见 capture.gd `_swap_scene`）。
+##   ④ **清单自报场景**：manifest 的 `scene` 字段 == 实际加载的路径，图与参数可对账。
+##   ⑤ **失败要显式**：路径不存在 / 非 `res://` 一律退出码 1；只带 `--scene=` 不加
+##      `--shots` 时必须是空转（退出码 0、不写清单），否则它会抢掉验收运行器的退出码。
+func _case_scene_arg() -> void:
+	await process_frame
+	var base := _opt_out.path_join("scene_arg")
+	DirAccess.make_dir_recursive_absolute(base)
+	var dio := "res://scenes/dev/diorama.tscn"
+	var battle := "res://scenes/battle/battle_stub.tscn"
+	var shot_args := PackedStringArray([
+		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
+	])
+	var runs := {
+		"default": PackedStringArray(),
+		"scene_a": PackedStringArray(["--scene=" + dio]),
+		"scene_b": PackedStringArray(["--scene=" + dio]),
+		"battle": PackedStringArray(["--scene=" + battle]),
+	}
+	var shas := {}
+	var scenes := {}
+
+	section("四个独立进程：缺省 / --scene=diorama ×2 / --scene=battle")
+	for label in runs.keys():
+		var out_dir := base.path_join(String(label))
+		var extra: PackedStringArray = shot_args.duplicate()
+		extra.append_array(runs[label])
+		extra.append("--out=" + out_dir)
+		var out: Array = []
+		var exit_code := _exec_user(PackedStringArray(), extra, out)
+		eq(exit_code, 0, "批次 %s 退出码 = 0" % label)
+		var man := _read_json(out_dir.path_join("s0_boot.json"))
+		ok(not man.is_empty(), "批次 %s 写出了清单" % label)
+		scenes[label] = String(man.get("scene", ""))
+		var per: Dictionary = {}
+		for s in man.get("shots", []):
+			per[String(s.get("name", ""))] = String(s.get("sha256", ""))
+		shas[label] = per
+		eq(per.size(), 2, "批次 %s 产出 2 张图" % label)
+
+	section("清单自报场景：图与 --scene= 参数可对账（⑤ 的一半）")
+	eq(String(scenes.get("default", "")), dio, "缺省批次的 scene == run/main_scene")
+	eq(String(scenes.get("scene_a", "")), dio, "--scene=diorama 批次的 scene == 指定路径")
+	eq(String(scenes.get("battle", "")), battle, "--scene=battle 批次的 scene == 指定路径")
+
+	section("② --scene=diorama 的哈希组与缺省逐位相同")
+	for name in ["s0_boot_follow", "s0_boot_wide"]:
+		var h_def := String(shas.get("default", {}).get(name, ""))
+		var h_a := String(shas.get("scene_a", {}).get(name, ""))
+		var h_b := String(shas.get("scene_b", {}).get(name, ""))
+		ok(h_def != "" and h_a != "" and h_b != "", "%s 三个批次都拿到了 sha256" % name)
+		eq(h_a, h_def, "%s：--scene=diorama == 缺省（换场景没有顺带改像素）" % name)
+		eq(h_b, h_def, "%s：同参数第二次独立进程 == 缺省（① 确定性）" % name)
+
+	section("③ 反向对照：换一个真不一样的场景，哈希必须变")
+	for name in ["s0_boot_follow", "s0_boot_wide"]:
+		var h_def := String(shas.get("default", {}).get(name, ""))
+		var h_bt := String(shas.get("battle", {}).get(name, ""))
+		ok(h_bt != "", "battle 批次拿到了 %s 的 sha256" % name)
+		ok(h_bt != h_def, "battle 与 diorama 的 %s 不同（--scene= 真的生效了）" % name)
+
+	section("⑤ 失败要显式：坏路径不许静默拍成默认场景")
+	for bad in ["res://nope/none.tscn", "scenes/dev/diorama.tscn"]:
+		var out: Array = []
+		var code := _exec_user(PackedStringArray(), PackedStringArray([
+			"--shots", "--case=s0_boot", "--scene=" + String(bad),
+			"--out=" + base.path_join("bad"),
+		]), out)
+		eq(code, 1, "--scene='%s' 退出码 = 1" % bad)
+	ok(not _dir_has_json(base.path_join("bad")), "坏路径没有写出任何清单（没有拍到一半的图）")
+
+	section("⑤ 纯修饰符：只带 --scene= 时不触发批次、不抢退出码")
+	var solo_dir := base.path_join("solo")
+	DirAccess.make_dir_recursive_absolute(solo_dir)
+	var solo_out: Array = []
+	var solo_code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--scene=" + battle, "--out=" + solo_dir,
+	]), solo_out, 240)
+	eq(solo_code, 0, "只带 --scene= 的进程退出码 = 0（没有被截图批次抢走）")
+	ok(not _dir_has_json(solo_dir), "--scene= 单独出现没有触发截图批次")
+
+	section("守卫没有被放宽：切场景仍然只有 SceneRouter 一个属主")
+	eq(SCENE_CHANGE_OWNERS.size(), 1, "SCENE_CHANGE_OWNERS 仍只有 1 个属主")
+	ok(not SCENE_CHANGE_OWNERS.has("res://scripts/core/capture.gd"),
+			"capture.gd 没有靠扩属主清单拿到切场景权限")
 
 
 ## --- s0_4_overlay -------------------------------------------------------------

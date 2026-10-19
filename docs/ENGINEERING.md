@@ -127,7 +127,20 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 > **S1.0a 之后这条命令仍然有效**：`run/main_scene` 已改指 `res://scenes/dev/diorama.tscn`，
 > 而场景内容逐字节未变 —— 所以"不写 `--scene=`"取到的还是同一个演示岛。这正是 S1.0a 的
-> 验收口径：换路径后 6 机位 sha256 **逐位仍等于**下表。`--scene=` 支持是 S1.0b 才落地的。
+> 验收口径：换路径后 6 机位 sha256 **逐位仍等于**下表。
+>
+> **S1.0b 之后可以用 `--scene=` 显式指定**，两种写法必须给出**同一组哈希**（`s1_0_scene_arg`
+> 就是这么验的）：
+>
+> ```powershell
+> & "…Godot_v4.7-stable_win64.exe" --path G:\godot_project\mc-npr-godot `
+>   -- --shots --scene=res://scenes/dev/diorama.tscn --warmup=60 --frames=15 --out=res://.shots/s11_cam_a
+> ```
+>
+> `--scene=` 是**纯修饰符**（和 `--case=` / `--out=` 同级），单独出现不触发截图批次。换场景
+> 发生在快门之前且不额外消耗帧，所以"显式指定"与"缺省"在快门前的 dt 序列完全相同 ——
+> 这一条不是容差，是逐位相等：云是增量积分（`position.x += drift * Clock.dt`），多跑一帧
+> 哈希就变（实现时实测踩过）。
 
 **基线 sha256**（`res://.shots/s01_pre_a/default.json`；同参数另一次独立进程实测 6/6 相同）：
 
