@@ -1,7 +1,7 @@
 extends CanvasLayer
 ## MenuPage — 存档菜单（ROADMAP §5 S0.3 批次 4，交互契约 §3.5）。
 ##
-## 两个页面 + 一层弹窗，全部由本文件组装（`scenes/main.tscn` 里只挂一个节点，
+## 两个页面 + 一层弹窗，全部由本文件组装（`scenes/dev/diorama.tscn` 里只挂一个节点，
 ## 与 `scripts/ui/ui_panel.gd` 同一种做法）：
 ##
 ##   home   —— 标题 + 世界状态 + 「保存 / 另存为 / 读取 / 设置 / 返回游戏」

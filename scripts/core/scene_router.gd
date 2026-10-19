@@ -20,7 +20,7 @@ extends Node
 ##   * no transition effect — `_switch_to()` is a hard cut.  The fade layer is UI and
 ##     arrives with the menu in batch 4 (it would also have to be cleared in the `B-`
 ##     six-camera gate, which is a batch-4 question, not this one).
-##   * the world seed is still whatever `scenes/main.tscn` exports; agreeing it with
+##   * the world seed is still whatever `scenes/dev/diorama.tscn` exports; agreeing it with
 ##     `GameState.world_seed` is S1.2's job (see the note in the `s0_3_router` case).
 ##
 ## Depth is capped at 2 on purpose: world → battle is the only route this game has until
@@ -30,8 +30,13 @@ const WORLD := "world"
 const BATTLE := "battle"
 
 ## Route name → scene file.  Key order is `route_names()` order.
+##
+## S1.0a: the diorama moved from `res://scenes/main.tscn` to `res://scenes/dev/diorama.tscn`
+## (content byte-identical; only the path changed).  `run/main_scene` points at the same
+## file, and `s0_3_router` asserts the two agree — the path is a fact in three places, so
+## a test now fails if only two of them are updated.
 const SCENES := {
-	WORLD: "res://scenes/main.tscn",
+	WORLD: "res://scenes/dev/diorama.tscn",
 	BATTLE: "res://scenes/battle/battle_stub.tscn",
 }
 

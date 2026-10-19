@@ -44,7 +44,7 @@ func _ready() -> void:
 	# `Clock` and `menu_page.gd`.
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 10
-	# S0.4 批次 2：F1「隐藏全部 UI」按组找属主，而不是按节点名去 main.tscn 里硬编码
+	# S0.4 批次 2：F1「隐藏全部 UI」按组找属主，而不是按节点名去 diorama.tscn 里硬编码
 	# 路径 —— 后续场景（战斗 HUD、S1.5 聚落面板）只要也进 `#hud` 组，F1 自动覆盖它们。
 	add_to_group("hud")
 	_build_font()

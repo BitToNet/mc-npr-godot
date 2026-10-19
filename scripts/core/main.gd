@@ -1,7 +1,7 @@
 extends Node3D
 ## Main — assembles the diorama and owns the world rebuild.
 ##
-## Node layout lives in scenes/main.tscn: WorldEnvironment, Sun, Terrain,
+## Node layout lives in scenes/dev/diorama.tscn: WorldEnvironment, Sun, Terrain,
 ## Water, Scatter, Clouds, Player, CameraRig, DayNight, UI.  Everything inside
 ## those nodes is generated at runtime from the height field.
 

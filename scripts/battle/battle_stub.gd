@@ -9,9 +9,9 @@ extends Node3D
 ## It deliberately runs the SAME art pipeline as the overworld (`Style.toon()` +
 ## `MeshUtil.facet()` + inverted-hull outline + `Style.PALETTE`), because that is what
 ## makes it evidence that the pipeline works in a second scene rather than only in
-## `scenes/main.tscn`.  Everything is a pure function of the constants below: no `Rng`, no
+## `scenes/dev/diorama.tscn`.  Everything is a pure function of the constants below: no `Rng`, no
 ## clock, no `_process` — so two loads are byte-identical and this file cannot disturb the
-## six-camera baseline that `scenes/main.tscn` establishes.
+## six-camera baseline that `scenes/dev/diorama.tscn` establishes.
 
 const ARENA := 6.0          ## half extent of the sparring ground, metres
 const SUBDIV := 10          ## PlaneMesh subdivisions per axis (facet size)

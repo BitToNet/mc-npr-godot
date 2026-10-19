@@ -62,9 +62,9 @@ func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(_out)
 	var t0 := Time.get_ticks_msec()
 
-	var ps := load("res://scenes/main.tscn") as PackedScene
+	var ps := load("res://scenes/dev/diorama.tscn") as PackedScene
 	if ps == null:
-		printerr("[baseline] 无法加载 res://scenes/main.tscn")
+		printerr("[baseline] 无法加载 res://scenes/dev/diorama.tscn")
 		_finished = true
 		quit(2)
 		return

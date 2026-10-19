@@ -1,7 +1,7 @@
 # Pocket Sandbox 玩法扩展规划（ROADMAP）
 
-> **文档版本**：v1.8 · 2026-10-19（版本变更一律登记在 §16）
-> **状态**：执行中 · **M0 全部闭环（S0.1–S0.6 均已验收）**，下一步进入 M1
+> **文档版本**：v1.9 · 2026-10-19（版本变更一律登记在 §16）
+> **状态**：执行中 · M0 全部闭环（S0.1–S0.6 已验收）；**M1 进行中**（S1.0a ✅，S1.0b–d 待做）
 > **性质**：本文是本项目玩法扩展的**唯一计划来源与验收台账**（single source of truth）。
 > 实现过程中的任何偏差、新增、删减，必须先回到本文更新，再动代码。
 > **目标定位**：中型商用游戏项目（Windows 桌面）。
@@ -375,7 +375,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | `shaders/toon.gdshader` | `shaders/common/toon.gdshader` | 全局 toon 材质，地形/植被/角色共用 |
 | `shaders/outline.gdshader` | `shaders/common/outline.gdshader` | 逆壳描边，全场景通用 |
 | `shaders/water.gdshader` | `shaders/terrain/water.gdshader` | 仅水体使用 |
-| `scenes/main.tscn` | **不移动** | S0.1 恪守"主场景不变"；改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做 |
+| `scenes/main.tscn` | **S1.0a 已换路径** | 现为 `scenes/dev/diorama.tscn`（内容逐字节不变）；S0.1 恪守"主场景不变"，改名留到 S1.0a 单独一步做 |
 
 > 约定增补：`shaders/common/` 为本次新增子目录（原 §3.2 只有 `terrain/ character/ fx/`）。
 > 理由：`toon.gdshader` / `outline.gdshader` 是全场景共用材质，放进 `fx/` 或 `character/` 都名不符实。
@@ -836,14 +836,16 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 - 为什么必须单列一步：`SceneRouter.SCENES` 现状是 `world → res://scenes/main.tscn`，`s0_3_router`
   有**逐字比对**该路径的断言，6 机位 `B-` 基线也取自 `main.tscn`，且 `project.godot` 的 `run/main_scene`
   指向同一文件 —— 三处事实源必须同时改，混进 S1.1 会让"数据层写错"与"场景搬坏"两种红无法区分。
+  （**S1.0a 已落地**：三处已同时改到 `res://scenes/dev/diorama.tscn`，并新增断言
+  `run/main_scene == scene_path_for("world")`，把这条人工核对升级成机器判定。）
 - 拆四个可独立验收、各自可回滚的子步（**每步一个提交**）：
 
-| 子步 | 动作 | 验收 |
-|---|---|---|
-| S1.0a | `scenes/main.tscn` → `scenes/dev/diorama.tscn`（只改路径引用与 `run/main_scene`） | 6 机位 sha256 **仍逐位等于** `docs/ENGINEERING.md` §4 基线（证明"搬文件不改像素"） |
-| S1.0b | `capture.gd` 支持 `--scene=res://…`（缺省仍是主场景） | 同参数两次独立进程截图 sha256 相同；`--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 |
-| S1.0c | 路由表加 `strategic`（新增空场景 `scenes/world/strategic_map.tscn`，`world` 暂时仍指 diorama） | `s0_3_router` 改断言后全绿；新增 `s1_0_routes`（表条目 / 路径存在 / `MAX_DEPTH` 不变 / 拒绝不改状态） |
-| S1.0d | `world` 改指 `strategic_map.tscn`；diorama 降为仅供回归与取景 | 6 机位改为 `--scene=res://scenes/dev/diorama.tscn` 的**专用批次**（`.shots/diorama_*`）；新增 `s1_0_migration`（路由 → 文件 → 场景根类三者一致） |
+| 子步 | 动作 | 验收 | 状态 |
+|---|---|---|---|
+| S1.0a | `scenes/main.tscn` → `scenes/dev/diorama.tscn`（只改路径引用与 `run/main_scene`） | 6 机位 sha256 **仍逐位等于** `docs/ENGINEERING.md` §4 基线（证明"搬文件不改像素"） | ✅ 已完成（2026-10-19） |
+| S1.0b | `capture.gd` 支持 `--scene=res://…`（缺省仍是主场景） | 同参数两次独立进程截图 sha256 相同；`--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 | ⏳ 未开始 |
+| S1.0c | 路由表加 `strategic`（新增空场景 `scenes/world/strategic_map.tscn`，`world` 暂时仍指 diorama） | `s0_3_router` 改断言后全绿；新增 `s1_0_routes`（表条目 / 路径存在 / `MAX_DEPTH` 不变 / 拒绝不改状态） | ⏳ 未开始 |
+| S1.0d | `world` 改指 `strategic_map.tscn`；diorama 降为仅供回归与取景 | 6 机位改为 `--scene=res://scenes/dev/diorama.tscn` 的**专用批次**（`.shots/diorama_*`）；新增 `s1_0_migration`（路由 → 文件 → 场景根类三者一致） | ⏳ 未开始 |
 
 **验收标准**
 - `A-` 每个子步后 6 机位 `B-` 逐位一致（a/c/d 三步尤关键：它们动 `project.godot` 与路由表）。
@@ -857,8 +859,18 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 - `docs/成果.md`：追加"基线已重定向"，**不改**历史条目（保持历史记录）。
 - `project.godot`：`run/main_scene`（改完用 `git diff` 逐行确认 —— 编辑器会重写该文件，见 §16 2026-10-19 条）。
 
+**S1.0a 落地与验收记录（2026-10-19）**
+
+| 项 | 结果 |
+|---|---|
+| 改动 | `git mv scenes/main.tscn scenes/dev/diorama.tscn`（git 识别为 **100% 相似度重命名**，内容未改一字节）；`project.godot` 的 `run/main_scene`、`SceneRouter.SCENES[world]`、`tools/baseline.gd`、`tools/verify.gd::_load_main()` 同步换路径；两处注释里的旧路径一并更新 |
+| `A-` 三处事实源一致 | `s0_3_router` 新增断言：`run/main_scene` == `scene_path_for("world")` == 文件真实存在。把原来靠 `git diff` 人工核对的约定升级成机器判定（改两处漏一处即红） |
+| `B-` 6 机位 | **两条独立进程**重采（`.shots/s10a_verify` / `s10a_verify_b`），**6/6 sha256 与 `docs/ENGINEERING.md` §4 基线逐位相等**、且两次互等（`6e2137…` / `5bde25…` / `1a6066…` / `729db4…` / `f7725a…` / `c0858f…`）——"搬文件不改像素"成立 |
+| `A-` 全量 | 窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0；headless `--all` 20 用例 / 0 失败 / 5 跳过（headed 用例按设计跳过）、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING` |
+| 附带修掉 | `s0_5_doc_conventions` 的"产品码不得引用 `dev/`"从零容忍改为**登记清单**：`scenes/dev/` 现允许 `scene_router.gd` 一处（S1.0d 后自然收紧回 0），并加反向对照证明清单不是恒真 |
+
 **依赖与风险**：M0 全部。风险：一步同时动三处事实源 ⇒ 拆 4 子步、每步独立提交，任一步红即 `git revert` 该步，**不"边修边推进"**。
-**状态**：⏳ 未开始
+**状态**：🚧 进行中（S1.0a ✅ / S1.0b–d ⏳）
 
 ### S1.1 世界数据模型与程序化生成
 
@@ -1839,7 +1851,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| S1.0 | 场景与路由迁移 | M0 | ⏳ 未开始 | — |
+| S1.0 | 场景与路由迁移 | M0 | 🚧 进行中 | **S1.0a ✅ 2026-10-19**（提交待回填，见下一提交）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b–d ⏳ 未开始** |
 | S1.1 | 世界数据模型与程序化生成 | S1.0 | ⏳ 未开始 | — |
 | S1.2 | 战略地图场景与镜头 | S1.1 | ⏳ 未开始 | — |
 | S1.3 | 队伍棋子与移动 | S1.2 | ⏳ 未开始 | — |
@@ -1966,6 +1978,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 2026-10-19 | **v1.5 → v1.6：修掉注入点击的既有缺陷（缺鼠标移动）**。`tools/verify.gd::_click_control()` 与 `scripts/core/capture.gd::_click_path()` 原本只注入 `InputEventMouseButton` 的 press/release，**没有 `InputEventMouseMotion`**。Godot 的 `Viewport` 用 `gui.mouse_focus` 决定把按键投给谁，而该焦点**由鼠标移动事件更新**；没有移动，按键就落在失效焦点上 ⇒ `s0_3_slots` 间歇性失败（**在 HEAD 上跑 5 次红 2 次**，失败点每次不同：读取没跳宫格 / 另存为没进宫格 / 两轮截图 sha256 不一致）。修法：点击前先发一个落在目标中心的 motion 事件，**不动产品码**。修后 `s0_3_slots` 连跑 18 次全绿、`--all` 连跑 2 轮全绿。另给 `_shoot_menu_case()` 加了失败时打印子进程末尾 20 行的诊断（原来只知道"少了一次自证"，不知道少在哪一步） | 本步在 `--all` 里偶发命中该失败。**先证明了它是既有的**：把 `git show HEAD:tools/verify.gd` 导成临时脚本跑同一用例，同样红。**失败点漂移是"共享前置条件坏了"的典型特征** —— 每次都红同一条是断言的问题，红点到处跑说明更早的某一步时灵时不灵 | 用户（S0.5 验收过程中发现） |
 | 2026-10-19 | **v1.7 → v1.8：纳入 `docs/骑砍数据反推/` 六册作为 M1 设计输入；并修掉 §16 表内 3 处空行**。① 新增 §6 M1 开头的「设计参考」引用块：六册是《战团》Native 模块的逆向文档（编译脚本字节码 + 数据表 + `mb_warband.exe` 反编译），自带 **【实证】/【推断】/【未解】** 三级标签；明确其为**设计输入而非本项目规范**，只借结构与量级、不照抄数值，【未解】项不得填数。② 落地引用点写明是 S1.1 的 `data/world/gen_params.json` 初值与 `Canon` 钳制告警口径。③ 六册共 6 文件 / 460,554 字节 / 6,563 行，单独一个 `docs` 提交入库（不与代码改动混提） | 用户 2026-10-19 指示："`docs/骑砍数据反推`，是我反编译骑砍的代码反推出来的玩法和数值设计相关文档，可以作为大地图设计的参考。" 三级证据标签与本项目"不猜测"的验收文化同源，故正式登记为 M1 输入 | 用户 |
 | 2026-10-19 | **§16 表内 3 处空行修正**（格式缺陷，非内容变更）：v1.4→v1.5、v1.6→v1.7、v1.5→v1.6 三行之间各有 1 个空行，会把 Markdown 表格截断成 4 张独立表格。成因是 v1.7 那次"两行被合并成一行"的修复：拆分时在边界处留下了空行 | 复核 §16 表格时按行打印长度发现（`len=0` 夹在数据行之间）。**教训**：表格类编辑修完必须回读**相邻行**，只验证"被改的那行"看不出表格已被截断 | 自查（S1.0a 准备阶段） |
+| 2026-10-19 | **v1.8 → v1.9：S1.0a 落地并闭环（搬场景不改像素）**。① `git mv scenes/main.tscn scenes/dev/diorama.tscn`，Git 判定 **100% 相似度重命名**（场景内容零改动）；② 三处事实源 + 两处工具同步换路径：`project.godot` 的 `run/main_scene`、`SceneRouter.SCENES[world]`、`tools/baseline.gd`、`tools/verify.gd::_load_main()`，注释里的旧路径一并更新；③ `s0_3_router` 由 70 → **73 断言**，新增「`run/main_scene` == `scene_path_for("world")` == 文件真实存在」——把过去靠 `git diff` 人工核对的约定变成机器判定（三处漏一处即红）；④ `s0_5_doc_conventions` 的「产品码不得引用 `dev/`」由零容忍改为**登记清单**：`scenes/dev/` 允许 `scene_router.gd` 一处（S1.0d 后自然收紧回 0），并加反向对照证明清单不是恒真；⑤ §5 S1.0 子步表由 3 列补为 **4 列**（原先 S1.0a 行末尾多挂一个单元格，整表渲染错位）；⑥ §15 台账 S1.0 置 `🚧 进行中`（a ✅ / b–d ⏳），头部版本 v1.8 → v1.9 | `B-` 是"搬文件不改像素"的唯一硬证据：重采 `.shots/s10a_post`，**6/6 sha256 与 `ENGINEERING.md` §4 基线逐位相等**；窗口 `--all` **20 用例 / 0 失败 / 0 跳过**、headless 20 / 0 失败 / 5 跳过，均退出码 0 | 用户（本会话四问四答，均取推荐项：只收尾 S1.0a / 窗口全量校验 + 重采 6 机位 / 单个提交 / 两处缺陷同批修） |
 
 ## 附录 A：本规划对现有代码的改动面预估
 

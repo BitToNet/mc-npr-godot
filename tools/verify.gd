@@ -39,6 +39,15 @@ extends SceneTree
 
 const REPORT_DIR := "res://.verify"
 
+## 主场景路径。S1.0a 由 `res://scenes/main.tscn` 迁到 `res://scenes/dev/diorama.tscn`
+## （内容逐字节不变，只换路径）。
+##
+## 为什么在这里留一个字面量而不是从 `SceneRouter` 读：本文件要能**独立**发现
+## "路由表改了、测试没改"和"测试改了、路由表没改"两种漂移。若两边共读一个源，
+## 任何一边被改都会一起跟着走，断言就永远绿。
+## 真正不依赖字面量的交叉校验是 `_case_router` 里的 `run/main_scene` 断言。
+const MAIN_SCENE := "res://scenes/dev/diorama.tscn"
+
 ## 自旋固定微秒数，返回实际耗时（毫秒）。用于给"量法分辨率"做标尺。
 func _spin_us(usec: int) -> float:
 	var t0 := Time.get_ticks_usec()
@@ -799,7 +808,7 @@ func _case_guard() -> void:
 		# S0.3 批次 3：人造违例落在 res://scripts/_verify_tmp/，不是登记属主 ⇒ 必被抓住
 		"scene_change_owner": {
 			"ext": "gd",
-			"text": "get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n",
+			"text": "get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n",
 		},
 	}
 	for label in probes.keys():
@@ -837,10 +846,10 @@ func _case_guard() -> void:
 			"脚本注释里提到墙钟不误报")
 	# S0.3 批次 3：属主文件里的切场景调用是**允许**的，规则按路径放行而非按 token 全禁
 	ok(_scan_text("res://scripts/core/scene_router.gd",
-			"get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n").is_empty(),
+			"get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n").is_empty(),
 			"SceneRouter 自身切场景不误报")
 	ok(_scan_text("res://scripts/world/terrain.gd",
-			"get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n").size() == 1,
+			"get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n").size() == 1,
 			"非属主文件切场景恰好报 1 条（不多不少）")
 
 	section("既有代码基线")
@@ -2606,10 +2615,19 @@ func _case_router() -> void:
 		names.append(String(n))
 	names.sort()
 	eq(names, ["battle", "world"], "登记的路由恰好是 world / battle 两个")
-	eq(String(router.call("scene_path_for", "world")), "res://scenes/main.tscn", "world → main.tscn")
+	eq(String(router.call("scene_path_for", "world")), MAIN_SCENE, "world → diorama.tscn")
 	eq(String(router.call("scene_path_for", "battle")), "res://scenes/battle/battle_stub.tscn",
 			"battle → battle_stub.tscn")
 	eq(String(router.call("scene_path_for", "nowhere")), "", "未登记路由返回空路径")
+
+	# S1.0a：路径是**三处**事实（路由表 / project.godot / 主场景文件本身），
+	# 只改两处会让第三处静默漂移。这条断言把「改完用 git diff 逐行确认」升级成机器判定。
+	section("三处事实源一致：路由表 == project.godot 的 run/main_scene == 真实存在的文件")
+	var declared := String(ProjectSettings.get_setting("application/run/main_scene", ""))
+	eq(declared, MAIN_SCENE, "project.godot 的 run/main_scene 指向同一个文件")
+	eq(declared, String(router.call("scene_path_for", "world")),
+			"run/main_scene 与路由表的 world 条目逐字相同")
+	ok(ResourceLoader.exists(declared), "该路径在文件系统里真的存在", declared)
 	for sym in ["goto_world", "goto_battle", "return_to_world", "current_route",
 			"route_stack", "route_depth", "route_names", "is_transitioning"]:
 		ok(_has_callable(router, sym), "SceneRouter.%s" % sym)
@@ -3726,7 +3744,7 @@ func _case_doc_conventions() -> void:
 		"bare_randf": "var f := randf()\n",
 		"bare_randi": "var i := randi()\n",
 		"unfreezable_time": "var t := Time.get_ticks_msec()\n",
-		"scene_change_owner": "get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n",
+		"scene_change_owner": "get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n",
 	}
 	for rule in rule_probes.keys():
 		contains(eng, "`%s`" % rule, "ENGINEERING.md §11 登记了守卫规则 `%s`" % rule)
@@ -3753,14 +3771,47 @@ func _case_doc_conventions() -> void:
 	contains(art, "03_ok_ball", "样板 ③：03_ok_ball")
 	contains(art, "AGENTS.md", "ART_PIPELINE.md 交叉引用 AGENTS.md（冲突以它为准）")
 
-	section("教材夹具：双向约束 —— 产品码不引用 dev/，dev/ 的命中恰等于白名单登记")
-	# ① 反向：产品码一律不得引用 res://scripts/dev/ 或 res://scenes/dev/
-	var leaks: Array = []
+	section("教材夹具：双向约束 —— 产品码不引用 scripts/dev/，dev/ 的命中恰等于白名单登记")
+	# ① 反向 A：`res://scripts/dev/` 零容忍。
+	#    这里放的是**故意违例的教材脚本**，产品码引用它就是把反例带进正式构建。
+	var script_leaks: Array = []
+	_collect_dev_refs("res://scripts", script_leaks, "res://scripts/dev/")
+	_collect_dev_refs("res://scenes", script_leaks, "res://scripts/dev/")
+	_collect_dev_refs("res://shaders", script_leaks, "res://scripts/dev/")
+	eq(script_leaks.size(), 0, "产品码没有一处引用 scripts/dev/（教材脚本不得进正式构建）")
+	if script_leaks.size() > 0:
+		print("    · 泄漏点：", script_leaks)
+
+	# ① 反向 B：`res://scenes/dev/` 走**登记清单**，不搞零容忍。
+	#    S1.0a 把演示岛搬成 `res://scenes/dev/diorama.tscn` 后，`scene_router.gd` 必须
+	#    引用它 —— 此时"零容忍"就不再是正确的约束，而是与路线图自相矛盾。
+	#    改为：每个引用 `scenes/dev/` 的文件都必须在此逐条登记并写明理由，多一个少一个都红。
+	#    S1.0d 让战略图接管 `world` 之后，`scene_router.gd` 这条会到期，清单自然收紧回 0。
+	var scene_refs: Array = []
 	for dir_path in ["res://scenes", "res://scripts", "res://shaders"]:
-		_collect_dev_refs(dir_path, leaks)
-	eq(leaks.size(), 0, "产品码没有一处引用 dev/（否则教材目录会漏进正式构建）")
-	if leaks.size() > 0:
-		print("    · 泄漏点：", leaks)
+		_collect_dev_refs(dir_path, scene_refs, "res://scenes/dev/")
+	scene_refs.sort()
+	var scene_refs_want: Array = [
+		# 唯一允许的产品码引用点：路由表的 world 条目（S1.0a → S1.0d 期间有效）
+		"res://scripts/core/scene_router.gd",
+	]
+	eq(scene_refs, scene_refs_want,
+			"引用 scenes/dev/ 的产品码恰好是登记的那 1 处（多一处就说明夹具场景漏进了正式构建）")
+	for p in scene_refs_want:
+		ok(FileAccess.file_exists(p), "登记为可引用 scenes/dev/ 的文件真的存在", p)
+	# 反向对照：登记清单不是"随便写个路径就能过" —— 未登记的引用必须被抓住。
+	# 用临时文件造一个假泄漏点，确认收集器真的会把它找出来（而不是恒返回空）。
+	var tmp_leak := "res://scripts/_verify_tmp/leak_probe.gd"
+	DirAccess.make_dir_recursive_absolute("res://scripts/_verify_tmp")
+	var lf := FileAccess.open(tmp_leak, FileAccess.WRITE)
+	if lf != null:
+		lf.store_string("const P := \"res://scenes/dev/diorama.tscn\"\n")
+		lf.close()
+		var probe_leaks: Array = []
+		_collect_dev_refs("res://scripts", probe_leaks, "res://scenes/dev/")
+		ok(probe_leaks.has(tmp_leak),
+				"未登记引用 scenes/dev/ 的文件会被收集器抓出（清单不是恒真）")
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_leak))
 
 	# ② 正向：夹具真的命中被禁写法，且命中数恰等于白名单里登记给它的条数
 	var fixture_src := _read_text_file("res://scripts/dev/art_samples.gd")
@@ -3819,9 +3870,11 @@ func _case_doc_conventions() -> void:
 ## 递归收集「产品码引用教材目录」的泄漏点。
 ## 判据是**字面路径出现**，不做 AST —— 漏网的写法（如拼字符串）不在此用例能力范围内，
 ## 但常见的 preload/load/tscn ext_resource 都会被它逮住。
+## `needle` 是要查的字面路径，调用方按目录分别查（`scripts/dev/` 与 `scenes/dev/`
+## 的约束强度不同，见 `s0_5_doc_conventions`）。
 ## 教材目录自身（`res://scripts/dev/`、`res://scenes/dev/`）内部的互相引用不算泄漏：
 ## 夹具脚本的文档串会提到自己的路径，夹具场景必须引用夹具脚本 —— 那是它该做的事。
-func _collect_dev_refs(dir_path: String, out: Array) -> void:
+func _collect_dev_refs(dir_path: String, out: Array, needle: String) -> void:
 	var dir := DirAccess.open(dir_path)
 	if dir == null:
 		return
@@ -3833,12 +3886,12 @@ func _collect_dev_refs(dir_path: String, out: Array) -> void:
 			continue
 		var p := dir_path.path_join(fname)
 		if dir.current_is_dir():
-			_collect_dev_refs(p, out)
+			_collect_dev_refs(p, out, needle)
 		else:
 			var ext := p.get_extension().to_lower()
 			if ext in GUARD_EXTS and not _is_dev_area(p):
 				var text := _read_text_file(p)
-				if text.contains("res://scripts/dev/") or text.contains("res://scenes/dev/"):
+				if text.contains(needle):
 					out.append(p)
 		fname = dir.get_next()
 	dir.list_dir_end()
@@ -3868,7 +3921,7 @@ func _is_headless() -> bool:
 	return DisplayServer.get_name() == "headless"
 
 func _load_main() -> Node:
-	var ps := load("res://scenes/main.tscn") as PackedScene
+	var ps := load(MAIN_SCENE) as PackedScene
 	if ps == null:
 		return null
 	var m := ps.instantiate()
