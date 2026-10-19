@@ -45,12 +45,14 @@ var _grid_intent := "save"
 var _pending_slot := 0
 var _home: CenterContainer
 var _grid_page: CenterContainer
+var _debug_page: CenterContainer
 var _confirm: Control
 var _grid: PanelContainer
 var _lbl_status: Label
 var _lbl_slot: Label
 var _lbl_hint: Label
 var _lbl_grid_hint: Label
+var _lbl_debug_body: Label
 var _lbl_confirm_title: Label
 var _lbl_confirm_detail: Label
 
@@ -120,6 +122,8 @@ func show_home() -> void:
 	_page = "home"
 	_home.visible = true
 	_grid_page.visible = false
+	if _debug_page != null:
+		_debug_page.visible = false
 
 
 ## 切到宫格页。`note` 是"为什么跳过来"（例如服务返回的拒绝理由）—— 它和"点一格
@@ -130,6 +134,8 @@ func show_grid(intent: String, note: String = "", tone := "info") -> void:
 	_page = "grid"
 	_home.visible = false
 	_grid_page.visible = true
+	if _debug_page != null:
+		_debug_page.visible = false
 	var base := "点一格读取它（空槽位会说明为什么读不了）"
 	if intent != "load":
 		base = "点一格写入它；已有存档的格子会先问一次"
@@ -182,6 +188,9 @@ func _on_escape() -> void:
 	if _page == "grid":
 		show_home()
 		return
+	if _page == "debug":
+		show_home()
+		return
 	close_menu()
 
 
@@ -209,7 +218,82 @@ func _on_load() -> void:
 
 
 func _on_settings() -> void:
-	_hint("设置页还没做（ROADMAP 留到 S0.4 调试观测层与后续步骤）", "info")
+	show_debug()
+
+
+## 调试页（§5 S0.4 批次 3："菜单里的调试入口"）。填的是原来「设置」那个占位提示 ——
+## 那句话是 `_on_settings` 里的"设置页还没做"，与其留着一句死文案，不如先让它名副其实：
+## 本页只显示**只读事实** + 一个"打开叠加层"按钮，真正的设置项留到 M6（S6.3）。
+##
+## 只读事实刻意选"从菜单里看不见、但排查问题时最想知道"的几项：调试热键是否注册
+## （发布构建里应当是"关"）、当前场景与路由、当前槽位、autoload 数量。
+func show_debug() -> void:
+	_page = "debug"
+	_home.visible = false
+	_grid_page.visible = false
+	if _debug_page != null:
+		_debug_page.visible = true
+	_refresh_debug()
+
+
+func is_debug_page() -> bool:
+	return _page == "debug"
+
+
+## 调试页正文（用例直接断言这个字典，不去解析 Label 文本）。
+func debug_facts() -> Dictionary:
+	var dbg := get_node_or_null("/root/Debug")
+	var hotkeys := false
+	var quick := false
+	var overlay_on := false
+	if dbg != null:
+		var st: Dictionary = dbg.call("stats")
+		hotkeys = bool(st.get("hotkeys", false))
+		quick = bool(st.get("quick_hotkeys", false))
+		overlay_on = bool(st.get("overlay_on", false))
+	return {
+		# 本页**不许**自己调 `OS.is_debug_build()`：全项目只允许 `input_setup.gd`
+		# 一处判断构建类型（`s0_4_overlay` 守着这条）。构建类型的等价观测就是
+		# "调试热键注册了没有" —— 那正是那个闸门做的事情。
+		"hotkeys": hotkeys,
+		"quick_hotkeys": quick,
+		"overlay_on": overlay_on,
+		"scene": String(dbg.call("scene_label")) if dbg != null else "",
+		"route": SceneRouter.current_route(),
+		"slot": int(SaveSystem.current_slot),
+		"autoloads": 9,
+		"notice": String(dbg.call("notice")) if dbg != null else "",
+	}
+
+
+func _refresh_debug() -> void:
+	if _lbl_debug_body == null:
+		return
+	var f := debug_facts()
+	_lbl_debug_body.text = "\n".join(PackedStringArray([
+		"调试热键：%s（F1 隐藏UI / F3 叠加层）" % _onoff(bool(f["hotkeys"])),
+		"快存 / 快读（F5 / F9）：%s" % _onoff(bool(f["quick_hotkeys"])),
+		"叠加层（F3）：%s" % _onoff(bool(f["overlay_on"])),
+		"场景：%s    路由：%s" % [
+			String(f["scene"]) if String(f["scene"]) != "" else "—",
+			String(f["route"]) if String(f["route"]) != "" else "—（引擎直接加载）"],
+		"当前槽位：%s" % ("未选择" if int(f["slot"]) == 0 else str(int(f["slot"]))),
+		"autoload：%d / 上限 10" % int(f["autoloads"]),
+	]))
+
+
+func _onoff(b: bool) -> String:
+	return "开" if b else "关"
+
+
+func _on_open_overlay() -> void:
+	var dbg := get_node_or_null("/root/Debug")
+	if dbg == null:
+		_hint("调试层不可用（autoload Debug 未就位）", "bad")
+		return
+	dbg.call("set_overlay", true)
+	_hint("已打开调试叠加层（F3 关闭）", "ok")
+	_refresh_debug()
 
 
 func _on_resume() -> void:
@@ -323,6 +407,7 @@ func _build() -> void:
 
 	_build_home(root)
 	_build_grid_page(root)
+	_build_debug_page(root)
 	_build_confirm(root)
 
 
@@ -433,6 +518,55 @@ func _build_grid_page(root: Control) -> void:
 	_lbl_grid_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_lbl_grid_hint.custom_minimum_size = Vector2(916, 0)
 	col.add_child(_lbl_grid_hint)
+
+	var back := _button("返回", PAPER)
+	back.name = "Back"
+	back.pressed.connect(func() -> void: show_home())
+	col.add_child(back)
+
+
+func _build_debug_page(root: Control) -> void:
+	_debug_page = CenterContainer.new()
+	_debug_page.name = "DebugPage"
+	_debug_page.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_debug_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_debug_page.visible = false
+	root.add_child(_debug_page)
+
+	var panel := PanelContainer.new()
+	panel.name = "Panel"
+	panel.add_theme_stylebox_override("panel", _sb(PAPER, 5, 12, Vector2(9, 9), 22))
+	_debug_page.add_child(panel)
+
+	var col := VBoxContainer.new()
+	col.name = "Col"
+	col.add_theme_constant_override("separation", 12)
+	panel.add_child(col)
+
+	var title := _label("调试", 26)
+	title.name = "Title"
+	col.add_child(title)
+
+	var sub := _label("只读事实 · 真正的设置项留到 M6", 13, MUTED)
+	sub.name = "Sub"
+	col.add_child(sub)
+
+	var rule := ColorRect.new()
+	rule.color = INK
+	rule.custom_minimum_size = Vector2(0, 5)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(rule)
+
+	_lbl_debug_body = _label("", 14)
+	_lbl_debug_body.name = "Body"
+	_lbl_debug_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_lbl_debug_body.custom_minimum_size = Vector2(560, 0)
+	col.add_child(_lbl_debug_body)
+
+	var open_btn := _button("打开调试叠加层（F3）", LILAC)
+	open_btn.name = "OpenOverlay"
+	open_btn.pressed.connect(_on_open_overlay)
+	col.add_child(open_btn)
 
 	var back := _button("返回", PAPER)
 	back.name = "Back"

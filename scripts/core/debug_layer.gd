@@ -66,6 +66,16 @@ const CSV_ARG := "--obs-csv="
 ## 所以这里只引用 `InputSetup` 的常量）。
 const ACTION_OVERLAY := InputSetup.ACTION_DEBUG_OVERLAY
 const ACTION_HIDE_UI := InputSetup.ACTION_DEBUG_HIDE_UI
+const ACTION_QUICK_SAVE := InputSetup.ACTION_DEBUG_QUICK_SAVE
+const ACTION_QUICK_LOAD := InputSetup.ACTION_DEBUG_QUICK_LOAD
+## 覆盖确认的有效窗口（帧）。`F5` 撞上已占用的槽位时**不写**，只记下"待确认"
+## 并在窗口内接受第二次 `F5` 作为二次确认 —— §3.5 要求覆盖必须确认，而本层
+## 又约定不弹菜单（批次 3 对齐结论），于是确认只能落在按键上。
+## 用帧数而非墙钟：墙钟是守卫 `unfreezable_time` 禁止的时间源，且帧数在
+## 确定性模式下同样可复现。
+const CONFIRM_WINDOW_FRAMES := 120
+## 提示行显示多久（帧）。
+const NOTICE_FRAMES := 180
 ## 叠加层里显示的节点组（顺序即显示顺序；没有节点的组不显示）。
 const GROUP_ORDER := ["main", "player", "camera_rig", "terrain", "water",
 		"day_night", "menu", "hud"]
@@ -113,12 +123,23 @@ var _lbl_scene: Label
 var _lbl_entities: Label
 var _lbl_clock: Label
 var _lbl_csv: Label
+var _lbl_notice: Label
+var _toast: PanelContainer
+var _lbl_toast: Label
+var _toast_layer: CanvasLayer
 var _graph: GraphView
 var _samples := PackedFloat32Array()
 var _tick := 0
 var _csv: FileAccess = null
 var _csv_path := ""
 var _csv_rows := 0
+## 快存/快读的一行反馈（`F5`/`F9` 不弹菜单，结果只能显示在这里）。
+var _notice := ""
+var _notice_tone := "info"
+var _notice_until := -1
+## "待确认覆盖"的槽位与截止帧（0 = 没有待确认项）。
+var _confirm_slot := 0
+var _confirm_until := -1
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +172,12 @@ func _process(_delta: float) -> void:
 	_push_sample()
 	if _tick % REFRESH_EVERY == 0:
 		_refresh()
+	else:
+		# toast 的过期要按帧判定，而 `_refresh` 每 REFRESH_EVERY 帧才跑一次；
+		# 提示"少活几帧"可以接受，"过期了还挂着"不可以。
+		# 只在真有提示待过期时才做，关层常态下这里一次都不跑（`C-` 量的是常态开销）。
+		if _notice_until >= 0:
+			_sync_toast()
 	if _csv != null:
 		_write_row()
 
@@ -167,6 +194,12 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif InputMap.has_action(ACTION_HIDE_UI) and key.is_action_pressed(ACTION_HIDE_UI):
 		toggle_ui_hidden()
+		get_viewport().set_input_as_handled()
+	elif InputMap.has_action(ACTION_QUICK_SAVE) and key.is_action_pressed(ACTION_QUICK_SAVE):
+		quick_save()
+		get_viewport().set_input_as_handled()
+	elif InputMap.has_action(ACTION_QUICK_LOAD) and key.is_action_pressed(ACTION_QUICK_LOAD):
+		quick_load()
 		get_viewport().set_input_as_handled()
 
 
@@ -233,7 +266,12 @@ func stats() -> Dictionary:
 		"csv_path": _csv_path,
 		"csv_rows": _csv_rows,
 		"recording": _csv != null,
-		"hotkeys": InputMap.has_action(ACTION_OVERLAY) and InputMap.has_action(ACTION_HIDE_UI),
+				"hotkeys": InputMap.has_action(ACTION_OVERLAY) and InputMap.has_action(ACTION_HIDE_UI),
+		"quick_hotkeys": InputMap.has_action(ACTION_QUICK_SAVE)
+				and InputMap.has_action(ACTION_QUICK_LOAD),
+		"notice": notice(),
+		"notice_tone": notice_tone(),
+		"confirm_slot": confirm_pending_slot(),
 	}
 
 
@@ -271,7 +309,127 @@ func set_ui_hidden(on: bool) -> void:
 		elif n is CanvasItem:
 			(n as CanvasItem).visible = not on
 	_sync_panel_visible()
+	_sync_toast()
 	ui_hidden_changed.emit(on)
+
+
+# ---------------------------------------------------------------------------
+# 快存 / 快读（F5 / F9，§5 S0.4 批次 3）
+# ---------------------------------------------------------------------------
+## `F5` 快存。**不弹菜单**（批次 3 对齐结论），但也不许绕过 §3.5：
+##   * 有当前槽位且该槽位为空 → 直接写，不打扰；
+##   * 没有当前槽位 → 拒绝并说明（等同"保存等同另存为"，必须由人挑一格）；
+##   * 槽位已占用 → **先不写**，只登记"待确认"，窗口内再按一次 `F5` 才真覆盖。
+## 第三点是本次唯一新增的语义，也是"不弹菜单"与"覆盖必须二次确认"能同时成立的原因：
+## 确认从"点弹窗"变成"再按一次同一个键"，仍然是显式的两步动作。
+## 返回 `SaveSystem.save_slot()` 的原样结果（或本地拒绝的结果），便于用例断言。
+func quick_save() -> Dictionary:
+	# 闸门**必须在函数里**，不能只在 `_input` 里：`_input` 只挡按键，挡不住
+	# "有人直接调这个方法"。§3.5 要求发布构建完全禁用，那就得让禁用状态下的
+	# 直接调用同样什么都不做（验收用例正是这么验的）。
+	if not _quick_enabled():
+		return _refuse("快存不可用：当前构建没有注册调试热键（发布构建已禁用）", "warn")
+	var slot := int(SaveSystem.current_slot)
+	if slot == 0:
+		return _refuse("快存失败：没有当前槽位（先在菜单里选一格）", "warn")
+	# 待确认项必须在窗口内、且槽位没变，否则重新走一遍"撞上已占用"的流程。
+	if _confirm_slot == slot and Clock.frame <= _confirm_until:
+		_confirm_slot = 0
+		_confirm_until = -1
+		var overwrite: Dictionary = SaveSystem.save_slot(slot, true)
+		if bool(overwrite.get("ok", false)):
+			return _notice_result(overwrite, "已覆盖槽位 %d（%d 字节）" % [
+				slot, int(overwrite.get("bytes", 0))], "ok")
+		return _notice_result(overwrite, "覆盖失败：%s" % String(overwrite.get("reason", "")), "bad")
+	var res: Dictionary = SaveSystem.save_slot(slot, false)
+	if bool(res.get("ok", false)):
+		_confirm_slot = 0
+		_confirm_until = -1
+		return _notice_result(res, "已保存到槽位 %d（%d 字节）" % [
+			slot, int(res.get("bytes", 0))], "ok")
+	if bool(res.get("requires_confirm", false)):
+		# 服务说"要确认" ⇒ 这里不写，只登记待确认并请人再按一次。
+		_confirm_slot = slot
+		_confirm_until = Clock.frame + CONFIRM_WINDOW_FRAMES
+		return _notice_result(res, "槽位 %d 已有存档：再按一次 F5 覆盖，或按 F9 读取它" % slot, "warn")
+	return _notice_result(res, "快存失败：%s" % String(res.get("reason", "")), "bad")
+
+
+## `F9` 快读。读当前槽位；没有当前槽位时拒绝（不猜"最后一个写过的"）。
+## 与菜单的「读取」走同一个 `SaveSystem.load_slot()`，因此字段告警口径完全一致。
+func quick_load() -> Dictionary:
+	if not _quick_enabled():
+		return _refuse("快读不可用：当前构建没有注册调试热键（发布构建已禁用）", "warn")
+	var slot := int(SaveSystem.current_slot)
+	if slot == 0:
+		return _refuse("快读失败：没有当前槽位（先在菜单里选一格）", "warn")
+	var res: Dictionary = SaveSystem.load_slot(slot)
+	if bool(res.get("ok", false)):
+		var warns: PackedStringArray = res.get("warnings", PackedStringArray())
+		var tail := "" if warns.is_empty() else "，%d 条字段告警" % warns.size()
+		return _notice_result(res, "已读取槽位 %d%s" % [slot, tail], "ok")
+	return _notice_result(res, "快读失败：%s" % String(res.get("reason", "")), "bad")
+
+
+## 快存/快读的当前反馈（用例与菜单调试页读它，不必去翻私有字段）。
+func notice() -> String:
+	if _notice_until < 0 or Clock.frame > _notice_until:
+		return ""
+	return _notice
+
+
+func notice_tone() -> String:
+	if _notice_until < 0 or Clock.frame > _notice_until:
+		return ""
+	return _notice_tone
+
+
+## 是否处于"再按一次 F5 就覆盖"的待确认状态。
+func is_confirm_pending() -> bool:
+	return _confirm_slot != 0 and Clock.frame <= _confirm_until
+
+
+func confirm_pending_slot() -> int:
+	return _confirm_slot if is_confirm_pending() else 0
+
+
+func _notice_result(res: Dictionary, text: String, tone: String) -> Dictionary:
+	_notice = text
+	_notice_tone = tone
+	_notice_until = Clock.frame + NOTICE_FRAMES
+	# 提示行与面板同源刷新：开层时立刻看到，关层时不额外花任何代价（`_refresh` 自己会早退）。
+	if _lbl_notice != null:
+		_lbl_notice.text = text
+		_lbl_notice.add_theme_color_override("font_color", _tone_color(tone))
+	_refresh()
+	return res
+
+
+## 本地拒绝的结果。字段与 `SaveSystem` 的失败结果**同形**（`ok/slot/reason/
+## requires_confirm`）：调用方不需要区分"服务拒绝"与"这一层拒绝"，
+## `requires_confirm=false` 则明确表示这不是"需要二次确认"，而是"就是不行"。
+func _refuse(reason: String, tone: String) -> Dictionary:
+	return _notice_result({
+		"ok": false, "slot": 0, "path": "", "reason": reason,
+		"warnings": PackedStringArray(), "requires_confirm": false, "bytes": 0,
+	}, reason, tone)
+
+
+## 快存/快读的闸门：与 F1/F3 同一个事实（action 在不在），不自己再判断构建类型。
+func _quick_enabled() -> bool:
+	return InputMap.has_action(ACTION_QUICK_SAVE) and InputMap.has_action(ACTION_QUICK_LOAD)
+
+
+func _tone_color(tone: String) -> Color:
+	match tone:
+		"ok":
+			return Color("2f7d32")
+		"warn":
+			return Color("a8410f")
+		"bad":
+			return Color("a4133c")
+		_:
+			return UiKit.MUTED
 
 
 # ---------------------------------------------------------------------------
@@ -390,9 +548,18 @@ func _build() -> void:
 	col.add_theme_constant_override("separation", 6)
 	_panel.add_child(col)
 
-	_lbl_head = UiKit.label(font, "DEBUG   F1=隐藏全部UI   F3=叠加层", 18, UiKit.INK)
+	_lbl_head = UiKit.label(font, "DEBUG   F1=UI   F3=层   F5=快存   F9=快读", 18, UiKit.INK)
 	_lbl_head.name = "Head"
 	col.add_child(_lbl_head)
+
+	# 快存/快读反馈。**只在有话说时占位**：默认文字为空且 `visible=false`，
+	# 否则面板高度会随"有没有提示"跳变，`B-` 截图就不再逐位可复现。
+	_lbl_notice = UiKit.label(font, "", 14, UiKit.MUTED)
+	_lbl_notice.name = "Notice"
+	_lbl_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_lbl_notice.custom_minimum_size = Vector2(PANEL_WIDTH - 28, 0)
+	_lbl_notice.visible = false
+	col.add_child(_lbl_notice)
 
 	_lbl_scene = UiKit.label(font, "", 14, UiKit.MUTED)
 	_lbl_scene.name = "Scene"
@@ -418,7 +585,49 @@ func _build() -> void:
 	_lbl_csv.name = "Csv"
 	col.add_child(_lbl_csv)
 
+	_build_toast(font)
+
 	_refresh()
+
+
+## 快存/快读的提示必须**独立于叠加层**：叠加层默认关着，若提示只画在面板里，
+## 按 `F5` 就是"什么都没发生"——比报错更糟。所以另起一层，只在有话时可见。
+func _build_toast(font: Font) -> void:
+	_toast_layer = CanvasLayer.new()
+	_toast_layer.name = "ToastLayer"
+	_toast_layer.layer = LAYER + 1
+	add_child(_toast_layer)
+
+	var root := Control.new()
+	root.name = "Root"
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_layer.add_child(root)
+
+	var box := VBoxContainer.new()
+	box.name = "Box"
+	box.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	box.alignment = BoxContainer.ALIGNMENT_END
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.anchor_left = 0.5
+	box.anchor_right = 0.5
+	box.anchor_top = 1.0
+	box.anchor_bottom = 1.0
+	box.offset_top = -120.0
+	box.offset_bottom = -60.0
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	root.add_child(box)
+
+	_toast = PanelContainer.new()
+	_toast.name = "Toast"
+	_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast.add_theme_stylebox_override("panel", UiKit.sb(UiKit.PAPER, 3, 4, Vector2(4, 4), 10))
+	box.add_child(_toast)
+
+	_lbl_toast = UiKit.label(font, "", 15, UiKit.INK)
+	_lbl_toast.name = "Text"
+	_toast.add_child(_lbl_toast)
 
 
 func _push_sample() -> void:
@@ -481,6 +690,16 @@ func _refresh() -> void:
 	else:
 		_lbl_csv.text = "CSV %s   行 %d" % [_csv_path.get_file(), _csv_rows]
 
+	# 提示行按帧数过期（不用墙钟：见 CONFIRM_WINDOW_FRAMES 的注释）。
+	# `visible` 也跟着走，否则过期后留一块空行，面板高度与截图都不稳定。
+	if _lbl_notice != null:
+		var live := notice()
+		_lbl_notice.text = live
+		_lbl_notice.visible = live != ""
+		if live != "":
+			_lbl_notice.add_theme_color_override("font_color", _tone_color(_notice_tone))
+	_sync_toast()
+
 
 func _write_row() -> void:
 	var row := sample_row()
@@ -495,3 +714,18 @@ func _write_row() -> void:
 func _sync_panel_visible() -> void:
 	if _layer != null:
 		_layer.visible = overlay_on and not hud_hidden
+	_sync_toast()
+
+
+## toast 与面板**不同**的可见性规则：面板要 `overlay_on`，toast 只要有话就说，
+## 但同样服从 `F1`（隐藏全部 UI 时不留一条浮字）。
+func _sync_toast() -> void:
+	if _toast == null or _toast_layer == null:
+		return
+	var live := notice()
+	var vis := live != "" and not hud_hidden
+	_toast_layer.visible = vis
+	_toast.visible = vis
+	if live != "":
+		_lbl_toast.text = live
+		_lbl_toast.add_theme_color_override("font_color", _tone_color(_notice_tone))

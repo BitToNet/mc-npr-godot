@@ -25,9 +25,13 @@ const BINDINGS := {
 ## 三处各写一遍字符串迟早会漂移成"按了没反应"。
 const ACTION_DEBUG_HIDE_UI := "debug_ui_hide"
 const ACTION_DEBUG_OVERLAY := "debug_overlay"
+const ACTION_DEBUG_QUICK_SAVE := "debug_quick_save"
+const ACTION_DEBUG_QUICK_LOAD := "debug_quick_load"
 const DEBUG_BINDINGS := {
 	ACTION_DEBUG_HIDE_UI: [KEY_F1],
 	ACTION_DEBUG_OVERLAY: [KEY_F3],
+	ACTION_DEBUG_QUICK_SAVE: [KEY_F5],
+	ACTION_DEBUG_QUICK_LOAD: [KEY_F9],
 }
 
 static var _done := false

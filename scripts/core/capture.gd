@@ -111,6 +111,8 @@ const KEY_BY_NAME := {
 	"escape": KEY_ESCAPE,
 	"f1": KEY_F1,
 	"f3": KEY_F3,
+	"f5": KEY_F5,
+	"f9": KEY_F9,
 }
 
 var _enabled := false
