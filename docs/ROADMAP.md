@@ -1,7 +1,7 @@
 # Pocket Sandbox 玩法扩展规划（ROADMAP）
 
-> **文档版本**：v1.6 · 2026-10-19（版本变更一律登记在 §16）
-> **状态**：执行中（M0 收尾）· 已完成 S0.1–S0.6，S0.5 待用户通读确认（`D-`）
+> **文档版本**：v1.7 · 2026-10-19（版本变更一律登记在 §16）
+> **状态**：执行中 · **M0 全部闭环（S0.1–S0.6 均已验收）**，下一步进入 M1
 > **性质**：本文是本项目玩法扩展的**唯一计划来源与验收台账**（single source of truth）。
 > 实现过程中的任何偏差、新增、删减，必须先回到本文更新，再动代码。
 > **目标定位**：中型商用游戏项目（Windows 桌面）。
@@ -721,10 +721,10 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 - `D-` 你通读并确认两份文档与实际实现一致。
 
 **依赖与风险**：S0.1/S0.2。
-**状态**：🧪 待验收（`A-`/`B-`/`C-` 已过，`D-` 待你通读两份文档后确认）
+**状态**：✅ 已验收（`A-`/`B-`/`C-` 全部通过，`D-` 用户已于 2026-10-19 通读确认）
 
 **落地记录（2026-10-19）**
-- `docs/ENGINEERING.md` 补齐 §7–§12：命名规范（含 11 个 `class_name` 与 4 处路径引用点）、
+- `docs/ENGINEERING.md` 补齐 §7–§13：命名规范（含 **12** 个 `class_name` 与 4 处路径引用点）、
   信号约定（25 条实测清单 + 4 类判定口径）、数据表格式（`Canon` 契约，**标注"未实现，S1.1 落地"**）、
   autoload 上限与顺序约束、允许/禁止清单、以及"如何新增一个合规物件"的交叉引用。
 - `docs/ART_PIPELINE.md`（新建）：§3.1 的 Godot 落地清单 + 6 步新建模板 + 3 个反例，
@@ -738,6 +738,40 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 - 验收用例 `s0_5_doc_conventions`（`pure`）：对两份文档做**双向**断言 —— 正向要求
   每条约定在代码里定位得到，反向用**编造的锚点**证明"文档里有关键字"不会假绿；
   另断言 `docs/art/s0_5/` 的 6 张 PNG 存在且 sha256 与 `s0_5_samples` 批次清单一致。
+
+**验收记录（2026-10-19 闭环，提交 `9070501`）**
+
+| 项 | 结果 |
+|---|---|
+| `A-` 抽查 5 条约定能在代码定位 | **通过**（用例对 12 类 + 25 信号 + 9 autoload + 7 守卫规则逐条断言"文档有锚点 **且** 代码有实现"，远超 5 条） |
+| `B-` 3 张合规 + 3 张违例 | **通过**（六张 sha256 与批次清单逐位一致；两次独立窗口进程拍同一批次 **6/6 相同**） |
+| `B-` 6 机位基线回归 | **通过**（**6/6 sha256 全等**，本步未触碰主场景/着色器/`style.gd`/`scatter.gd`/`terrain.gd`/`camera_rig.gd`） |
+| `C-` 性能基线回归 | **通过**（`s0_2_baseline`；FPS 极差 0.150%、ms/frame 极差 0.138%，均 < 5%） |
+| `D-` 通读两份文档 | **通过**（用户 2026-10-19 确认） |
+| 窗口 `--all` | **20 用例 / 0 失败 / 0 跳过 / 1108 断言 / 约 108s**，退出码 0，**连跑 2 轮全绿** |
+| headless `--all` | 20 用例 / 0 失败 / 跳过 5（headed 用例），退出码 0 |
+| 启动门禁 | `--headless --quit-after 60` 退出码 0，0 条 `ERROR` / `SCRIPT ERROR` |
+| autoload | **9 / 10**（本步未新增） |
+
+> **守卫为什么抓不到第 ③ 对反例**：`06_bad_smooth_ball` 不是"用了某个被禁的类"，
+> 而是**少调了一次 `MeshUtil.facet()`**。守卫按 token 扫，扫不出"这个网格没有面着色"。
+> 故 `docs/ART_PIPELINE.md` §2.2 明确写"守卫绿了不等于看起来对"，并把
+> "拍了图并真的看了"写进提交前 checklist —— 这一条**只能靠人**。
+
+**顺带修掉的既有缺陷（2026-10-19，同一提交）**
+
+`tools/verify.gd::_click_control()` 与 `scripts/core/capture.gd::_click_path()` 原本只注入
+`InputEventMouseButton` 的 press/release，**没有 `InputEventMouseMotion`**。Godot 的
+`Viewport` 用 `gui.mouse_focus` 决定把按键投给谁，而该焦点**由鼠标移动事件更新**；
+没有移动，按键就落在失效焦点上 ⇒ `s0_3_slots` 间歇性失败（**在 HEAD 上跑 5 次红 2 次**，
+失败点每次不同：读取没跳宫格 / 另存为没进宫格 / 两轮截图 sha256 不一致）。
+修法：点击前先发一个落在目标中心的 motion 事件，**不动产品码**。
+修后 `s0_3_slots` **连跑 18 次全绿**、`--all` **连跑 2 轮全绿**。
+
+> **两条可复用的判断法**：① **"偶发失败"要先证明它是既有的** —— 把
+> `git show HEAD:tools/verify.gd` 导成临时脚本跑同一用例，它同样红，才说明不是自己引入的。
+> ② **失败点漂移是"共享前置条件坏了"的典型特征** —— 每次都红同一条是那条断言的问题；
+> 红点到处跑，说明更早的某一步（这里是"点击真的落下去了"）时灵时不灵，下游全是受害者。
 
 ### S0.6 可复现渲染时钟（可注入 `u_time`）
 
@@ -1790,7 +1824,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
 | S0.3 | 全局服务骨架 | S0.2 | ✅ 已验收 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 `39f0c34`，subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 2 ✅ 已完成（2026-10-16，提交 `93c25e6`）**：新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` 之后，3 → 7）：9 固定槽位（1-based）+ `schema_version: 1` + `meta` 槽位卡片字段（真实时间 / 游戏内日期时间 / 队伍名与等级 / 累计时长）+ 脏存档容错（非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 `game` 一律拒读且不改动当前状态；未知·缺失·类型错误字段逐条告警并保留当前值）+ `migrations` 版本链钩子 + **无自动存档**（无 `_ready`/`_process`/`EventBus` 订阅，`SAVE_DIR` 由首次写入惰性创建）。新增 4 用例：`s0_3_roundtrip` 63 断言（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回并回吐快照文件）、`s0_3_dirty` 47 断言、`s0_3_atomic` 29 断言（跨进程并发 800 次写 / 170 次观测，**0 次半截内容**、读者重试后 **0 次读取失败**、最终与写者自述 sha256 逐位一致）、`s0_3_no_autosave` 17 断言（启动 + 世界重建 + 五种全局事实 + 完整启动子进程后，`user://saves` 全部文件哈希与 mtime **零变化**，且有正对照证明该检查真能检出显式存档）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **13 用例 / 0 失败 / 0 跳过（385 断言）/ 退出码 0**，headless 13 用例 / 0 失败 / 2 跳过；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 3 ✅ 已完成（2026-10-16，提交 `2036423`）**：新增 `scripts/core/scene_router.gd`（autoload `SceneRouter`，7 → 8）与 `scenes/battle/battle_stub.tscn` + `scripts/battle/battle_stub.gd`（**占位靶子**，M2 替换）。`SceneRouter` 是**唯一**允许调用 `change_scene_to_file()` 的文件（守卫新规则 `scene_change_owner` 按属主路径放行）；浅栈 `world` → `battle`（`MAX_DEPTH=2`），越界一律显式失败并给出原因，拒绝不改动状态；栈与真实屏幕对账（场景被外部换掉/释放后 `current_route()` 归空，不沿用旧信念）；`_expected_path` 挡住同帧内的第二次切换（`change_scene_to_file` 只是登记，`current_scene` 要到帧末才更新）；只发自身事实 `route_changed(from,to)`，不发 `encounter_started`/`battle_finished`（留给 M1/M2，避免双重发射）；无 `_ready`、无 `_process`（批次 4 的 `paused` 不会卡住路由）。新增用例 `s0_3_router` 70 断言，覆盖：路由表与 API 契约、切换落地前的同帧语义、`world→battle→world` 后**节点数 ±0（101 → 101）**、世界子树**结构指纹逐条一致（92 条）**、**seed 派生值一致**（`spawn_point` + `height_at` + `Scatter.stats`）、栈深上限与三类越界的显式拒绝、`route_changed` 恰好 4 次且被拒调用一次不播报、占位场景正交相机/面着色网格（242 三角面）/`Style.toon()` + 逆壳描边、以及"栈不撒谎"。同批把 `s0_3_state` 的 autoload 契约 7 → 8、`s0_2_guard` 类数描述 7 类 → 8 类。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **14 用例 / 0 失败 / 0 跳过（460 断言）/ 退出码 0 / 50034 ms**，headless 14 用例 / 0 失败 / 2 跳过（411 断言）/ 13939 ms；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`C-` fps_mean 59.97–60.02、ms/frame 16.662–16.676、三角面 219,978、绘制调用 96。批次 4（菜单 + 九宫格）→ **已完成 ✅（2026-10-16，提交 `f3006d3`，subject `feat(ui): S0.3 批次 4 —— 新增存档菜单与 3×3 九宫格，接入 ESC 暂停与 SaveSystem`）**：新增 `scripts/ui/menu_page.gd`（`CanvasLayer`，`layer=20` / `PROCESS_MODE_ALWAYS` / `add_to_group("menu")`；主页五入口 + 宫格页 + 覆盖确认弹窗三页；`ESC` 四级层级＝弹窗→宫格→主页→关闭，`keycode`/`physical_keycode`/`ui_cancel` 三者都认）与 `scripts/ui/save_grid.gd`（`COLUMNS=3` / `SLOT_COUNT=9`、卡片 296×104、`slot_pressed(slot)`；卡片正文**只读** `SaveSystem.slot_info(slot).label`，宫格自己不算、不缓存槽位数据）。`scenes/main.tscn` 挂载 `MenuLayer`（**默认隐藏**，否则 6 机位 `B-` 立即变红）；`scripts/core/render_clock.gd` 与 `scripts/ui/ui_panel.gd` 补 `PROCESS_MODE_ALWAYS`（陷阱 1 落地）；`scripts/core/capture.gd` 的 `--shots` 新增 UI 步骤驱动（`ui:["esc","click:<控件相对路径>"]` + `ui_expect` 自证行；**产品码不留演示状态后门**，"拍错屏"直接以非 0 退出而不是产出一张看着正常的 PNG）。新增用例 `s0_3_slots` **100 断言**（装配与层号、暂停契约、无当前槽位的两条跳转、空槽位直写与卡片刷新、`ESC` 层级、4 张 `B-` 截图两轮逐位一致 + 两两不同 + 非空图）与 `s0_3_overwrite` **34 断言**（整页弹窗先问后写、弹窗期间与取消后目录逐项 sha256+mtime 不变、`save_written` 计数 0 → +1、主页「保存」写已占用的当前槽位同样先问）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **16 用例 / 0 失败 / 0 跳过 / 594 断言 / 退出码 0 / 71843 ms**，headless 16 用例 / 0 失败 / **4 跳过** / 411 断言 / 14672 ms；**`B-` 6 机位与 S0.1 基线逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`B-` 菜单 4 张（1600×900，两轮独立进程逐位一致）`01_menu_home eeec5d02…` / `02_grid_empty ce9175ce…` / `03_grid_full a504ec4e…` / `04_overwrite_confirm 1563abf8…`；`C-` fps_mean 60.0、ms/frame 16.667、三角面 219,978、绘制调用 96（与批次 3 全等），**静态内存 91.3 → 126.13 MB、对象 1778 → 2034** —— 增量经独立探针拆开量过：**菜单子树 77 节点 = 34.29 MB / 254 对象**（headless 侧 99.52 → 65.23 MB，与窗口侧 +34.8 MB 相互印证），主体是中文 `SystemFont`（匹配到系统 CJK 字体）及其字形缓存，登记为"若日后压内存，首选项是换子集化随包字体"。**两条负面结论已回写**：① `--all` 在同**一个进程**里顺序跑完所有用例，因此"上一个用例停在哪个槽位"属于必须显式复原的状态（`s0_3_roundtrip` 走后 `current_slot` 停在 3，导致 `s0_3_slots` 的"无当前槽位"整段失效 —— `_restore_defaults()` 已补 `SaveSystem.current_slot`/`last_error`，两个新用例自带前置条件）；② 同一秒内状态没变时两次存档的**字节可以逐位相同**（`saved_at` 只到秒），"文件内容变了"不能当"确实写过了"的判据，要用 `save_written` 的发布次数。**未闭环项**：淡入淡出过渡**未纳入本批**（幕布必须活过 `change_scene_to_file()` 的场景释放 ⇒ 需要一个不挂在任何场景里的持久属主，属要先对齐的设计决定，顺延为独立小步）。**`D-` 人工试玩已通过（2026-10-16，用户）**：`ESC` 开合 / 宫格选槽 / 覆盖二次确认手感确认通过、无返工项 ⇒ 本步 `A-`/`B-`/`C-`/`D-` 全部闭环，状态置 `✅ 已验收` |
 | S0.4 | 调试与观测层 | S0.3 | ✅ 已验收 | **批次 1 ✅ `ed92e66`**：抽 `UiKit` 公共控件工厂（`ui_panel` / `menu_page` / `save_grid` 三份重复实现合一），三份 UI 的 `B-` 截图逐位不变。**批次 2 ✅ 2026-10-19**：新增 autoload `Debug`（8 → 9，`scripts/core/debug_layer.gd`）—— 默认隐藏的叠加层（层号 30 > 菜单 20 > HUD 10，整层 `MOUSE_FILTER_IGNORE`）、帧时间曲线（纵轴固定 0–33ms ⇒ 图形是采样值的纯函数）、节点/分组计数、场景与路由栈（两级回退，见 §5 S0.4 实测结论 1）、时钟与 Rng 子流；`input_setup.gd` 新增 `debug_ui_hide`（`F1`）/`debug_overlay`（`F3`）与唯一闸门 `ensure_debug_hotkeys(OS.is_debug_build())`（关掉时**删除 action**）；`capture.gd` 支持 `ui: ["key:f3"]` 步骤与 `ui_expect.overlay/ui_hidden` 自证；`debug_layer.gd` 支持 `--obs-csv=`（纯修饰符，不触发截图、不抢退出码）。**批次 3 ✅ 2026-10-19**：`F5` 快存 / `F9` 快读（`debug_quick_save` / `debug_quick_load`，仍写 9 个真槽位、无隐藏槽位与旁路文件；已占用槽位第一次只登记待确认、`CONFIRM_WINDOW_FRAMES = 120` 帧内再按一次才覆盖 ⇒ §3.5 的二次确认不被绕过；闸门做在函数内部而非只在 `_input`，发布构建直接调用也无动作）；快存快读反馈落在独立 `ToastLayer`（`LAYER + 1`，不依赖叠加层开着，服从 `F1`，按帧过期）；菜单「设置」页填实为调试页（只读事实与 `Debug.stats()` 同源 + 「打开叠加层」按钮，按钮路径 `Root/Home/Panel/Col/Actions/Settings` 不变）。新增用例 `s0_4_overlay` 70 断言 + `s0_4_cost` 32 断言 + `s0_4_quick` 62 断言。验收：窗口 `--all` **19 用例 / 0 失败 / 0 跳过 / 761 断言 / 108015 ms**、退出码 0；headless 同口径 0 失败、headed 用例跳过；`A-` 开关前后世界结构指纹 + seed 派生量 + `GameState` 字段 + **`Rng` 子流 state** 逐项不变；`C-` 120 实体夹具叠加层**每帧成本 0.0044 ms < 0.5**（附 0.5ms/2ms 自旋标尺回收率 ≈100% 证明可分辨），且有 draw_calls 反向对照；`B-` 两批次各两轮独立进程 sha256 逐位一致、互不相同，`F1` 后 UI 面板底色**精确 0 像素**（基准图 3892），6 机位与 S0.1 基线**全等 6/6**；`D-` 人工手感已由用户确认通过（批次 2 反馈"手感可以"） |
-| S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | 🧪 待验收 | — |
+| S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ✅ 已验收 | 提交 `9070501`。产出 `docs/ENGINEERING.md` §7–§13（命名规范 **12 个 `class_name`** · 信号约定 25 条实测清单 · `Canon` 契约**标注"未实现，S1.1 落地"** · autoload 9/10 与三条顺序约束 · 允许/禁止清单含 §11.3「守卫管不到」 · 三个新增 checklist）与新建 `docs/ART_PIPELINE.md`（Three.js→Godot 映射表 · 三对 A/B 对照 · 6 步新建物件模板 · 提交前自检 · 复现命令与 sha256 基线）。教材夹具 `scenes/dev/art_samples.tscn` + `scripts/dev/art_samples.gd`（6 展台、3 对 A/B 各只差一个变量；①共用同一 `ArrayMesh` 只换材质 ②`blob()` vs `BoxMesh` ③`blob()` vs 未 `facet()` 的 `SphereMesh`）。工具链新增 `--at="x,y,z"` 修饰符与位置参数化场景。新增用例 `s0_5_doc_conventions` **90 断言**：12 类 + 25 信号 + 9 autoload + 7 守卫规则**逐条双向**断言（文档有锚点 **且** 代码有实现）、`Canon` 未实现标记、教材目录**双向约束**（产品码 0 处引用 `dev/`、夹具命中数恰等于白名单登记数）、6 张 PNG 的 sha256 与批次清单逐位一致、**4 条编造锚点反向对照**。验收：窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 1108 断言 / 约 108s**、退出码 0、**连跑 2 轮全绿**；headless 20 用例 0 失败 5 跳过；启动门禁 0 条 `ERROR`；`B-` 6 机位与基线**全等 6/6**；`C-` FPS 极差 0.150% / ms-per-frame 极差 0.138%；`D-` 用户已通读确认。**顺带修掉既有缺陷**：`_click_control()` / `_click_path()` 缺 `InputEventMouseMotion` ⇒ `gui.mouse_focus` 失效 ⇒ `s0_3_slots` 间歇性失败（HEAD 上 5 跑 2 红、失败点漂移），先证既有再修，修后连跑 18 次全绿。结论见 `docs/成果.md` |
 | S0.6 | 可复现渲染时钟（可注入 `u_time`） | S0.2 | ✅ 已验收 | 提交 `457a7d2`（实现）+ `953fd0d`（用例与守卫）；`tools/verify.gd --all` 窗口模式 **8/8 用例、152/152 断言**、退出码 0，headless 6 通过 + 2 跳过、退出码 0。关键证据 `s0_6_repro` 31/31：两独立进程同参数截图 `img_diff` **0 像素 / 0.0000%** 且 sha256 逐位相同（`s0_boot_follow`、`s0_boot_wide`），`--yaw=45→52` 与 `--frames=15→200` 反向对照均判不同；`s0_6_clock` 28/28；修复前同口径实测 1.62%–5.67%。`C-` 三次采样 ms/frame 16.685/16.667/16.667、三角面 219,978、绘制调用 96（vsync 封顶，仅证明未跌破上限）。结论与遗留见 `docs/成果.md` |
 
 ### M1 大地图
@@ -1916,6 +1950,8 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 2026-10-19 | **v1.3 → v1.4：合并 `docs/spec.md` 的 M1 契约与排期裁定（M-1…M-12 逐条落地）**。① **新增步骤 S1.0 场景与路由迁移**（M1 步骤数 10 → 11，合计 54 → 55），拆 4 个可独立回滚子步；② **S1.4 增「时钟收敛」**：`GameState.game_time` 升级为唯一游戏时钟、`DayNight` 改派生、`Clock` 保持渲染专用，变速实现定为"每帧 N 次完整固定步"，并新增 **`day_length` 语义变更 + 存档 schema v1→v2 迁移**与用例 `s1_4_speed`；③ **S1.9 增 schema v2 与 `FIELD_MANIFEST`**（含反向对照断言）；④ **S1.5 增本地化（Q2 裁定）与「先扩 `UiKit` 再写面板」**；⑤ **S1.6 冻结 `BattleContext`/`BattleResult` 字段表、占位结算、两级迷雾（Q9 裁定）**，并明确 AI 必须是纯函数；⑥ **S1.1 参数表改为"可改默认值"**（Q14 新增并裁定）+ 锚点优先级 + 生成实现要点；⑦ **S1.10 增 M1 出口四问**（路线 B 的门禁）；⑧ §3.4 增 `--scene=` 取景命令；⑨ §4 登记排期路线 B + 不设硬期限 + 人日估算；⑩ §13 R4 改为「不提前」；⑪ §14 Q2/Q4/Q9 置为已裁定、新增 Q14；⑫ §15 台账补 S1.0 行、S1.10 依赖改 S1.0–S1.9、合计改 55；⑬ 附录 A 更正 4 行（`main.gd` / `main.tscn` / `terrain.gd` / `camera_rig.gd` 的"不回改"结论）并补 5 个新增文件 | 与用户就 8 个决策点逐项对齐后写入 `docs/spec.md`（v0.1→v0.3），本条把其中**影响 ROADMAP 的 12 项**合并回来。合并前 `docs/spec.md` 只作辅助文档，ROADMAP 仍是唯一状态来源 —— 二者不一致时以本条为准 | 用户（2026-10-19 明确要求"先合并需求再执行任务"，并批准开始合并） |
 
 | 2026-10-19 | **v1.4 → v1.5：S0.5 落地（工程规范 + 美术管线文档）并更正 4 处过期条文**。① **信号命名规则按实际代码更正**：`on_xxx`（按钮）→ `*_pressed`（按钮）。既有 7 处实现（`ui_panel.gd` ×5、`save_grid.gd` ×1、`debug_layer.gd` 的 `overlay_toggled`）一致用过去式，改名会让 7 个信号与其连接点同时变动却不带来行为收益 ⇒ **改规则不改代码**。② **§3.2 autoload 计数更正**：原文"合计 8 / 当前 6"，实际为 **9**（S0.4 批次 2 新增 `Debug` 后未同步）；余量 2 → 1。③ **§3.2 目录结构补 `scripts/dev/`**：教材夹具需要一处**允许故意违例**的目录，并配硬约束"产品码不得引用 `scripts/dev/`"。④ **`Canon` 明确标为未实现**：附录 A 列的 `scripts/core/canon.gd` 不存在，S0.5 只在文档里写契约（JSON 格式 + 读入钳制告警 + 文本存 key），落地留 S1.1；验收用例断言"待建"标记存在，而不是假装它已存在 | 与用户就 3 个决策点逐项对齐：**范围**=S0.5 全量一次做完（不拆批）、**信号**=以实际代码为准改规则（另两个选项"重命名 7 处信号""双约定并存"被否）、**Canon**=只写契约留给 S1.1。另附带修掉 `docs/ENGINEERING.md` §5 陷阱 3 的过期描述（`GUARD_WHITELIST` 实际按 `path`+`rule` 匹配，不含行号） | 用户（2026-10-19 对齐三轮问答后批准执行） |
+
+| 2026-10-19 | **v1.6 → v1.7：S0.5 闭环（`D-` 用户确认）**。§5 S0.5 状态 `🧪 待验收` → `✅ 已验收` 并补「验收记录」表（`A-`/`B-`/`C-`/`D-` 逐项 + 窗口/headless `--all` 实测 + 启动门禁 + autoload 计数）；§15 台账 S0.5 行填实验收证据（提交 `9070501`）。同时更正两处我复核时发现的过期事实：① §5 S0.5 落地记录写"11 个 `class_name`"，实测为 **12**（`Select-String '^class_name '` 逐个数出 `Player`/`CameraRig`/`InputSetup`/`MeshUtil`/`UiKit`/`UiPanel`/`BrutalSlider`/`CloudField`/`DayNight`/`Scatter`/`Terrain`/`WaterSurface`）；② 落地记录原写"§7–§12"，实际已补到 **§13**。文档头部状态改为"M0 全部闭环，下一步进入 M1" | S0.5 的 `D-` 由用户于 2026-10-19 明确确认"确认"；两处数字更正来自 §15 填证据时的复核（避免把错误数字写进台账） | 用户 |
 
 | 2026-10-19 | **v1.5 → v1.6：修掉注入点击的既有缺陷（缺鼠标移动）**。`tools/verify.gd::_click_control()` 与 `scripts/core/capture.gd::_click_path()` 原本只注入 `InputEventMouseButton` 的 press/release，**没有 `InputEventMouseMotion`**。Godot 的 `Viewport` 用 `gui.mouse_focus` 决定把按键投给谁，而该焦点**由鼠标移动事件更新**；没有移动，按键就落在失效焦点上 ⇒ `s0_3_slots` 间歇性失败（**在 HEAD 上跑 5 次红 2 次**，失败点每次不同：读取没跳宫格 / 另存为没进宫格 / 两轮截图 sha256 不一致）。修法：点击前先发一个落在目标中心的 motion 事件，**不动产品码**。修后 `s0_3_slots` 连跑 18 次全绿、`--all` 连跑 2 轮全绿。另给 `_shoot_menu_case()` 加了失败时打印子进程末尾 20 行的诊断（原来只知道"少了一次自证"，不知道少在哪一步） | 本步在 `--all` 里偶发命中该失败。**先证明了它是既有的**：把 `git show HEAD:tools/verify.gd` 导成临时脚本跑同一用例，同样红。**失败点漂移是"共享前置条件坏了"的典型特征** —— 每次都红同一条是断言的问题，红点到处跑说明更早的某一步时灵时不灵 | 用户（S0.5 验收过程中发现） |
 
