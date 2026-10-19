@@ -1,12 +1,14 @@
 # 工程结构（Pocket Sandbox — NPR Diorama）
 
-> 本文件由 **S0.1 目录与工程结构重组**产出，记录目录职责、旧→新路径映射、迁移前基线哈希
-> 与执行陷阱。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录。
+> 本文件由 **S0.1 目录与工程结构重组**产出（§1–§6），由 **S0.5 工程规范与美术管线文档**补齐
+> §7–§12。**目录约定的权威定义在 `docs/ROADMAP.md` §3.2**；本文件是其落地记录与可执行细则。
 >
-> ⚠️ **本文件尚未完成**：按 `ROADMAP` §5 S0.5，本文件还需补齐**命名规范、信号约定、
-> 数据表格式、autoload 上限（当前 8 / 上限 10）、允许/禁止清单**；S0.5 另产出
-> `docs/ART_PIPELINE.md`（含「新建合规物件」6 步模板与 3 个反例 + 内嵌截图）。
-> 当前内容仅覆盖 S0.1 的交付范围。
+> 与 `AGENTS.md`（项目级强制美术/版本控制规范）冲突时，**以 `AGENTS.md` 为准**：本文件是它的
+> 工程化展开，不是对它的再解释。美术相关的落地清单另见 `docs/ART_PIPELINE.md`。
+>
+> 覆盖范围：§1 目录职责 · §2 迁移映射 · §3 引用规则 · §4 `B-` 基线 · §5 执行陷阱 ·
+> §6 验收基线 · **§7 命名规范 · §8 信号约定 · §9 数据表格式（`Canon` 契约）·
+> §10 autoload 上限 · §11 允许/禁止清单 · §12 新增物件 checklist · §13 S0.5 验收**。
 
 ---
 
@@ -148,7 +150,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 |---|---|---|---|
 | 1 | **`.godot` 全局类缓存不随文件移动更新** | headless `--script` 报 `Could not find script for class "MeshUtil"`、`Could not parse global class "CameraRig" from "res://scripts/camera_rig.gd"`（旧路径）、`Class "CameraRig" hides a global script class`（新旧同时注册） | 删除 `.godot/global_script_class_cache.cfg`（必要时连 `.godot/uid_cache.bin`、`.godot/shader_cache/`），再执行 `--headless --import` 重建。`.godot/` 是 gitignore 产物，可再生 |
 | 2 | **`.uid` 与脚本必须同批同目录移动** | `uid://` 引用断裂或 UID 被重新分配 | 用 `git mv` 成对移动；S0.1 全程 100% 成对 |
-| 3 | **`GUARD_WHITELIST` 按精确路径 + 行号登记** | 移动白名单内文件后 `s0_2_guard` 误报「未登记违例」 | 与文件移动**同批**更新白名单条目（涉及 `core/main.gd`、`core/capture.gd`、`world/terrain.gd`） |
+| 3 | **`GUARD_WHITELIST` 按「精确路径 + 规则名」登记，与行号无关** | 移动白名单内文件后 `s0_2_guard` 误报「未登记违例」；反过来，只改行号**不需要**动白名单 | 与文件移动**同批**更新白名单条目里的 `path`（涉及 `core/main.gd`、`core/capture.gd`、`world/terrain.gd`、`dev/art_samples.gd`）。判定口径见 `tools/verify.gd::_whitelist_reason()`：只比较 `path` 与 `rule` 两个字段，行号仅用于打印。⚠️ 本条原文写的是"精确路径 + 行号"，与实现不符，S0.5 更正 |
 | 4 | **着色器路径错误会静默退化** | 不报错，但材质回落为默认（画面变样） | 靠 `B-` 6 机位逐位比对兜住；改 `style.gd` 的 3 条 `load()` 后必须复跑 |
 | 5 | **`verify.gd` 的子进程必须带 `--` 分隔符** | 子进程收不到 `--shots`，不退出，`OS.execute` 无超时 ⇒ 整个套件静默挂死 | 用 `_exec_user()`（自动插 `--` 并加 `--quit-after` 兜底） |
 | 6 | **引擎的「改名覆盖」在 Windows 上不是原子替换** | 跨进程狂写同一槽位时（`s0_3_atomic`，800 次写 / 170~193 次观测），读者会看到 17~28 次「文件不存在」、22~25 次「文件在但读不出来」；但**没有任何一次半截内容**（每一次读得出来的样本都是完整合法 JSON，两轮 131 / 140 个全部合法）。单进程探测只看末态会误判为「无空窗」 | 写者：`.tmp` → 回读校验 → `rename` + 有界重试；读者：`_read_slot_text()` 有界重试，并以「同目录 `.tmp` 是否存在」区分「真空槽位」（立即返回）与「发布中」（重试）。规则与实测数字见 `ROADMAP` §3.5 与 `scripts/core/save_system.gd` 文件头 |
@@ -167,6 +169,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 19 | **headless 下渲染指标恒为 0，会让"列里有值"的断言假通过** | `--obs-csv=` 的"实时模式有实测值"若在 headless 子进程里验，会得到一列 `0.000` 而 `!= ""` 照样成立（看起来有值、其实是零）：`RENDER_TOTAL_DRAW_CALLS_IN_FRAME` 在 dummy 渲染器下恒 0 | 该探针必须**开窗口**跑，断言写成"**非零**行数 ≥ N"（而不是"列非空"）。同理：`s0_4_cost` / `s0_3_slots` / `s0_3_overwrite` / `s0_2_baseline` / `s0_6_repro` 都标 `kind="headed"`，headless 下跳过而不是判失败 |
 | 20 | **headless 下窗口尺寸是 0×0 ⇒ `pure` 用例验不了鼠标命中** | 给菜单调试页按钮写点击断言时，`_click_control` 报告"矩形已排出尺寸、点击真的落下去了"，但处理器**一次都没跑**、提示行原封不动。实测 `DisplayServer.get_name() == "headless"`、`DisplayServer.window_get_size() == (0, 0)`：注入的鼠标事件没有可命中的视口 | `pure` 用例只验"控件在 + 连着处理器 + 处理器真驱动目标"（直接 `pressed.emit()`），鼠标命中路径交给 `headed` 用例（同一套 `UiKit.button_page` 工厂与页面结构）。**注意** `_click_control` 的返回值只说明"矩形非退化"，**不说明事件被谁接住** —— 想区分这两件事，得让处理器留下可观测痕迹（如改写提示行） |
 | 21 | **"发布构建完全禁用"的闸门不能只做在 `_input` 里** | `_input` 只挡按键，挡不住"有人直接调 `quick_save()`"（未来的新 UI 入口、测试代码、任何脚本调用都能绕过），于是"完全禁用"名不副实 | 闸门做进**函数内部**：`quick_save()` / `quick_load()` 开头检查 `_quick_enabled()`（= 对应 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**为此再写一次 `OS.is_debug_build()` —— `s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是因为在调试页多写了一行而把该断言变红 |
+| 22 | **`var x := <返回 Variant 的调用>` 会编译失败，而不是警告** | 本步给 `capture.gd` 加 `--at=` 时写 `var p := _parse_point(...)`（该函数返回 `Variant`，成功给 `Vector3`、失败给 `null`）。工程开了"警告即错误"，于是 `Parse Error: The variable type is being inferred from a Variant value` ⇒ **整个 `capture.gd` 加载失败** ⇒ 9 个 autoload 里 `Capture` 挂了，引擎报 `Failed to instantiate an autoload` | 显式标注 `var p: Variant = _parse_point(...)`。**更值得记住的是排查路径**：窗口模式（`Godot_v4.7-stable_win64.exe`）跑截图时**静默挂死、一行输出都没有、进程还退干净了**；改用 `*_console.exe --headless --quit-after N` 跑同一场景，编译错误立刻打出来。**症状是"卡住/无输出"，病因往往在编译期，`*_console.exe` 是唯一的眼睛** |
 
 ---
 
@@ -312,3 +315,268 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 >
 > **另一条**：`--obs-csv=` 的"实时模式有实测值"最初在 headless 子进程里验，得到一列 `0.000` 而
 > `!= ""` 依旧成立（见 §5 陷阱 19）。**"列非空"与"列有真值"是两件事**，后者必须断言数值特征。
+
+---
+
+## 7. 命名规范
+
+### 7.1 文件与目录
+
+| 对象 | 规则 | 例子 |
+|---|---|---|
+| 脚本文件 | `snake_case.gd`，一个文件一个职责 | `save_system.gd`、`mesh_util.gd` |
+| 场景文件 | `snake_case.tscn` | `main.tscn`、`battle_stub.tscn` |
+| 着色器 | `snake_case.gdshader`，按用途分目录 | `common/toon.gdshader`、`terrain/water.gdshader` |
+| `.uid` 文件 | **与脚本成对同批移动**，不得单独删除或改名 | 见 §5 陷阱 2 |
+
+目录职责见 §1；新增目录须先在 `ROADMAP` §3.2 登记。
+
+### 7.2 `class_name`（全局类）
+
+**12 个**（S0.5 实测，`grep -n "^class_name" scripts/**/*.gd`）：
+
+| 类名 | 文件 | 用途 |
+|---|---|---|
+| `Player` | `scripts/actors/player.gd` | 演示角色 |
+| `CameraRig` | `scripts/core/camera_rig.gd` | 正交等距相机 |
+| `InputSetup` | `scripts/core/input_setup.gd` | 输入映射 + 唯一调试热键闸门 |
+| `MeshUtil` | `scripts/core/mesh_util.gd` | 低模几何库 |
+| `UiKit` | `scripts/ui/ui_kit.gd` | 公共控件工厂 |
+| `UiPanel` | `scripts/ui/ui_panel.gd` | 调试 HUD 面板 |
+| `BrutalSlider` | `scripts/ui/ui_slider.gd` | 方形滑块 |
+| `CloudField` | `scripts/world/clouds.gd` | 云层 |
+| `DayNight` | `scripts/world/day_night.gd` | 昼夜与光照 |
+| `Scatter` | `scripts/world/scatter.gd` | 植被散布 |
+| `Terrain` | `scripts/world/terrain.gd` | 地形生成 |
+| `WaterSurface` | `scripts/world/water.gd` | 水面 |
+
+**规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
+只在两个文件之间用的类型应走 `preload()` 常量（见 §3），因为全局类会进
+`.godot/global_script_class_cache.cfg`，改名/移动时要连带清缓存（§5 陷阱 1）。
+
+### 7.3 变量与函数
+
+| 种类 | 规则 | 例子 |
+|---|---|---|
+| 私有成员 | `_snake_case` 前缀下划线 | `_rng`、`_focus`、`_toon_materials` |
+| 常量 | `SCREAMING_SNAKE_CASE` | `SPACING`、`PALETTE`、`GUARD_WHITELIST` |
+| 公开方法 | `snake_case()`，动词开头 | `snap_to()`、`set_time()`、`build_ramp()` |
+| 私有方法 | `_snake_case()` | `_apply()`、`_build_stage()` |
+| 信号处理器 | `_on_<源>_<事件>()` | `_on_regenerate()` |
+| 枚举 | `PascalCase` 类型 + `SCREAMING_SNAKE` 值 | `enum Mode { FOLLOW, ORBIT, FREE }` |
+
+### 7.4 类型标注
+
+**一律显式标注**（项目开了 `untyped_declaration` 警告即错误）。特别地：
+
+```gdscript
+var p := _parse_point(text)      # ❌ 从 Variant 返回值推断 → 警告升级为错误
+var p: Variant = _parse_point(text)   # ✅ 显式声明
+```
+
+这条在 S0.5 真的把 autoload 打崩过一次：`capture.gd` 的
+`var p := _parse_point(...)`（返回 `Variant`）导致 **整个 `capture.gd` 解析失败**，
+连带 9 个 autoload 全部加载不了。见 §5 陷阱 22。
+
+---
+
+## 8. 信号约定
+
+### 8.1 四类命名口径（S0.5 按实际代码更正）
+
+| 类别 | 规则 | 实测清单（25 条声明） |
+|---|---|---|
+| **按钮/交互** | `*_pressed` | `ui_panel.gd`：`regenerate_pressed` / `outline_pressed` / `bands_pressed` / `camera_pressed` / `autocycle_pressed`；`save_grid.gd`：`slot_pressed` |
+| **状态变化** | `*_changed` | `style.gd`：`style_changed`；`day_night.gd`：`cycle_changed(on)`；`ui_slider.gd`：`value_changed(v)`；`debug_layer.gd`：`ui_hidden_changed(hidden)`；`scene_router.gd`：`route_changed(from, to)` |
+| **请求** | `*_requested` | **暂无实现**（约定保留；出现时按此命名） |
+| **已发生事实** | 过去式 `<subject>_<past_participle>` | `event_bus.gd`：`time_advanced` / `encounter_started` / `battle_finished` / `settlement_entered` / `resources_changed`；`save_system.gd`：`save_written` / `save_failed` / `load_failed` / `slot_loaded`；`terrain.gd`：`generated(stats)`；`menu_page.gd`：`opened` / `closed`；`debug_layer.gd`：`overlay_toggled(on)`；`ui_panel.gd`：`time_scrubbed(t)` |
+
+> **为什么规则改成了 `*_pressed`**：`ROADMAP` §3.2 原文的按钮信号口径是 `on_` 前缀 + 动词，
+> 但既有 7 处实现一致用过去式。S0.5 对齐时有两个选项 —— 改代码或改规则。
+> **选了改规则**：`*_pressed` 是 Godot 生态的既有惯例（`BaseButton.pressed` 就是过去式），
+> 改名会让 7 个信号与它们的全部连接点同时变动，却换不来任何行为收益。
+> 判定口径：**信号名描述"已经发生的事"，不描述"该做什么"** —— 这条同时解释了
+> `*_pressed`、`*_changed` 和过去式事实信号为什么是一套而不是三套。
+
+### 8.2 事件总线 vs 局部信号
+
+| 放哪里 | 判据 |
+|---|---|
+| `EventBus`（autoload） | 跨模块的**全局事实**：时间推进、遭遇、战斗结束、资源变化、进入聚落 |
+| 组件自身 | 只有父子/兄弟关系知道的**局部事实**：按钮按下、滑块拖动、页面开关、存档槽点击 |
+
+**判据的实操形式**：如果订阅者需要 `get_node("../../..")` 才能拿到发信号的节点，
+那它就该走 `EventBus`；如果订阅者就在同一个场景子树里，走局部信号。
+把局部信号塞进 `EventBus` 会让"谁在听"变得无法追踪。
+
+### 8.3 连接与断开
+
+- 一律用 `signal.connect(callable)`，不用字符串形式的 `connect("name", ...)`（后者拼错是运行时静默失败）。
+- 长生命周期节点连短生命周期节点时用 `CONNECT_ONE_SHOT` 或显式 `disconnect()`，避免悬挂回调。
+- **不要**在 `_process` 里 `connect`（会重复连接并抛错）。
+
+---
+
+## 9. 数据表格式（`Canon` 契约）
+
+> ⏳ **`Canon` 未实现**。`scripts/core/canon.gd` 目前**不存在**（`ROADMAP` 附录 A 把它列为
+> S1.1 的新增文件）。本节只写**契约**，供 S1.1 照着实现；`s0_5_doc_conventions` 用例
+> 断言的就是"本节确实标了『待建』"，而不是假装它已经在跑。
+
+### 9.1 为什么需要规范化序列化
+
+世界生成与存档要做**字节级比对**（"同一个 seed 是否真的生成了同一个世界"）。
+`JSON.stringify()` 的键序取决于字典内部顺序、浮点打印位数也不固定，同一份数据能写出
+不同字节。所以需要一个规范化出口。
+
+### 9.2 契约
+
+| 项 | 规定 |
+|---|---|
+| 编码 | UTF-8，**不带 BOM** |
+| 换行 | `\n`（LF），**不用** `\r\n`；文件末尾**恰好一个** `\n` |
+| 键序 | 字典序（`String.unicode_compare` 升序），嵌套对象递归排序 |
+| 浮点 | `%.6f`（定点 6 位小数，不用科学计数法） |
+| 整数 | 十进制，无前导零 |
+| 布尔/null | `true` / `false` / `null` |
+| 数组 | 保序（不排序） |
+| schema 字段 | 每个顶层对象必须含 `"schema": <int>`，用于版本迁移（§3.5） |
+| 文本 | 一律存 **key**（如 `"ui.menu.save"`），不存已翻译的字符串 —— 语言切换时存档不用重写 |
+| 读入容错 | 数值超范围时**钳制到合法区间并 `push_warning`**，不静默接受、也不整份拒读 |
+
+### 9.3 与 `SaveSystem` 的边界
+
+`SaveSystem`（S0.3，已实现）**已经**是"键字典序 + `%.6f` + `\n`"的实现，
+但它带着存档专属逻辑（槽位、原子写、迁移钩子），不适合给世界生成复用。
+`Canon` 是把其中**纯序列化**那一层抽出来的结果 —— S1.1 落地时应以
+`save_system.gd` 的现有行为为**基准**（先让它通过同一批字节断言，再替换调用点），
+而不是重新发明一套格式。
+
+---
+
+## 10. autoload 上限与顺序
+
+**当前 9 / 上限 10**（S0.4 批次 2 新增 `Debug` 后；`ROADMAP` §3.2 已同步更正）。
+余量 1 个，留给 M1–M6。
+
+| # | 名称 | 文件 | 顺序约束 |
+|---|---|---|---|
+| 1 | `Style` | `scripts/core/style.gd` | 无（但 `toon()` 会被其它 autoload 调用，故排最前） |
+| 2 | `Capture` | `scripts/core/capture.gd` | 无 |
+| 3 | `Clock` | `scripts/core/render_clock.gd` | 无 |
+| 4 | `Rng` | `scripts/core/rng.gd` | **必须在 `GameState` 之前**（`GameState._ready()` 调 `Rng.seed_from`） |
+| 5 | `EventBus` | `scripts/core/event_bus.gd` | 无 |
+| 6 | `GameState` | `scripts/core/game_state.gd` | 在 `Rng` 之后 |
+| 7 | `SaveSystem` | `scripts/core/save_system.gd` | **必须在 `GameState` 之后**（读写 `GameState.snapshot()`） |
+| 8 | `SceneRouter` | `scripts/core/scene_router.gd` | 无（无 `_ready` / `_process`） |
+| 9 | `Debug` | `scripts/core/debug_layer.gd` | 无（自带隐藏 `CanvasLayer`） |
+
+三条顺序约束由 `s0_3_state` 断言（不是靠注释维持）。`project.godot` 里每条 autoload
+上方都写了顺序理由 —— 编辑器会剥掉 `;` 注释（§5 陷阱见 S0.4 结案记录），所以**改完要复核**。
+
+**新增 autoload 前必须回答**：① 它真的需要全局唯一吗（能不能做成场景内节点）？
+② 余量够吗？③ 有没有顺序依赖，谁断言它？
+
+---
+
+## 11. 允许 / 禁止清单
+
+### 11.1 允许
+
+| 项 | 说明 |
+|---|---|
+| `MeshUtil` 的全部生成器 | `blob` / `cone` / `tapered_cylinder` / `superellipse_prism` / `combine` / `facet` / `roughen` |
+| `Style.toon()` / `Style.pal()` / `Style.lit()` | 唯一合法的材质与取色入口 |
+| `Rng.stream(name)` / `rng.randf()` / `rng.randi_range()` | 成员调用是正确写法 |
+| `Clock.dt` / `Clock.t` / `render_time`（着色器） | 唯一合法的时间来源 |
+| `SceneRouter` 切场景 | 只有它能调 `change_scene_to_file` 等 |
+| `SaveSystem` 读写 `user://` | 只有它能碰存档目录 |
+| `JSON.new().parse()` | 解析不可信输入（不打引擎日志） |
+| `InputSetup.ensure_debug_hotkeys(OS.is_debug_build())` | 唯一的调试热键闸门 |
+
+### 11.2 禁止（守卫自动检查，白名单外一律验收失败）
+
+| 禁用 | 守卫规则 | 理由 |
+|---|---|---|
+| `BoxMesh` | `box_mesh` | `AGENTS.md` §一：绝对禁止立方体 |
+| `CSGBox3D` | `csg_box` | 同上（CSG 的方块） |
+| `StandardMaterial3D` | `standard_material` | 破坏 3 阶阶梯与描边（见 `ART_PIPELINE.md` §2.2 ⑤） |
+| 裸 `randf()` / `randi()` / `*_range()` | `bare_randf` / `bare_randi` | 破坏可复现性 |
+| 着色器内建 `TIME` | `unfreezable_time` | 截图无法逐位复现 |
+| GDScript `Time.get_ticks_msec/usec()` | `unfreezable_time` | 同上（测量用墙钟走白名单） |
+| 非 `scene_router.gd` 里的 `change_scene_*` | `scene_change_owner` | 「屏幕为什么变了」将无法定位 |
+
+### 11.3 守卫管不到的（**只能靠人**）
+
+| 项 | 为什么管不到 | 怎么防 |
+|---|---|---|
+| 未 `facet()` 的引擎 primitive | 不是"用了某个类"，而是"少调了一次函数" | `ART_PIPELINE.md` §4 清单 + 看图 |
+| 硬编码颜色 | 无法区分"调色板色"与"随手写的 RGB" | code review |
+| 材质没走 `Style.toon()` | 自建 `ShaderMaterial` 也是合法的 | 表现为"关描边后这个物件还有黑边" |
+| 网格法线朝内 | 静态扫不出几何朝向 | 看图（会被光照照黑） |
+
+> **这一节比前两节更重要**。守卫绿了只说明"没有明显违规"；`SphereMesh` 不改一行代码
+> 就能绕过全部 7 条规则（`ART_PIPELINE.md` §2.2 ⑥ 就是活证据）。
+
+---
+
+## 12. 新增一个物件 / 一个用例 / 一个 autoload
+
+### 12.1 新增合规物件
+
+见 `docs/ART_PIPELINE.md` §3 的 6 步模板（选形状 → 保证面着色 → 取色 → `Style.toon()` →
+挂场景 → 跑守卫 + 看图）。本文件不重复。
+
+### 12.2 新增一个 verify 用例
+
+1. 在 `tools/verify.gd` 的 `CASES`（第 74 行）注册 `id` + `desc` + `kind`（`pure` / `headed`）。
+2. 在 `_dispatch()`（第 510 行）加 `match` 分支。
+3. 写 `_case_<id>()`，**开头必须 `await process_frame`**（等 autoload 就位）。
+4. `pure` 用例在 headless 下必须能跑；`headed` 用例要真 GPU 指标，headless 下自动 SKIP。
+5. 用 `section()` 分段、`ok()` / `eq()` / `ne()` / `ge()` / `le()` / `contains()` 断言。
+6. **问一句：它依赖上一个用例的残留状态吗？**（§5 陷阱 13 —— 这条坑过一次，
+   单跑全绿、`--all` 里 7 条失败）
+7. **问第二句：反向对照是什么？**（"文档里有关键字"不等于"文档是对的" ——
+   见 `s0_5_doc_conventions` 用编造的锚点证明这一点）
+
+### 12.3 新增一个 autoload
+
+见 §10 的三个必答问题；改完 `project.godot` 后必须 `git diff` 逐行确认
+（编辑器会重写该文件并剥掉注释），并同步更新 `s0_3_state` 里的 `expected` 数组。
+
+---
+
+## 13. S0.5 验收时点（2026-10-19）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **20 用例 / 失败 0 / 跳过 0 / 1108 断言全通过** / 退出码 0（约 108s），**连跑 2 轮均绿** |
+| headless `tools/verify.gd --all` | 20 用例 / 失败 0 / 跳过 **5**（`s0_2_baseline`、`s0_6_repro`、`s0_4_cost`、`s0_3_slots`、`s0_3_overwrite` 需 GPU）/ 退出码 0 |
+| 新增用例 `s0_5_doc_conventions` | **90/90**（`pure`，70ms）：12 个 `class_name` 双向定位 / 4 类信号口径各有实例 / `Canon` 标注"未实现"且 `canon.gd` 确实不存在 / autoload 9 与顺序约束 / 7 条守卫规则名逐条"文档有 + 守卫真能报出" / `ART_PIPELINE` 6 步模板 + 6 张图引用齐全 / **教材目录双向约束**（产品码 0 处引用 `dev/`，夹具命中数恰等于白名单登记数） / 6 张 PNG 的 sha256 与批次清单逐位一致 / **4 条编造锚点反向对照** |
+| `A-` 抽查 5 条约定能在代码定位（原验收项） | 用例对 **12 个类 + 25 条信号 + 9 个 autoload + 7 条守卫规则** 逐条断言"文档有锚点"**且**"代码里有对应实现"，远超抽查 5 条 |
+| `B-` 3 张合规 + 3 张违例（原验收项） | `docs/art/s0_5/` 六张 PNG 的 sha256 与 `s0_5_samples` 批次清单逐位一致；两次独立窗口进程拍同一批次 **6/6 相同** |
+| `B-` 6 机位基线（回归） | 与 §4 基线 **6/6 sha256 全等**（本步未触碰主场景、着色器、`style.gd`、`scatter.gd`、`terrain.gd`、`camera_rig.gd`） |
+| `C-` 性能基线（回归） | `s0_2_baseline` 通过；FPS 极差 0.150% / ms-per-frame 极差 0.138%（均 < 5%） |
+| `D-` 你通读两份文档（原验收项） | **待确认**（见 `ROADMAP` §5 S0.5 状态 `🧪 待验收`） |
+| autoload 数量 | **9** / 上限 10（本步未新增 autoload） |
+
+### 13.1 顺手修掉的既有缺陷：注入点击缺鼠标移动
+
+`_click_control()` / `_click_path()` 原本只注入 `pressed` / `released` 两个
+`InputEventMouseButton`，**没有 `InputEventMouseMotion`**。后果是 `s0_3_slots`
+间歇性失败 —— 在 **HEAD（本步改动之前）** 上跑 5 次就红了 2 次，失败点每次不同
+（有时是"读取没跳宫格"，有时是"另存为没进宫格"，有时是两轮截图 sha256 不一致）。
+
+根因：Godot 的 `Viewport` 在处理鼠标按键时用 `gui.mouse_focus` 决定投递给谁，
+而该焦点**由鼠标移动事件更新**；没有移动，按键就落在一个失效的焦点上。
+
+修法：点击前先发一个落在目标中心的 `InputEventMouseMotion`（**不改产品码**，
+只让注入序列符合真实输入 —— 真人点击之前一定先移动鼠标）。修后
+`s0_3_slots` **连跑 18 次全绿**，`--all` 连跑 2 轮全绿。
+
+> **值得记住的两点**：
+> ① **"偶发失败"要先证明它是既有的**。做法是把 `git show HEAD:tools/verify.gd`
+> 导成一个临时脚本跑同样的用例 —— 它同样红，才说明不是自己引入的。
+> ② **失败点漂移是"共享前置条件坏了"的典型特征**。如果每次都红在同一条断言，
+> 那是那条断言的问题；红点到处跑，说明更早的某一步（这里是"点击真的落下去了"）
+> 时灵时不灵，下游全是受害者。

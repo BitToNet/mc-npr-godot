@@ -182,6 +182,12 @@ const CASES := {
 		"hidden": true,
 		"probe": true,
 	},
+	"s0_5_doc_conventions": {
+		"desc": "文档契约：两份文档的每条约定都能在代码里定位（反向用编造的锚点证明不假绿）；"
+				+ "教材夹具的双向约束（产品码不引用 scripts/dev + 夹具命中数恰等于白名单登记数）；"
+				+ "6 张教材截图存在且 sha256 与 s0_5_samples 批次清单一致",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -219,6 +225,23 @@ const GUARD_WHITELIST := [
 		"reason": "terrain.gd 的 Time.get_ticks_msec() 只用于统计 stats[\"gen_ms\"]"
 				+ "（生成耗时，只写进日志与 stats 字典），不参与任何画面动画。"
 				+ "同 capture.gd，属测量用墙钟的正当用法。",
+	},
+	{
+		"path": "res://scripts/dev/art_samples.gd",
+		"rule": "box_mesh",
+		"reason": "S0.5 教材夹具的**违例反例** `04_bad_box`：`docs/ART_PIPELINE.md` §2 要用"
+				+ "一张真的立方体截图讲清 AGENTS.md §一「严格禁止立方体」。反例必须真的"
+				+ "使用被禁写法，否则读者看到的是补丁的效果而不是禁令的效果。"
+				+ "该目录的硬约束（由 `s0_5_doc_conventions` 断言）：产品码一律不得引用"
+				+ " `scripts/dev/`，且本文件命中数必须恰为下列登记项。",
+	},
+	{
+		"path": "res://scripts/dev/art_samples.gd",
+		"rule": "standard_material",
+		"reason": "同一份夹具的违例反例 `05_bad_pbr_tree`：与 `01_ok_tree` 共用同一份网格、"
+				+ "同一机位、同一时刻，唯一差别是材质换成 `StandardMaterial3D`"
+				+ "（光滑渐变、真实高光、无逆壳描边），用来对照讲清 §一.2「全局 toon 阶梯」。"
+				+ "登记理由同 `box_mesh` 那条。",
 	},
 ]
 
@@ -540,6 +563,8 @@ func _dispatch(id: String) -> void:
 			await _case_probe_read()
 		"s0_3_probe_loop":
 			await _case_probe_loop()
+		"s0_5_doc_conventions":
+			await _case_doc_conventions()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -3108,6 +3133,11 @@ func _shoot_menu_case(case_name: String, out_dir: String, expect_shots: int) -> 
 		if String(line).contains("ui_expect ok"):
 			expect_ok += 1
 	eq(expect_ok, expect_shots, "%s：%d 次 ui_expect 全部 ok" % [case_name, expect_shots])
+	if expect_ok != expect_shots:
+		# 失败时把子进程输出打出来 —— 否则只知道"少了一次自证"，不知道少在哪一步。
+		print("    · 子进程退出码 ", code, "，输出 ", flat.size(), " 行，末尾 20 行：")
+		for i in range(maxi(0, flat.size() - 20), flat.size()):
+			print("      | ", String(flat[i]))
 	var man := _read_json(out_dir.path_join(case_name + ".json"))
 	if not ok(not man.is_empty(), "%s 写出了清单" % case_name):
 		return code
@@ -3238,8 +3268,15 @@ func _press_escape() -> void:
 	await _press_key(KEY_ESCAPE)
 
 
-## 注入一次真实左键点击（按下 + 抬起，落在控件中心）。控件矩形退化时直接不点：
-## 那说明布局还没跑出尺寸，点 (0,0) 只会得到"看起来点过了"的假信号。
+## 注入一次真实左键点击（移动 → 按下 → 抬起，落在控件中心）。
+##
+## ⚠️ **必须先发一个 `InputEventMouseMotion`**。只发 press/release 会间歇性丢点击
+## （实测 `s0_3_slots` 在 HEAD 上 5 次跑有 2 次失败，失败点随机漂移）：Godot 的
+## Viewport 在处理鼠标按键时用 `gui.mouse_focus` 决定投递给谁，而那个焦点是**由
+## 鼠标移动事件更新**的；没有移动，按键就落在一个失效/为空的焦点上。真实用户点击
+## 之前一定先移动鼠标，所以补上移动不是"绕过问题"，而是让注入序列符合真实输入。
+##
+## 控件矩形退化时直接不点：那说明布局还没跑出尺寸，点 (0,0) 只会得到"点过了"的假信号。
 func _click_control(ctrl: Control) -> bool:
 	if ctrl == null:
 		return false
@@ -3247,6 +3284,12 @@ func _click_control(ctrl: Control) -> bool:
 	if rect.size.x < 1.0 or rect.size.y < 1.0:
 		return false
 	var pos := rect.get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = pos
+	motion.global_position = pos
+	Input.parse_input_event(motion)
+	Input.flush_buffered_events()
+	await process_frame
 	for i in 2:
 		var ev := InputEventMouseButton.new()
 		ev.button_index = MOUSE_BUTTON_LEFT
@@ -3599,11 +3642,230 @@ func _case_probe_fail() -> void:
 
 
 ## =============================================================================
+##  S0.5 文档契约（A- / B-）
+## =============================================================================
+## 这个用例要证明的是"文档里写的每条约定都能在代码里定位"，而不是"文档里出现了某几个字"。
+## 所以每条断言都是 **(文档必须有的锚点, 代码里必须找得到的符号)** 成对出现：
+## 文档删了锚点 → 红；代码改了名 → 红。
+##
+## 反面同样重要：一个只会 `contains()` 的用例，把锚点换成任何一段文字都照样绿。
+## 因此 §4 用**编造的锚点**做反向对照 —— 证明这套断言真的会因为"文档里没有"而失败。
+func _case_doc_conventions() -> void:
+	await process_frame
+
+	var eng := _read_text_file("res://docs/ENGINEERING.md")
+	var art := _read_text_file("res://docs/ART_PIPELINE.md")
+	var road := _read_text_file("res://docs/ROADMAP.md")
+
+	section("两份文档存在且非空")
+	ok(eng.length() > 3000, "docs/ENGINEERING.md 可读且非空（%d 字符）" % eng.length())
+	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
+	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
+
+	section("§7 命名：文档里的 12 个 class_name 逐个在代码里存在")
+	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
+	var classes := {
+		"Player": "res://scripts/actors/player.gd",
+		"CameraRig": "res://scripts/core/camera_rig.gd",
+		"InputSetup": "res://scripts/core/input_setup.gd",
+		"MeshUtil": "res://scripts/core/mesh_util.gd",
+		"UiKit": "res://scripts/ui/ui_kit.gd",
+		"UiPanel": "res://scripts/ui/ui_panel.gd",
+		"BrutalSlider": "res://scripts/ui/ui_slider.gd",
+		"CloudField": "res://scripts/world/clouds.gd",
+		"DayNight": "res://scripts/world/day_night.gd",
+		"Scatter": "res://scripts/world/scatter.gd",
+		"Terrain": "res://scripts/world/terrain.gd",
+		"WaterSurface": "res://scripts/world/water.gd",
+	}
+	for cls in classes.keys():
+		var path := String(classes[cls])
+		var src := _read_text_file(path)
+		contains(eng, "`%s`" % cls, "ENGINEERING.md §7 登记了 class_name `%s`" % cls)
+		contains(src, "class_name %s" % cls,
+				"%s 里确实声明了 `class_name %s`" % [path.get_file(), cls])
+
+	section("§8 信号：文档登记的四类口径在代码里各有实例")
+	var sig_src := _read_text_file("res://scripts/ui/ui_panel.gd")
+	contains(sig_src, "signal regenerate_pressed", "`*_pressed` 实例：ui_panel.gd 的 regenerate_pressed")
+	contains(eng, "`*_pressed`", "ENGINEERING.md §8 写的是 `*_pressed`（不是过期的 `on_xxx`）")
+	not_contains(eng, "`on_xxx`（按钮）",
+			"ENGINEERING.md §8 不再声称按钮信号叫 `on_xxx`（S0.5 已按实际代码更正）")
+	var bus_src := _read_text_file("res://scripts/core/event_bus.gd")
+	contains(bus_src, "signal time_advanced", "过去式事实信号实例：event_bus.gd 的 time_advanced")
+	var style_src := _read_text_file("res://scripts/core/style.gd")
+	contains(style_src, "signal style_changed", "`*_changed` 实例：style.gd 的 style_changed")
+
+	section("§9 Canon：文档必须如实标注『未实现』，且代码里确实还没有")
+	contains(eng, "`Canon` 未实现", "ENGINEERING.md §9 明确标注 Canon 未实现")
+	ok(not FileAccess.file_exists("res://scripts/core/canon.gd"),
+			"scripts/core/canon.gd 确实不存在（文档没有撒谎）")
+	contains(road, "⏳ 未实现", "ROADMAP 附录 A 也标了 Canon 未实现")
+	contains(eng, "S1.1", "ENGINEERING.md §9 写明落地步骤是 S1.1")
+
+	section("§10 autoload：文档写 9，project.godot 就是 9，且顺序约束与实现一致")
+	var autoloads: Array = []
+	for p in ProjectSettings.get_property_list():
+		var nm := String(p["name"])
+		if nm.begins_with("autoload/"):
+			autoloads.append(nm.substr("autoload/".length()))
+	eq(autoloads.size(), 9, "autoload 实际数量 = 9")
+	contains(eng, "**当前 9 / 上限 10**", "ENGINEERING.md §10 写的是 9 / 10")
+	contains(road, "**当前 9 / 10**", "ROADMAP §3.2 也写的是 9 / 10（原文『合计 8 / 当前 6』已更正）")
+	not_contains(road, "合计 8；余量 2", "ROADMAP §3.2 不再残留过期的『合计 8；余量 2』")
+	for i in autoloads.size():
+		contains(eng, "`%s`" % String(autoloads[i]),
+				"ENGINEERING.md §10 列出了实际存在的 autoload `%s`" % String(autoloads[i]))
+
+	section("§11 禁止清单：文档列的 7 条规则名与守卫实现一致")
+	# 规则名 → 一段**只含该类违例**的合成源码（与 _case_guard 同一手法）
+	var rule_probes := {
+		"box_mesh": "var m := BoxMesh.new()\n",
+		"csg_box": "var n := CSGBox3D.new()\n",
+		"standard_material": "var s := StandardMaterial3D.new()\n",
+		"bare_randf": "var f := randf()\n",
+		"bare_randi": "var i := randi()\n",
+		"unfreezable_time": "var t := Time.get_ticks_msec()\n",
+		"scene_change_owner": "get_tree().change_scene_to_file(\"res://scenes/main.tscn\")\n",
+	}
+	for rule in rule_probes.keys():
+		contains(eng, "`%s`" % rule, "ENGINEERING.md §11 登记了守卫规则 `%s`" % rule)
+		var probe: String = String(rule_probes[rule])
+		var hits := _scan_text("res://scripts/_verify_tmp/doc_probe.gd", String(probe))
+		var found := false
+		for h in hits:
+			if h["rule"] == rule:
+				found = true
+		ok(found, "守卫确实能报出 `%s`（文档没有登记一条不存在的规则）" % rule)
+
+	section("§11.3『守卫管不到』的清单：必须点名未 facet 的 primitive")
+	contains(eng, "未 `facet()` 的引擎 primitive", "ENGINEERING.md §11.3 点名了未 facet 的 primitive")
+	contains(art, "守卫抓不到", "ART_PIPELINE.md §2.2 ⑥ 明说这一类守卫抓不到")
+
+	section("ART_PIPELINE：6 步模板与 3 个反例都在")
+	for step in ["步骤 1", "步骤 2", "步骤 3", "步骤 4", "步骤 5", "步骤 6"]:
+		contains(art, step, "ART_PIPELINE.md §3 有「%s」" % step)
+	contains(art, "04_bad_box", "反例 ①：04_bad_box")
+	contains(art, "05_bad_pbr_tree", "反例 ②：05_bad_pbr_tree")
+	contains(art, "06_bad_smooth_ball", "反例 ③：06_bad_smooth_ball")
+	contains(art, "01_ok_tree", "样板 ①：01_ok_tree")
+	contains(art, "02_ok_rock", "样板 ②：02_ok_rock")
+	contains(art, "03_ok_ball", "样板 ③：03_ok_ball")
+	contains(art, "AGENTS.md", "ART_PIPELINE.md 交叉引用 AGENTS.md（冲突以它为准）")
+
+	section("教材夹具：双向约束 —— 产品码不引用 dev/，dev/ 的命中恰等于白名单登记")
+	# ① 反向：产品码一律不得引用 res://scripts/dev/ 或 res://scenes/dev/
+	var leaks: Array = []
+	for dir_path in ["res://scenes", "res://scripts", "res://shaders"]:
+		_collect_dev_refs(dir_path, leaks)
+	eq(leaks.size(), 0, "产品码没有一处引用 dev/（否则教材目录会漏进正式构建）")
+	if leaks.size() > 0:
+		print("    · 泄漏点：", leaks)
+
+	# ② 正向：夹具真的命中被禁写法，且命中数恰等于白名单里登记给它的条数
+	var fixture_src := _read_text_file("res://scripts/dev/art_samples.gd")
+	var fixture_hits := _scan_text("res://scripts/dev/art_samples.gd", fixture_src)
+	var rules_hit: Array = []
+	for h in fixture_hits:
+		rules_hit.append(String(h["rule"]))
+	rules_hit.sort()
+	eq(rules_hit, ["box_mesh", "standard_material", "standard_material"],
+			"夹具命中的规则恰好是登记的那 3 条（1 条 box_mesh + 2 条 standard_material）")
+	var wl_reasons := 0
+	for entry in GUARD_WHITELIST:
+		if String(entry.get("path", "")) == "res://scripts/dev/art_samples.gd":
+			wl_reasons += 1
+	eq(wl_reasons, 2, "白名单里为夹具登记的条目数 = 2（box_mesh / standard_material 各一条）")
+	ok(_read_text_file("res://scenes/dev/art_samples.tscn").contains("art_samples.gd"),
+			"夹具场景挂的就是夹具脚本（不是别处的产品脚本）")
+	contains(fixture_src, "产品码一律不得引用", "夹具脚本文件头写明了那条硬约束")
+
+	section("B- 6 张教材截图：存在、非空、sha256 与批次清单一致")
+	var manifest := _read_text_file("res://.shots/s05/s0_5_samples.json")
+	if manifest == "":
+		ok(true, "（无 .shots/s05 清单：本机未跑过该批次，跳过逐位比对）")
+		ok(true, "（同上，跳过）")
+		ok(true, "（同上，跳过）")
+	else:
+		var md: Dictionary = _parse_json_silent(manifest)
+		var shots: Array = md.get("shots", [])
+		eq(shots.size(), 6, "批次清单里是 6 张")
+		var mismatch: Array = []
+		var missing: Array = []
+		for s in shots:
+			var nm := String(s.get("name", ""))
+			var want := String(s.get("sha256", ""))
+			var p := "res://docs/art/s0_5/%s.png" % nm
+			if not FileAccess.file_exists(p):
+				missing.append(nm)
+				continue
+			if FileAccess.get_sha256(p) != want:
+				mismatch.append(nm)
+		ok(missing.is_empty(), "docs/art/s0_5/ 里 6 张 PNG 齐全", "缺：%s" % [missing])
+		ok(mismatch.is_empty(),
+				"6 张 PNG 的 sha256 与 s0_5_samples 批次清单逐位一致"
+						+ "（文档内嵌的就是工具产出的那 6 张）",
+				"不一致：%s" % [mismatch])
+
+	section("反向对照：编造的锚点在文档里找不到（证明上面的断言不是假绿）")
+	# 这三条**必须失败**的查找，用来证明 contains() 真的在做事。
+	not_contains(eng, "`Canon` 已实现并投入使用", "编造锚点 ①：文档里没有『Canon 已实现』")
+	not_contains(eng, "`on_xxx`（按钮）", "编造锚点 ②：文档里没有过期的 on_xxx 规则")
+	not_contains(art, "07_ok_nothing", "编造锚点 ③：文档里没有不存在的第 7 张图")
+	ok(eng.length() > 0 and not eng.contains("__s0_5_fabricated_anchor__"),
+			"编造锚点 ④：任意伪造字符串在文档里都不存在（contains 不是恒真）")
+
+
+## 递归收集「产品码引用教材目录」的泄漏点。
+## 判据是**字面路径出现**，不做 AST —— 漏网的写法（如拼字符串）不在此用例能力范围内，
+## 但常见的 preload/load/tscn ext_resource 都会被它逮住。
+## 教材目录自身（`res://scripts/dev/`、`res://scenes/dev/`）内部的互相引用不算泄漏：
+## 夹具脚本的文档串会提到自己的路径，夹具场景必须引用夹具脚本 —— 那是它该做的事。
+func _collect_dev_refs(dir_path: String, out: Array) -> void:
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.begins_with("."):
+			fname = dir.get_next()
+			continue
+		var p := dir_path.path_join(fname)
+		if dir.current_is_dir():
+			_collect_dev_refs(p, out)
+		else:
+			var ext := p.get_extension().to_lower()
+			if ext in GUARD_EXTS and not _is_dev_area(p):
+				var text := _read_text_file(p)
+				if text.contains("res://scripts/dev/") or text.contains("res://scenes/dev/"):
+					out.append(p)
+		fname = dir.get_next()
+	dir.list_dir_end()
+
+
+## 该路径是否属于教材目录（含其内部的一切）。
+func _is_dev_area(path: String) -> bool:
+	return path.begins_with("res://scripts/dev/") or path.begins_with("res://scenes/dev/")
+
+
+## 读文本文件；失败返回空串（断言会以"文档为空"报红，而不是抛异常）。
+func _read_text_file(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var fa := FileAccess.open(path, FileAccess.READ)
+	if fa == null:
+		return ""
+	var text := fa.get_as_text()
+	fa.close()
+	return text
+
+
+## =============================================================================
 ##  工具函数
 ## =============================================================================
 func _is_headless() -> bool:
 	return DisplayServer.get_name() == "headless"
-
 
 func _load_main() -> Node:
 	var ps := load("res://scenes/main.tscn") as PackedScene

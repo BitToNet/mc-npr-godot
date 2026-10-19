@@ -101,6 +101,34 @@ const CASES := {
 		{"name": "02_ui_hidden", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0,
 			"ui": ["key:f3", "key:f1"], "ui_expect": {"overlay": true, "ui_hidden": true}},
 	],
+	## S0.5 — `docs/ART_PIPELINE.md` §2 的配图：**三对 A/B**，共六张。
+	##
+	## 每一对共用同一份网格与同一条机位，**只差一条被破坏的规则**。这是配图能不能
+	## 当证据的分水岭：如果一对图里同时换了形状、颜色、光照和机位，读者看到的差异
+	## 就归因不到任何一条规则上，图就只是"两张好看的图"。
+	##   01 / 05 — 同一棵树（共享同一个 ArrayMesh 实例），只差材质：合规 toon 三点布光
+	##             + 反向外壳描边 ↔ `StandardMaterial3D`（光滑 PBR、无阶梯、无描边）
+	##   02 / 04 — 同一块"石头"：`blob()` 圆润低模 ↔ `BoxMesh` 立方体（AGENTS.md §一第一条禁令）
+	##   03 / 06 — 同一个球：走过 `MeshUtil.facet()` 的面着色 ↔ 未走 facet 的 `SphereMesh`
+	##             （索引网格 + 平滑法线，守卫抓不到，只能靠眼睛 —— 见文档 §2.2）
+	##
+	## 主体由 `tools/dev/art_samples.tscn` 生成（那个目录**故意**含违例写法，理由见
+	## `docs/ART_PIPELINE.md` §1.3）；`at` 把正交相机逐张对准一个展台。
+	## 相机 `size=5.0` / `yaw=38` / `time=0.42` / `FREE` 六张完全相同，只有 `at` 变。
+	"s0_5_samples": [
+		{"name": "01_ok_tree", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "-45,1.75,0"},
+		{"name": "02_ok_rock", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "-27,0.80,0"},
+		{"name": "03_ok_ball", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "-9,1.10,0"},
+		{"name": "04_bad_box", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "9,0.88,0"},
+		{"name": "05_bad_pbr_tree", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "27,1.75,0"},
+		{"name": "06_bad_smooth_ball", "time": 0.42, "mode": "FREE", "size": 5.4, "yaw": 38.0,
+			"at": "45,1.10,0"},
+	],
 }
 
 ## `ui` 步骤可用的按键名（`key:<name>`）。只列"截图真的会用到"的键：
@@ -147,6 +175,13 @@ func _ready() -> void:
 			single["size"] = a.split("=", true, 1)[1].to_float()
 		elif a.begins_with("--yaw="):
 			single["yaw"] = a.split("=", true, 1)[1].to_float()
+		elif a.begins_with("--at="):
+			# S0.5 取景修饰符：把正交相机对准一个绝对世界坐标（"x,y,z"）。
+			# 参数化夹具（`tools/dev/art_samples.tscn` 的六个展台）需要在**同一批**
+			# 里逐张换主体，而产品码里没有"把世界摆成某个状态"的后门 —— 取景是工具
+			# 层的职责，不是产品码的职责。与 `--size=` / `--yaw=` 一样只作修饰符，
+			# 不单独唤醒截图批次（否则跑 verify 时会连带触发一次截图）。
+			single["at"] = a.split("=", true, 1)[1]
 		elif a.begins_with("--outline="):
 			want = true
 			single["outline"] = a.split("=", true, 1)[1]
@@ -368,9 +403,30 @@ func _apply(shot: Dictionary) -> void:
 		rig._attrs.dof_blur_near_enabled = false
 	if shot.has("yaw"):
 		rig.yaw = deg_to_rad(float(shot["yaw"]))
-	if pl != null:
+	if shot.has("at"):
+		# S0.5：对准显式世界坐标。用 `snap_to()` 而不是给 rig 设 target —— `target`
+		# 会走 `_process` 的跟随插值（带 ±22 / 0..9 的聚焦钳制），逐帧把相机拉走，
+		# 拍出来的就不是"对准那个展台"。`snap_to()` 是给工具层用的直接落位接口。
+		var p: Variant = _parse_point(String(shot["at"]))
+		if p == null:
+			printerr("[capture] --at= 解析失败：", shot["at"], "（应为 \"x,y,z\"）")
+			rig._apply()
+			return
+		rig.snap_to(p)
+	elif pl != null:
 		rig.snap_to(pl.global_position)
 	rig._apply()
+
+
+## "x,y,z" -> Vector3；非法输入返回 null（由调用方显式失败，不静默取默认值）。
+func _parse_point(text: String) -> Variant:
+	var parts := text.split(",", true, 2)
+	if parts.size() != 3:
+		return null
+	for s in parts:
+		if not String(s).strip_edges().is_valid_float():
+			return null
+	return Vector3(parts[0].to_float(), parts[1].to_float(), parts[2].to_float())
 
 
 ## ---------------------------------------------------------------------------
@@ -413,6 +469,14 @@ func _apply_ui(steps: Array) -> int:
 	return failed
 
 
+## 注入一次真实左键点击（移动 → 按下 → 抬起）。
+##
+## ⚠️ **必须先发一个 `InputEventMouseMotion`**：只发 press/release 会间歇性丢点击
+## （`s0_3_slots` 在 HEAD 上 5 次跑有 2 次失败，失败点随机漂移）。Godot 的 Viewport
+## 用 `gui.mouse_focus` 决定把按键投递给谁，而那个焦点**由鼠标移动事件更新**；
+## 没有移动，按键就落在一个失效的焦点上。真实用户点击前一定先移动鼠标，
+## 所以补上移动不是绕过问题，而是让注入序列符合真实输入。
+## `tools/verify.gd::_click_control()` 有同一处修正与同一段说明。
 func _click_path(path: String) -> bool:
 	var ctrl := _menu_control(path)
 	if ctrl == null:
@@ -421,6 +485,12 @@ func _click_path(path: String) -> bool:
 		printerr("[capture] ui 目标当前不可见：", path)
 		return false
 	var p := ctrl.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = p
+	motion.global_position = p
+	Input.parse_input_event(motion)
+	Input.flush_buffered_events()
+	await get_tree().process_frame
 	for pressed in [true, false]:
 		var ev := InputEventMouseButton.new()
 		ev.button_index = MOUSE_BUTTON_LEFT
