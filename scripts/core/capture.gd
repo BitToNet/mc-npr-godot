@@ -82,6 +82,35 @@ const CASES := {
 			"ui": ["click:Root/GridPage/Panel/Col/Grid/Col/Cards/Slot3"],
 			"ui_expect": {"open": true, "page": "grid", "confirm": true}},
 	],
+	## S0.4 batch 2 — the debug observation layer (B- evidence for ROADMAP §5 S0.4).
+	##
+	## Two batches, not one, because the pair that carries the meaning is
+	## "overlay on" vs "everything hidden": the second batch proves F1 removed the
+	## UI from the render (its sha256 must equal the same camera position captured
+	## with no UI at all, i.e. `s0_boot_wide`) instead of merely fading it.
+	##
+	## Camera parameters are deliberately identical to `s0_boot` so that the two
+	## PNGs are comparable byte-for-byte; the deterministic clock makes that a
+	## legitimate equality rather than a coincidence.  `key:` steps are the same
+	## injected-input path the menu batches use — no "demo state" hook exists.
+	"s0_4_overlay": [
+		{"name": "01_overlay_on", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0,
+			"ui": ["key:f3"], "ui_expect": {"overlay": true, "ui_hidden": false}},
+	],
+	"s0_4_ui_hidden": [
+		{"name": "02_ui_hidden", "time": 0.33, "mode": "FREE", "size": 66.0, "yaw": 40.0,
+			"ui": ["key:f3", "key:f1"], "ui_expect": {"overlay": true, "ui_hidden": true}},
+	],
+}
+
+## `ui` 步骤可用的按键名（`key:<name>`）。只列"截图真的会用到"的键：
+## 这不是键位表（键位在 `scripts/core/input_setup.gd`），而是注入器的白名单，
+## 拼错名字必须**显式失败**，否则会拍下一张"看起来正常但状态没切"的图。
+const KEY_BY_NAME := {
+	"esc": KEY_ESCAPE,
+	"escape": KEY_ESCAPE,
+	"f1": KEY_F1,
+	"f3": KEY_F3,
 }
 
 var _enabled := false
@@ -359,6 +388,17 @@ func _apply_ui(steps: Array) -> int:
 		if s == "esc":
 			await _press_key(KEY_ESCAPE)
 			print("[capture] ui esc")
+		elif s.begins_with("key:"):
+			# S0.4 批次 2：通用按键注入。`esc` 保留为既有别名的同义词（历史批次不改），
+			# 新批次用 `key:f1` / `key:f3` —— 与玩家按键走同一条 `Input.parse_input_event`。
+			var kn := s.substr(4).to_lower()
+			if not KEY_BY_NAME.has(kn):
+				printerr("[capture] 未知按键名：", kn, "（可用：",
+						", ".join(PackedStringArray(KEY_BY_NAME.keys())), "）")
+				failed += 1
+				continue
+			await _press_key(KEY_BY_NAME[kn])
+			print("[capture] ui key ", kn)
 		elif s.begins_with("click:"):
 			var target := s.substr(6)
 			var ok_click := await _click_path(target)
@@ -414,26 +454,47 @@ func _menu_control(path: String) -> Control:
 	return node as Control
 
 
-## 截图前检查「真的到了声明的界面」。菜单用鸭子类型访问（`call`）：截图器不该
-## 编译期依赖菜单脚本，否则菜单改名/换实现会连累所有批次。
+## 截图前检查「真的到了声明的界面」。菜单与调试层都用鸭子类型访问（`call`）：截图器
+## 不该编译期依赖它们的脚本，否则改名/换实现会连累所有批次。
 func _expect_ui(expect: Dictionary) -> int:
-	var menu := get_tree().get_first_node_in_group("menu")
-	if menu == null:
-		printerr("[capture] ui_expect：场景里没有菜单节点")
-		return 1
 	var failed := 0
-	if expect.has("open") and bool(menu.call("is_open")) != bool(expect["open"]):
+	if expect.has("overlay") or expect.has("ui_hidden"):
+		failed += _expect_debug(expect)
+	var menu := get_tree().get_first_node_in_group("menu")
+	var wants_menu := expect.has("open") or expect.has("page") or expect.has("confirm")
+	if wants_menu and menu == null:
+		printerr("[capture] ui_expect：场景里没有菜单节点")
+		return failed + 1
+	if menu != null and expect.has("open") and bool(menu.call("is_open")) != bool(expect["open"]):
 		printerr("[capture] ui_expect open 不符：期望 ", expect["open"],
 				"，实际 ", menu.call("is_open"))
 		failed += 1
-	if expect.has("page") and String(menu.call("page_name")) != String(expect["page"]):
+	if menu != null and expect.has("page") and String(menu.call("page_name")) != String(expect["page"]):
 		printerr("[capture] ui_expect page 不符：期望 ", expect["page"],
 				"，实际 ", menu.call("page_name"))
 		failed += 1
-	if expect.has("confirm") and bool(menu.call("confirm_open")) != bool(expect["confirm"]):
+	if menu != null and expect.has("confirm") and bool(menu.call("confirm_open")) != bool(expect["confirm"]):
 		printerr("[capture] ui_expect confirm 不符：期望 ", expect["confirm"],
 				"，实际 ", menu.call("confirm_open"))
 		failed += 1
 	if failed == 0:
 		print("[capture] ui_expect ok ", JSON.stringify(expect))
+	return failed
+
+
+## S0.4 批次 2：调试层的到达自证。与菜单同样只认可观测到的状态，不认"我按了键"。
+func _expect_debug(expect: Dictionary) -> int:
+	var dbg := get_tree().get_root().get_node_or_null("Debug")
+	if dbg == null:
+		printerr("[capture] ui_expect：找不到 autoload Debug（调试层没挂上？）")
+		return 1
+	var failed := 0
+	if expect.has("overlay") and bool(dbg.call("is_overlay_on")) != bool(expect["overlay"]):
+		printerr("[capture] ui_expect overlay 不符：期望 ", expect["overlay"],
+				"，实际 ", dbg.call("is_overlay_on"))
+		failed += 1
+	if expect.has("ui_hidden") and bool(dbg.call("is_ui_hidden")) != bool(expect["ui_hidden"]):
+		printerr("[capture] ui_expect ui_hidden 不符：期望 ", expect["ui_hidden"],
+				"，实际 ", dbg.call("is_ui_hidden"))
+		failed += 1
 	return failed

@@ -34,6 +34,10 @@ SaveSystem="*res://scripts/core/save_system.gd"
 ; rule `scene_change_owner` enforces that).  It has no `_ready` and no `_process`, so its
 ; position in this list carries no ordering requirement.
 SceneRouter="*res://scripts/core/scene_router.gd"
+; S0.4 batch 2 — debug overlay + `F1`/`F3` (ROADMAP §5 S0.4).  Own hidden CanvasLayer, so
+; its position carries no ordering requirement either.  The hotkeys are registered only
+; under `OS.is_debug_build()`; that gate lives in `scripts/core/input_setup.gd` alone.
+Debug="*res://scripts/core/debug_layer.gd"
 
 [shader_globals]
 
