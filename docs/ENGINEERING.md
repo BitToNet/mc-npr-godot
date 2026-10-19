@@ -15,10 +15,10 @@
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
 | `scenes/` | 场景文件 | `main.tscn`（主场景；**S0.1 未移动**，改名 `scenes/dev/diorama.tscn` 留到 S1.2 与 `main.gd` 拆分一起做；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换） |
-| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射）、`camera_rig.gd`（正交等距相机） |
+| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
-| `scripts/ui/` | 界面 | `ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / 覆盖确认三页，S0.3 批次 4）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
+| `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / 覆盖确认三页，S0.3 批次 4）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
 | `scripts/legion/`、`scripts/data/`、`scripts/fx/` | **待建** | 分别在 M4 / M1 / M3 建目录 |
 | `shaders/common/` | 全场景共用着色器 | `toon.gdshader`（3 阶阶梯硬光影）、`outline.gdshader`（逆壳描边） |
@@ -161,6 +161,10 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 13 | **`verify.gd --all` 在同一个进程里顺序跑完全部用例** | 用例之间会通过全局服务互相污染：`s0_3_roundtrip` / `s0_3_no_autosave` 走后 `SaveSystem.current_slot` 停在 3，于是 `s0_3_slots` 的"没有当前槽位 ⇒ 保存等同另存为"整段**静默退化**成"直接写当前槽位"——**单跑该用例全绿、放进 `--all` 里 7 条失败**。这类失效模式最危险的地方是它只在组合运行下出现，而"每次验收都跑 `--all`"正是唯一能逮住它的手段 | 用例**自带前置条件**：`_restore_defaults()` 补上 `SaveSystem.current_slot` / `last_error` 的复原（`select_slot()` 只接受 1..9、没有公开的"清空"入口，故直接写回默认值），新用例在开头显式复位并把"起步是『没有选中槽位』"写成断言。**新增用例时必须问一句：它依赖上一个用例的残留状态吗？** |
 | 14 | **同一秒内的两次存档可以逐位相同** | `s0_3_overwrite` 的"确认覆盖后文件字节确实换了"报失败：`saved_at` 只到秒、`meta` 里其余字段也都取自同一批状态，而整个流程（写 → 弹窗 → 取消 → 弹窗 → 确认）耗时 < 1s，于是覆盖前后**字节逐位相同**是**正确**行为，错的只是断言 | 判"到底写没写"要看**发布次数**而不是内容：订阅 `SaveSystem.save_written` 计数（取消必须 0 次、确认必须 +1），内容层面只断言"仍是完整合法 JSON"。推广：**"值变了" 不适用于幂等写，"发生了写" 才适用** |
 | 15 | **UI 控件路径必须相对"菜单节点"写全，且要带自己的包装层** | `--shots` 注入点击时报 `ui 步骤找不到控件：Home/Panel/Col/Actions/SaveAs`（漏了菜单自己的 `Root` 包装层）与 `Root/GridPage/Panel/Col/Grid/Cards/Slot3`（漏了宫格内部的 `Col` 容器）两次 | 路径一律写成**相对菜单节点**的完整链（`Root/Home/...`）；新增 UI 前先用一次性探针把真实节点树打出来再写路径（本批用 `tools/_probe_menu.gd`，验收后删除）。配套约束：找不到控件必须以**非 0 退出**，绝不"拍一张当前画面的图"充当证据 |
+| 16 | **`B-` 像素证据要挑"只属于 UI、世界里绝不存在"的颜色** | 想证明 `F1` 真的把界面拿掉了，用"两张图不一样"是不够的（随便一个动画像素也能让它们不同） | 用 `UiKit.PAPER`（`#fff9e8`）的**精确等值像素计数**：HUD 与调试面板的 stylebox 用它，3D 世界里不可能出现（`Style.PALETTE` 无同值色）⇒ `F1` 后该颜色必须为 **0 像素**。读图先 `resize(400,225, INTERPOLATE_NEAREST)` 再数（最近邻只挑真实像素，不插值）；全图 1.44M 像素在 GDScript 里太慢，而问题的答案只是"这颜色还在不在" |
+| 17 | **`Performance.TIME_PROCESS` 在本工程对 0.5ms 量级没有分辨率** | ① vsync 开着时"开层/关层帧时间差"是**负**的（关层 18.75 / 开层 17.84 ms，量到的是 vsync 等待与抖动）；② 关掉 vsync 后又量化成 78.58 / 6.204 两个离散值，**挂一个确定的 2ms/帧 负载上去反而更低** | 不要用它做 `C-` 断言。改为**直接给被测代码的每帧工作计时**（`Time.get_ticks_usec()` 包住 `_push_sample`/`_refresh`），并**同时**用同一口径注入 0.5ms / 2ms 自旋作为标尺（实测回收率 ≈100%），先证明"这套量法分辨得出 0.5ms"。详见 `ROADMAP` §16 同名条目 |
+| 18 | **Godot 编辑器会重写 `project.godot`：剥掉 `;` 注释、把 `[shader_globals]` 挪到末尾** | 本步期间发生两次。若不复核就 `commit`，会把整文件重排混进功能提交（违反"一次提交只承载一件事"） | 编辑器跑过之后一律 `git diff -- project.godot` 逐行确认；被改乱时 `git checkout -- project.godot` 复原，再按 HEAD 的注释原样补回新行。**注意**：正常的 `--path` 运行（含 `--headless`）**不会**改写它（已实测），只有编辑器会 |
+| 19 | **headless 下渲染指标恒为 0，会让"列里有值"的断言假通过** | `--obs-csv=` 的"实时模式有实测值"若在 headless 子进程里验，会得到一列 `0.000` 而 `!= ""` 照样成立（看起来有值、其实是零）：`RENDER_TOTAL_DRAW_CALLS_IN_FRAME` 在 dummy 渲染器下恒 0 | 该探针必须**开窗口**跑，断言写成"**非零**行数 ≥ N"（而不是"列非空"）。同理：`s0_4_cost` / `s0_3_slots` / `s0_3_overwrite` / `s0_2_baseline` / `s0_6_repro` 都标 `kind="headed"`，headless 下跳过而不是判失败 |
 
 ---
 
@@ -278,3 +282,30 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > 而不给产品码加"演示状态"钩子。代价是控件路径必须写对，收益是子进程能自证"我到达了声明的界面"
 > （`ui_expect`），对不上就以非 0 退出——两个路径 bug（漏了菜单自己的 `Root` 包装层、漏了宫格的
 > `Col` 容器）都是这样被当场逮住的，而不是产出一张看着正常的错误截图。
+
+### 6.6 S0.4 批次 1–2 验收时点（autoload 8 → 9：新增 `Debug`）
+
+| 项 | 结果 |
+|---|---|
+| 窗口模式 `tools/verify.gd --all` | **18 用例 / 失败 0 / 跳过 0 / 699 断言全通过** / 退出码 0（106.8s） |
+| headless `tools/verify.gd --all` | 18 用例 / 失败 0 / 跳过 **5**（`s0_2_baseline`、`s0_6_repro`、`s0_4_cost`、`s0_3_slots`、`s0_3_overwrite` 需 GPU）/ 退出码 0（30.3s） |
+| 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 0 条 `ERROR` / `SCRIPT ERROR` |
+| 新增用例 `s0_4_overlay` | **70/70**：装配（`Debug` 就位、默认隐藏、层号 30 > 菜单 20 > HUD 10、整层不吃鼠标）/ **开关只改观测不改世界**（关→开→关两轮采样，世界结构指纹 + seed 派生量 + `GameState` 字段 + **`Rng` 每条子流 `state`** 逐项不变）/ `F3` 开合 / `F1` 隐藏 / 菜单开着时按 `F1` / **发布构建门禁**（闸门关掉后注入按键完全无反应，并静态断言 `OS.is_debug_build` 在 `scripts/` 里只出现 1 次）/ 单一闸门 / 确定性口径 / **CSV 双进程逐位一致** / `--obs-csv=` 是纯修饰符（不触发截图、不抢退出码，且"实时模式有非零实测值"开窗口验） |
+| 新增用例 `s0_4_cost` | **32/32**：120 实体夹具（`MeshUtil.blob()` + `Style.toon()`，含逆壳描边）/ 叠加层每帧成本 **0.0044 ms**（5 轮 × 400 帧中位数，最大 0.0058）< 0.5ms / **标尺**：同口径注入 0.5ms、2ms 自旋，量到 0.5000、2.0000（回收率 ≈100%）⇒ 阈值可分辨 / 反向对照 `draw_calls` 必须上升 / `B-` 两批次各两轮逐位一致且互不相同 / `vsync` 模式复原 |
+| `A-` 开关不改世界（原验收项） | 见 `s0_4_overlay` 第 2 节：两轮采样逐项不变，**含每条 `Rng` 子流的内部 `state`**（覆盖"调试层顺手抽了个随机数"这种内伤） |
+| `C-` 开销 < 0.5ms（原验收项） | **0.0044 ms/帧**，且**附可分辨性证明**（见 §5 陷阱 17 为什么必须加这条） |
+| `A-` 发布构建默认关闭（原验收项） | 唯一闸门 `InputSetup.ensure_debug_hotkeys(OS.is_debug_build())`，关掉时**删除 action**；用例断言"闸门关掉后按 F3/F1 完全没反应" + 静态扫描证明判断只出现 1 处 |
+| `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**（叠加层默认隐藏 ⇒ 主视图零像素变化） |
+| `B-` 调试层（新增） | `s0_4_overlay`（面板开）与 `s0_4_ui_hidden`（`F3`+`F1` 全隐藏）各两轮独立窗口进程：同批次两轮 sha256 逐位一致、两批次互不相同；`F1` 后 UI 面板底色 `#fff9e8` **精确 0 像素**（有 HUD 的同机位基准图为 3892 采样像素）⇒ `F1` 是"拿掉"而不是"调透明/盖一层" |
+| autoload 数量 | **9** / 上限 10（本批新增 `Debug`，注册在 `SceneRouter` 之后；它自带隐藏 `CanvasLayer`，位置无顺序要求） |
+
+> **批次 1（`ed92e66`）的验收**：抽出 `scripts/ui/ui_kit.gd` 后，`ui_panel` / `menu_page` / `save_grid`
+> 三份 UI 的 `B-` 截图逐位不变（4 张菜单 + 6 机位），说明"只搬代码不改画面"。
+>
+> **本批最值得记住的一条**：`C-` 那条断言原本写成"开层/关层的帧时间差 < 0.5ms"，两次实测都证明它
+> **测不出东西**（vsync 开着差值为负；关掉 vsync 注入 2ms 负载只回收 41%）。这类"沉默的绿灯"比失败
+> 更危险 —— 它让一个从未被验证过的数字长期挂在验收表上。处置见 §5 陷阱 17：把被测代码的每帧工作
+> 直接计时，并**同时**用已知量标尺证明这套计时能分辨该阈值。
+>
+> **另一条**：`--obs-csv=` 的"实时模式有实测值"最初在 headless 子进程里验，得到一列 `0.000` 而
+> `!= ""` 依旧成立（见 §5 陷阱 19）。**"列非空"与"列有真值"是两件事**，后者必须断言数值特征。
