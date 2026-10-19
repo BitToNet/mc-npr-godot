@@ -125,6 +125,13 @@ const CASES := {
 				+ "反向对照『开层后 draw_calls 必须上升』；外加 B- 两张截图两轮逐位一致且互不相同",
 		"kind": "headed",
 	},
+	"s0_4_quick": {
+		"desc": "快存/快读（F5/F9）：仍写 9 个真槽位、不新增隐藏槽位与旁路文件；"
+				+ "空槽位直写不弹菜单、已占用必须先按两次（§3.5 的覆盖确认不被绕过）、"
+				+ "无当前槽位时拒绝并说明；发布构建闸门删 action 后按键完全无反应；"
+				+ "菜单调试页只读事实与 Debug 同源",
+		"kind": "pure",
+	},
 	"s0_3_state": {
 		"desc": "全局服务契约：autoload 3→9 与注册顺序、逻辑步 60Hz 精确前进、Rng 子流可复现且互不干扰、EventBus 5 信号、snapshot/restore 容错",
 		"kind": "pure",
@@ -509,6 +516,8 @@ func _dispatch(id: String) -> void:
 			await _case_overlay()
 		"s0_4_cost":
 			await _case_debug_cost()
+		"s0_4_quick":
+			await _case_quick()
 		"s0_3_state":
 			await _case_state()
 		"s0_3_roundtrip":
@@ -1608,6 +1617,232 @@ func _case_debug_cost() -> void:
 	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
 
 
+## --- s0_4_quick ---------------------------------------------------------------
+## S0.4 批次 3：`F5` 快存 / `F9` 快读 + 菜单调试页（ROADMAP §5 S0.4）。
+##
+## 本用例存在的理由是**一条硬约束和一条对齐结论的冲突**：
+##   * §3.5 写死"`F5`/`F9` 不允许绕过覆盖二次确认"，也写死"不得新增隐藏槽位或旁路存档"；
+##   * 批次 3 的对齐结论是"直写、不弹菜单"。
+## 两者能同时成立的唯一写法是：**确认落在按键上**（撞上已占用槽位时先不写，
+## 窗口内再按一次 `F5` 才覆盖）。下面五组就是围绕它取证：
+##   ① 全部写入都落在 `user://saves` 的 9 个真槽位文件上，目录里不许多出任何文件；
+##   ② 空槽位一次 `F5` 就落盘，且**不打开菜单**（`is_open()` 全程为假）；
+##   ③ 已占用槽位：第一次 `F5` 后文件 sha256 必须**不变**，第二次才变 —— 这是
+##      "没有静默覆盖"的可观测证据，比读 `requires_confirm` 更硬；
+##   ④ 没有当前槽位时拒绝，并且不发明一个槽位（旧存档一个都不许被动到）；
+##   ⑤ 发布构建闸门：`ensure_debug_hotkeys(false)` 之后按键完全无反应。
+## 另外顺带断言菜单调试页的只读事实与 `Debug.stats()` **同源**（不许自己算一份）。
+func _case_quick() -> void:
+	await process_frame
+	var dbg := get_root().get_node_or_null("Debug")
+	var saves := get_root().get_node_or_null("SaveSystem")
+	var gs := get_root().get_node_or_null("GameState")
+	if not ok(dbg != null and saves != null and gs != null,
+			"Debug / SaveSystem / GameState 就位",
+			"debug=%s saves=%s gs=%s" % [dbg, saves, gs]):
+		return
+
+	# `--all` 里前面的用例会留下全局状态，这里一律自带前置条件并事后还原。
+	_restore_defaults()
+	dbg.call("set_overlay", false)
+	dbg.call("set_ui_hidden", false)
+	_saves_begin()
+
+	# 清空九格，保证下面的"空槽位直写"与既有存档无关（副本已备份）。
+	for i in range(1, 10):
+		var p: String = saves.call("slot_path", i)
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+
+	var main := await _load_main()
+	if not ok(main != null, "主场景可加载"):
+		_saves_end()
+		return
+	var menu := main.get_node_or_null(MENU_NODE)
+	if not ok(menu != null, "菜单节点就位"):
+		main.queue_free()
+		_saves_end()
+		return
+
+	section("热键注册：F5/F9 与 F1/F3 同一个闸门")
+	eq(bool(dbg.call("stats")["quick_hotkeys"]), true,
+			"Debug 构建里 F5/F9 的 action 已注册（stats().quick_hotkeys）")
+	for a in [InputSetup.ACTION_DEBUG_QUICK_SAVE, InputSetup.ACTION_DEBUG_QUICK_LOAD]:
+		ok(InputMap.has_action(a), "action 存在：" + a)
+		var keys := PackedInt32Array()
+		for ev in InputMap.action_get_events(a):
+			if ev is InputEventKey:
+				keys.append((ev as InputEventKey).physical_keycode)
+		ok(keys.has(KEY_F5 if a.ends_with("save") else KEY_F9),
+				"绑定到正确的物理键（%s）" % ("F5" if a.ends_with("save") else "F9"))
+
+	section("① 无当前槽位：拒绝，且不发明槽位")
+	saves.set("current_slot", 0)
+	var before := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
+	var r0: Dictionary = dbg.call("quick_save")
+	eq(bool(r0.get("ok", true)), false, "没有当前槽位时快存被拒绝")
+	ok(String(r0.get("reason", "")).contains("槽位"), "拒绝理由说清是槽位问题",
+			"理由=%s" % String(r0.get("reason", "")))
+	ok(String(dbg.call("notice")).contains("槽位"), "提示行同时给出人话解释")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "一个存档文件都没被写（目录哈希不变）")
+	var r1: Dictionary = dbg.call("quick_load")
+	eq(bool(r1.get("ok", true)), false, "没有当前槽位时快读也被拒绝")
+
+	section("② 空槽位：一次 F5 直写，全程不打开菜单")
+	saves.set("current_slot", 2)
+	eq(bool(menu.call("is_open")), false, "前置：菜单是关着的")
+	var ok2: Dictionary = dbg.call("quick_save")
+	eq(bool(ok2.get("ok", false)), true, "空槽位上一次快存就成功")
+	eq(int(ok2.get("slot", 0)), 2, "写的就是当前槽位 2")
+	eq(bool(ok2.get("requires_confirm", true)), false, "空槽位不需要确认")
+	eq(bool(menu.call("is_open")), false, "**没有**打开菜单（批次 3 的对齐结论）")
+	ok(FileAccess.file_exists(saves.call("slot_path", 2)), "槽位 2 的文件真的在盘上")
+	var sha2a := FileAccess.get_sha256(saves.call("slot_path", 2))
+	ok(sha2a != "", "能读到槽位 2 的 sha256")
+
+	section("③ 已占用槽位：第一次不写，第二次才覆盖（§3.5 的确认没有被绕过）")
+	# 先把世界改一下，让"覆盖"有可观测的内容差异（否则两次字节可能恰好相同）。
+	gs.set("money", int(gs.get("money")) + 777)
+	await process_frame
+	eq(dbg.call("is_confirm_pending"), false, "前置：当前没有待确认项")
+	var again: Dictionary = dbg.call("quick_save")
+	eq(bool(again.get("ok", true)), false, "撞上已占用槽位时第一次快存**不成功**")
+	eq(bool(again.get("requires_confirm", false)), true, "返回 requires_confirm=true（服务是唯一裁决）")
+	eq(dbg.call("is_confirm_pending"), true, "进入『再按一次 F5 覆盖』的待确认状态")
+	eq(int(dbg.call("confirm_pending_slot")), 2, "待确认的就是槽位 2")
+	eq(FileAccess.get_sha256(saves.call("slot_path", 2)), sha2a,
+			"**第一次按 F5 后旧存档逐位未变**（这是『没有静默覆盖』的硬证据）")
+	ok(String(dbg.call("notice")).contains("再按一次"), "提示行告诉人要再按一次",
+			"提示=%s" % String(dbg.call("notice")))
+	var confirmed: Dictionary = dbg.call("quick_save")
+	eq(bool(confirmed.get("ok", false)), true, "窗口内第二次快存成功")
+	eq(bool(menu.call("is_open")), false, "覆盖同样没有打开菜单")
+	var sha2b := FileAccess.get_sha256(saves.call("slot_path", 2))
+	ok(sha2b != sha2a, "覆盖后字节确实变了（世界改动的确有落盘）",
+			"前=%s 后=%s" % [sha2a, sha2b])
+	eq(dbg.call("is_confirm_pending"), false, "确认用掉后不再挂着待确认状态")
+
+	section("③b 确认窗口按帧过期：超时后又要重新按两次")
+	saves.set("current_slot", 2)
+	dbg.call("quick_save")  # 重新进入待确认
+	eq(dbg.call("is_confirm_pending"), true, "又进入待确认")
+	var clock := get_root().get_node_or_null("Clock")
+	var consts: Dictionary = dbg.get_script().get_script_constant_map()
+	var window := int(consts.get("CONFIRM_WINDOW_FRAMES", 0))
+	ok(window > 0, "CONFIRM_WINDOW_FRAMES 是个正数", "实测 %d" % window)
+	# 直接把截止帧推到现在之前（不改产品代码里的任何常量：只挪一次"现在"）。
+	dbg.set("_confirm_until", int(clock.get("frame")) - 1)
+	eq(dbg.call("is_confirm_pending"), false, "超过窗口后待确认自动失效")
+	var sha2c := FileAccess.get_sha256(saves.call("slot_path", 2))
+	dbg.call("quick_save")
+	eq(FileAccess.get_sha256(saves.call("slot_path", 2)), sha2c,
+			"过期后单按一次 F5 **不会**覆盖（回到『先拒绝』这一步）")
+
+	section("④ 快读：读回当前槽位，字段与应用都来自服务")
+	gs.set("money", 123456)
+	await process_frame
+	var loaded: Dictionary = dbg.call("quick_load")
+	eq(bool(loaded.get("ok", false)), true, "快读成功")
+	ok(int(gs.get("money")) != 123456, "GameState 的字段被存档内容覆盖了（真的应用了）",
+			"现值=%d" % int(gs.get("money")))
+	eq(bool(menu.call("is_open")), false, "快读也不打开菜单")
+
+	section("⑤ 存档目录里只有 9 个真槽位：没有隐藏槽位、没有旁路文件")
+	var stray: Array = []
+	var d := DirAccess.open(ProjectSettings.globalize_path(SAVES_DIR))
+	if d != null:
+		d.list_dir_begin()
+		var f := d.get_next()
+		while f != "":
+			if not d.current_is_dir():
+				var allowed := f.begins_with("slot_") and f.ends_with(".json")
+				if allowed:
+					var stem := f.get_basename().substr(5)
+					allowed = stem.is_valid_int() and int(stem) >= 1 and int(stem) <= 9
+				if not allowed:
+					stray.append(f)
+			f = d.get_next()
+		d.list_dir_end()
+	ok(stray.is_empty(), "存档目录里只有 9 个真槽位文件（旁路存档会在这里露出来）",
+			"多余：%s" % [str(stray)])
+	var quick_hits := _code_token_hits("res://scripts", "quicksave")
+	ok(quick_hits.is_empty(), "产品代码里没有『快存专用文件』这种东西（quicksave 零命中）",
+			"命中：%s" % [str(quick_hits)])
+
+	section("⑥ 发布构建闸门：删掉 action 之后按键完全无反应")
+	InputSetup.ensure_debug_hotkeys(false)
+	for a in [InputSetup.ACTION_DEBUG_QUICK_SAVE, InputSetup.ACTION_DEBUG_QUICK_LOAD]:
+		ok(not InputMap.has_action(a), "闸门关闭后 action 被真的删除：" + a)
+	eq(bool(dbg.call("stats")["quick_hotkeys"]), false, "stats().quick_hotkeys 同步为假")
+	gs.set("money", 42)
+	saves.set("current_slot", 5)
+	var before_gate := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
+	var pressed: Dictionary = dbg.call("quick_save")
+	eq(bool(pressed.get("ok", true)), false, "闸门关闭后直接调用也没有动作")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before_gate, "闸门关闭后按 F5 不产生任何存档写入")
+	InputSetup.ensure_debug_hotkeys(true)
+	ok(InputMap.has_action(InputSetup.ACTION_DEBUG_QUICK_SAVE), "恢复闸门（后续用例不受影响）")
+
+	section("⑦ 菜单调试页：只读事实与 Debug.stats() 同源")
+	menu.call("open_menu")
+	menu.call("show_debug")
+	eq(String(menu.call("page_name")), "debug", "『设置』进去落在调试页")
+	eq(bool(menu.call("is_debug_page")), true, "is_debug_page() 同步为真")
+	var facts: Dictionary = menu.call("debug_facts")
+	var st: Dictionary = dbg.call("stats")
+	eq(bool(facts.get("hotkeys", false)), bool(st.get("hotkeys", false)),
+			"调试页的『热键』格子 == stats().hotkeys（同源，不自己算）")
+	eq(bool(facts.get("quick_hotkeys", false)), bool(st.get("quick_hotkeys", false)),
+			"调试页的『快存/快读』格子 == stats().quick_hotkeys")
+	eq(bool(facts.get("overlay_on", false)), bool(st.get("overlay_on", false)),
+			"调试页的『叠加层』格子 == stats().overlay_on")
+	eq(String(facts.get("scene", "x")), String(st.get("scene_label", "y")),
+			"调试页的场景标签 == Debug.scene_label()")
+	eq(int(facts.get("slot", -1)), int(saves.get("current_slot")),
+			"调试页的槽位 == SaveSystem.current_slot")
+	var body := menu.get_node_or_null("Root/DebugPage/Panel/Col/Body") as Label
+	ok(body != null and body.text.contains("F5"), "调试页正文里写明了 F5/F9",
+			"正文=%s" % ("" if body == null else body.text.replace("\n", " / ")))
+	# 【打开叠加层】按钮必须真的驱动 Debug，而不是只改自己那一行文字。
+	# ⚠️ 本用例是 `pure`（`--headless`）：headless 下 `DisplayServer` 是 dummy、
+	# 窗口尺寸为 0×0，注入的鼠标事件没有可命中的视口 ⇒ **不能**用 `_click_control`
+	# 验按钮（实测点击"落下去"了却没人接）。鼠标命中路径由 headed 的
+	# `s0_3_slots` 覆盖（同一个 `UiKit.button_page` 工厂、同一套页面结构），
+	# 这里只验本步新增的东西：按钮在、按钮连着处理器、处理器真的驱动 Debug。
+	dbg.call("set_overlay", false)
+	var open_btn := menu.get_node_or_null("Root/DebugPage/Panel/Col/OpenOverlay") as Button
+	ok(open_btn != null, "调试页有『打开叠加层』按钮（路径 Root/DebugPage/Panel/Col/OpenOverlay）")
+	if open_btn != null:
+		ok(open_btn.visible, "按钮随调试页一起可见")
+		ok(open_btn.pressed.get_connections().size() >= 1, "按钮至少连了一个处理器")
+		open_btn.pressed.emit()
+		await process_frame
+		ok(String(menu.call("hint_text")).contains("叠加层"),
+				"处理器真的跑了（提示行被改写）",
+				"提示=%s" % String(menu.call("hint_text")))
+	eq(bool(dbg.call("is_overlay_on")), true, "调试页的『打开叠加层』按钮真的打开了叠加层")
+	# ESC 从调试页回主页（与宫格同一层级语义）。
+	await _press_escape()
+	eq(String(menu.call("page_name")), "home", "ESC 从调试页回主页（不直接关菜单）")
+	eq(bool(menu.call("is_open")), true, "此时菜单还开着")
+	menu.call("close_menu")
+	await process_frame
+
+	section("清理")
+	dbg.call("set_overlay", false)
+	dbg.call("set_ui_hidden", false)
+	for i in range(1, 10):
+		var p: String = saves.call("slot_path", i)
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	saves.set("current_slot", 0)
+	main.queue_free()
+	await process_frame
+	_restore_defaults()
+	_saves_end()
+	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+
+
 ## --- s0_3_state ---------------------------------------------------------------
 ## S0.3 批次 1：三个全局服务（Rng / EventBus / GameState）的契约。
 ## 本用例**只断言契约**，不验证存档往返（那是 s0_3_roundtrip 的事）。
@@ -2277,7 +2512,7 @@ func _case_no_autosave() -> void:
 	section("阶段 1：存档目录不存在时，跑满一整轮也不该建出任何存档")
 	ok(not DirAccess.dir_exists_absolute(SAVES_DIR), "隔离后 user://saves 不存在")
 	await _idle_run(90)
-	var snap1 := _saves_snapshot(SAVES_DIR)
+	var snap1 := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(snap1.size(), 0, "阶段 1 后仍无任何存档文件：%s" % str(snap1.keys()))
 	ok(not DirAccess.dir_exists_absolute(SAVES_DIR),
 			"阶段 1 后目录仍未被创建（服务没有 _ready 写盘，也没有别的隐式写动作）")
@@ -2285,22 +2520,22 @@ func _case_no_autosave() -> void:
 	section("阶段 2：目录已有存档时，全流程内容哈希与 mtime 零变化")
 	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
 	_write_text(_slot_file(1), '{"schema_version": 1, "game": {"money": 5}}')
-	var before := _saves_snapshot(SAVES_DIR)
+	var before := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(before.size(), 1, "基线快照含 1 个文件")
 	await _idle_run(90)
-	eq(_saves_snapshot(SAVES_DIR), before, "本进程跑满一轮后哈希与 mtime 全不变")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "本进程跑满一轮后哈希与 mtime 全不变")
 	var out: Array = []
 	var code := _exec_godot(PackedStringArray(["--headless", "--quit-after", "120"]), out)
 	ok(code == 0, "子进程完整启动主场景 120 帧退出码 = 0",
 			"退出码=%d 输出=%s" % [code, _tail(out, 4)])
 	var errs := _error_lines(out)
 	eq(errs.size(), 0, "子进程日志无 ERROR / SCRIPT ERROR：%s" % str(errs))
-	eq(_saves_snapshot(SAVES_DIR), before, "另一个进程完整启动后哈希与 mtime 仍全不变")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "另一个进程完整启动后哈希与 mtime 仍全不变")
 
 	section("正面控制：显式存档必须被这套检查检出（否则上面是空转）")
 	var wrote: Dictionary = ss.call("save_slot", 1, true)
 	ok(bool(wrote.get("ok")), "显式 save_slot(1, true) 成功", str(wrote.get("reason")))
-	ne(_saves_snapshot(SAVES_DIR), before, "显式存档后快照确实变化（内容哈希变了）")
+	ne(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "显式存档后快照确实变化（内容哈希变了）")
 
 	section("静态契约：服务里没有隐式写盘入口")
 	var src := FileAccess.get_file_as_string("res://scripts/core/save_system.gd")
@@ -2660,7 +2895,7 @@ func _case_slots() -> void:
 	await _click_control(_menu_node(menu, _menu_card_path(5)) as Button)
 	contains(String(menu.call("hint_text")), "空槽位", "点空槽位给出『空槽位』理由")
 	eq(int(ss.get("current_slot")), 0, "失败的读取不改当前槽位")
-	eq(_saves_snapshot(SAVES_DIR).size(), 0, "失败的读取不写任何文件")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)).size(), 0, "失败的读取不写任何文件")
 	await _click_control(_menu_node(menu, "back") as Button)
 
 	section("空槽位写入：点第 5 格直接写盘，卡片立刻刷新")
@@ -2676,7 +2911,7 @@ func _case_slots() -> void:
 	contains(String(menu.call("hint_text")), "已保存到槽位 5", "提示语点明槽位号")
 	ok(_slot_text_is_complete(FileAccess.get_file_as_string(_slot_file(5))),
 			"写出的存档是完整合法 JSON（schema 1 + game.money）")
-	eq(_saves_snapshot(SAVES_DIR).size(), 1, "只写出一个文件（没有 .tmp 残留）")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)).size(), 1, "只写出一个文件（没有 .tmp 残留）")
 	var info5: Dictionary = ss.call("slot_info", 5)
 	eq("" if body5 == null else body5.text, String(info5.get("label", "")),
 			"第 5 格正文刷新成服务给的 label（宫格不缓存）")
@@ -2741,7 +2976,7 @@ func _case_overwrite() -> void:
 	await _click_control(_menu_node(menu, "save_as") as Button)
 	await _click_control(_menu_node(menu, _menu_card_path(3)) as Button)
 	ok(FileAccess.file_exists(_slot_file(3)), "槽位 3 先写入一次（空槽位无需确认）")
-	var before := _saves_snapshot(SAVES_DIR)
+	var before := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	var sha_before := String((before.get("slot_3.json", {}) as Dictionary).get("sha256", ""))
 	ok(sha_before != "", "拿到了覆盖前的 sha256 锚点", "sha=%s" % sha_before)
 	eq(writes[0], 1, "空槽位那一次确实发布了写入")
@@ -2751,7 +2986,7 @@ func _case_overwrite() -> void:
 	await _click_control(_menu_node(menu, _menu_card_path(3)) as Button)
 	ok(bool(menu.call("confirm_open")), "弹出了覆盖确认")
 	eq(String(menu.call("page_name")), "grid", "弹窗叠在宫格页上（独立整页弹窗，不是行内提示）")
-	var dialog := _saves_snapshot(SAVES_DIR)
+	var dialog := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(dialog, before, "弹窗期间 saves/ 逐项不变（先问后写）")
 	contains(String((_menu_node(menu, "confirm_title") as Label).text), "槽位 3",
 			"弹窗标题点明槽位号")
@@ -2765,7 +3000,7 @@ func _case_overwrite() -> void:
 	ok(not bool(menu.call("confirm_open")), "ESC 先取消弹窗")
 	ok(bool(menu.call("is_open")), "菜单仍然开着")
 	eq(String(menu.call("page_name")), "grid", "取消后仍在宫格页（可以改选别格）")
-	eq(_saves_snapshot(SAVES_DIR), before, "取消后 saves/ 逐项不变（sha256 与 mtime 都算）")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "取消后 saves/ 逐项不变（sha256 与 mtime 都算）")
 	eq(writes[0], 1, "取消期间一次写入都没发布（先问后写）")
 	contains(String(menu.call("hint_text")), "已取消", "提示语说明是取消")
 
@@ -2776,7 +3011,7 @@ func _case_overwrite() -> void:
 	ok(not bool(menu.call("confirm_open")), "确认后弹窗关闭")
 	eq(String(menu.call("page_name")), "home", "覆盖成功后回主页")
 	contains(String(menu.call("hint_text")), "已覆盖槽位 3", "提示语点明是『覆盖』")
-	var after := _saves_snapshot(SAVES_DIR)
+	var after := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(writes[0], 2, "确认后确实又发布了一次写入（取消 0 次、确认 +1）")
 	ok(String((after.get("slot_3.json", {}) as Dictionary).get("sha256", "")) != "",
 			"确认后槽位 3 仍是一份存档（同秒内字节可能逐位相同，故不拿哈希当判据）")
@@ -2788,15 +3023,15 @@ func _case_overwrite() -> void:
 	await _click_control(_menu_node(menu, "save") as Button)
 	ok(bool(menu.call("confirm_open")), "『保存』写已占用的当前槽位时先问")
 	eq(String(menu.call("page_name")), "home", "『保存』不跳宫格（当前槽位已选中）")
-	var asked := _saves_snapshot(SAVES_DIR)
+	var asked := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	await _click_control(_menu_node(menu, "confirm_no") as Button)
 	ok(not bool(menu.call("confirm_open")), "『取消（保留旧存档）』关闭弹窗")
-	eq(_saves_snapshot(SAVES_DIR), asked, "取消后旧档逐项不变")
+	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), asked, "取消后旧档逐项不变")
 	eq(writes[0], 2, "『保存』弹窗里取消：写入次数没有增加")
 	await _click_control(_menu_node(menu, "save") as Button)
 	await _click_control(_menu_node(menu, "confirm_yes") as Button)
 	eq(writes[0], 3, "『保存』确认后才多出第 3 次写入")
-	var rewritten := _saves_snapshot(SAVES_DIR)
+	var rewritten := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(rewritten.size(), 1, "确认后仍然只有一个文件")
 	ok(String((rewritten.get("slot_3.json", {}) as Dictionary).get("sha256", "")) != "",
 			"当前槽位被重写成一个完整存档")
