@@ -1851,7 +1851,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
-| S1.0 | 场景与路由迁移 | M0 | 🚧 进行中 | **S1.0a ✅ 2026-10-19**（提交待回填，见下一提交）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b–d ⏳ 未开始** |
+| S1.0 | 场景与路由迁移 | M0 | 🚧 进行中 | **S1.0a ✅ 2026-10-19**（提交 `419785f`）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b–d ⏳ 未开始** |
 | S1.1 | 世界数据模型与程序化生成 | S1.0 | ⏳ 未开始 | — |
 | S1.2 | 战略地图场景与镜头 | S1.1 | ⏳ 未开始 | — |
 | S1.3 | 队伍棋子与移动 | S1.2 | ⏳ 未开始 | — |
