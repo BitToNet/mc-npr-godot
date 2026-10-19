@@ -18,7 +18,7 @@
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
-| `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / 覆盖确认三页，S0.3 批次 4）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
+| `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
 | `scripts/legion/`、`scripts/data/`、`scripts/fx/` | **待建** | 分别在 M4 / M1 / M3 建目录 |
 | `shaders/common/` | 全场景共用着色器 | `toon.gdshader`（3 阶阶梯硬光影）、`outline.gdshader`（逆壳描边） |
@@ -165,6 +165,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 17 | **`Performance.TIME_PROCESS` 在本工程对 0.5ms 量级没有分辨率** | ① vsync 开着时"开层/关层帧时间差"是**负**的（关层 18.75 / 开层 17.84 ms，量到的是 vsync 等待与抖动）；② 关掉 vsync 后又量化成 78.58 / 6.204 两个离散值，**挂一个确定的 2ms/帧 负载上去反而更低** | 不要用它做 `C-` 断言。改为**直接给被测代码的每帧工作计时**（`Time.get_ticks_usec()` 包住 `_push_sample`/`_refresh`），并**同时**用同一口径注入 0.5ms / 2ms 自旋作为标尺（实测回收率 ≈100%），先证明"这套量法分辨得出 0.5ms"。详见 `ROADMAP` §16 同名条目 |
 | 18 | **Godot 编辑器会重写 `project.godot`：剥掉 `;` 注释、把 `[shader_globals]` 挪到末尾** | 本步期间发生两次。若不复核就 `commit`，会把整文件重排混进功能提交（违反"一次提交只承载一件事"） | 编辑器跑过之后一律 `git diff -- project.godot` 逐行确认；被改乱时 `git checkout -- project.godot` 复原，再按 HEAD 的注释原样补回新行。**注意**：正常的 `--path` 运行（含 `--headless`）**不会**改写它（已实测），只有编辑器会 |
 | 19 | **headless 下渲染指标恒为 0，会让"列里有值"的断言假通过** | `--obs-csv=` 的"实时模式有实测值"若在 headless 子进程里验，会得到一列 `0.000` 而 `!= ""` 照样成立（看起来有值、其实是零）：`RENDER_TOTAL_DRAW_CALLS_IN_FRAME` 在 dummy 渲染器下恒 0 | 该探针必须**开窗口**跑，断言写成"**非零**行数 ≥ N"（而不是"列非空"）。同理：`s0_4_cost` / `s0_3_slots` / `s0_3_overwrite` / `s0_2_baseline` / `s0_6_repro` 都标 `kind="headed"`，headless 下跳过而不是判失败 |
+| 20 | **headless 下窗口尺寸是 0×0 ⇒ `pure` 用例验不了鼠标命中** | 给菜单调试页按钮写点击断言时，`_click_control` 报告"矩形已排出尺寸、点击真的落下去了"，但处理器**一次都没跑**、提示行原封不动。实测 `DisplayServer.get_name() == "headless"`、`DisplayServer.window_get_size() == (0, 0)`：注入的鼠标事件没有可命中的视口 | `pure` 用例只验"控件在 + 连着处理器 + 处理器真驱动目标"（直接 `pressed.emit()`），鼠标命中路径交给 `headed` 用例（同一套 `UiKit.button_page` 工厂与页面结构）。**注意** `_click_control` 的返回值只说明"矩形非退化"，**不说明事件被谁接住** —— 想区分这两件事，得让处理器留下可观测痕迹（如改写提示行） |
+| 21 | **"发布构建完全禁用"的闸门不能只做在 `_input` 里** | `_input` 只挡按键，挡不住"有人直接调 `quick_save()`"（未来的新 UI 入口、测试代码、任何脚本调用都能绕过），于是"完全禁用"名不副实 | 闸门做进**函数内部**：`quick_save()` / `quick_load()` 开头检查 `_quick_enabled()`（= 对应 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**为此再写一次 `OS.is_debug_build()` —— `s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是因为在调试页多写了一行而把该断言变红 |
 
 ---
 
@@ -283,18 +285,19 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > （`ui_expect`），对不上就以非 0 退出——两个路径 bug（漏了菜单自己的 `Root` 包装层、漏了宫格的
 > `Col` 容器）都是这样被当场逮住的，而不是产出一张看着正常的错误截图。
 
-### 6.6 S0.4 批次 1–2 验收时点（autoload 8 → 9：新增 `Debug`）
+### 6.6 S0.4 批次 1–3 验收时点（autoload 8 → 9：新增 `Debug`）
 
 | 项 | 结果 |
 |---|---|
-| 窗口模式 `tools/verify.gd --all` | **18 用例 / 失败 0 / 跳过 0 / 699 断言全通过** / 退出码 0（106.8s） |
-| headless `tools/verify.gd --all` | 18 用例 / 失败 0 / 跳过 **5**（`s0_2_baseline`、`s0_6_repro`、`s0_4_cost`、`s0_3_slots`、`s0_3_overwrite` 需 GPU）/ 退出码 0（30.3s） |
+| 窗口模式 `tools/verify.gd --all` | **19 用例 / 失败 0 / 跳过 0 / 761 断言全通过** / 退出码 0（108.0s） |
+| headless `tools/verify.gd --all` | 19 用例 / 失败 0 / 跳过 **5**（`s0_2_baseline`、`s0_6_repro`、`s0_4_cost`、`s0_3_slots`、`s0_3_overwrite` 需 GPU）/ 退出码 0 |
 | 推送门禁 `--headless --quit-after 60` | 退出码 0，日志 0 条 `ERROR` / `SCRIPT ERROR` |
 | 新增用例 `s0_4_overlay` | **70/70**：装配（`Debug` 就位、默认隐藏、层号 30 > 菜单 20 > HUD 10、整层不吃鼠标）/ **开关只改观测不改世界**（关→开→关两轮采样，世界结构指纹 + seed 派生量 + `GameState` 字段 + **`Rng` 每条子流 `state`** 逐项不变）/ `F3` 开合 / `F1` 隐藏 / 菜单开着时按 `F1` / **发布构建门禁**（闸门关掉后注入按键完全无反应，并静态断言 `OS.is_debug_build` 在 `scripts/` 里只出现 1 次）/ 单一闸门 / 确定性口径 / **CSV 双进程逐位一致** / `--obs-csv=` 是纯修饰符（不触发截图、不抢退出码，且"实时模式有非零实测值"开窗口验） |
 | 新增用例 `s0_4_cost` | **32/32**：120 实体夹具（`MeshUtil.blob()` + `Style.toon()`，含逆壳描边）/ 叠加层每帧成本 **0.0044 ms**（5 轮 × 400 帧中位数，最大 0.0058）< 0.5ms / **标尺**：同口径注入 0.5ms、2ms 自旋，量到 0.5000、2.0000（回收率 ≈100%）⇒ 阈值可分辨 / 反向对照 `draw_calls` 必须上升 / `B-` 两批次各两轮逐位一致且互不相同 / `vsync` 模式复原 |
+| 新增用例 `s0_4_quick`（批次 3） | **62/62**：热键注册（`F5`/`F9` 的 action 与物理键）/ 无当前槽位时拒绝且不发明槽位（目录哈希不变）/ 空槽位一次 `F5` 直写且**全程不打开菜单** / **已占用槽位第一次按 `F5` 后旧档 sha256 逐位不变**、第二次才覆盖（§3.5 的确认没被绕过）/ 确认窗口按帧过期（过期后单按一次又回到"先拒绝"）/ `F9` 真的应用存档字段 / **存档目录里只有 `slot_1..9.json`**（无隐藏槽位、无旁路文件；产品代码 `quicksave` 零命中）/ 发布构建闸门（action 被删 + 直接调用也无写入）/ 菜单调试页事实与 `Debug.stats()` + `SaveSystem.current_slot` 同源、「打开叠加层」按钮真驱动 `Debug`、`ESC` 从调试页回主页 |
 | `A-` 开关不改世界（原验收项） | 见 `s0_4_overlay` 第 2 节：两轮采样逐项不变，**含每条 `Rng` 子流的内部 `state`**（覆盖"调试层顺手抽了个随机数"这种内伤） |
 | `C-` 开销 < 0.5ms（原验收项） | **0.0044 ms/帧**，且**附可分辨性证明**（见 §5 陷阱 17 为什么必须加这条） |
-| `A-` 发布构建默认关闭（原验收项） | 唯一闸门 `InputSetup.ensure_debug_hotkeys(OS.is_debug_build())`，关掉时**删除 action**；用例断言"闸门关掉后按 F3/F1 完全没反应" + 静态扫描证明判断只出现 1 处 |
+| `A-` 发布构建默认关闭（原验收项） | 唯一闸门 `InputSetup.ensure_debug_hotkeys(OS.is_debug_build())`，关掉时**删除 action**；用例断言"闸门关掉后按 F3/F1/F5/F9 完全没反应" + 静态扫描证明判断只出现 1 处。**`F5`/`F9` 的闸门做在 `quick_save()`/`quick_load()` 函数内部**，不只是 `_input`（见 §5 陷阱 21） |
 | `B-` 6 机位 | 与 §4 基线 **6/6 sha256 全等**（叠加层默认隐藏 ⇒ 主视图零像素变化） |
 | `B-` 调试层（新增） | `s0_4_overlay`（面板开）与 `s0_4_ui_hidden`（`F3`+`F1` 全隐藏）各两轮独立窗口进程：同批次两轮 sha256 逐位一致、两批次互不相同；`F1` 后 UI 面板底色 `#fff9e8` **精确 0 像素**（有 HUD 的同机位基准图为 3892 采样像素）⇒ `F1` 是"拿掉"而不是"调透明/盖一层" |
 | autoload 数量 | **9** / 上限 10（本批新增 `Debug`，注册在 `SceneRouter` 之后；它自带隐藏 `CanvasLayer`，位置无顺序要求） |

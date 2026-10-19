@@ -289,6 +289,9 @@ $P      = "G:\godot_project\mc-npr-godot"
 
 - `F5` 快存 / `F9` 快读（见 S0.4）**仅存在于 Debug 构建**，且**不允许**绕过本节规则：
   仍写入 9 个槽位之一，**不得**新增隐藏槽位或旁路存档文件；发布构建必须完全禁用（S6.6 已断言）。
+- 「覆盖已占用槽位必须二次确认」这一条对 `F5` 同样成立，只是**确认形式不同**：菜单里是弹窗，
+  `F5` 是**再按一次 `F5`**（第一次只登记待确认、不写盘，120 帧窗口内再按才覆盖）。
+  不弹菜单不等于不确认；`s0_4_quick` 用"第一次按完旧档 sha256 逐位不变"来守住这一点。
 
 ---
 
@@ -573,13 +576,13 @@ $P      = "G:\godot_project\mc-npr-godot"
 - `C-` 调试层开启的额外开销 < 0.5ms/帧（120 实体场景采样）。
 - `A-` 发布构建默认关闭（导出配置中不含调试快捷键启用状态）。
 
-**批次划分（2 批）**
+**批次划分（3 批）**
 
 | 批 | 范围 | 状态 |
 |---|---|---|
 | 1 | **`UiKit` 公共控件工厂**：把 `ui_panel.gd` / `menu_page.gd` / `save_grid.gd` 三份重复的 stylebox / 阴影偏移 / 标签构造抽成 `scripts/ui/ui_kit.gd`（`Widget`/`UiKit` 全局类）。验收：三份 UI 的 `B-` 截图逐位不变 | ✅ `ed92e66` |
 | 2 | **叠加层 + `F1`/`F3` + CSV**：新增 autoload `Debug`（8 → 9）；面板（帧时间曲线 / 节点与分组计数 / 场景与路由栈 / 时钟与 Rng 子流）；两条调试热键；`--obs-csv=` 落盘 | ✅ 已完成（2026-10-19） |
-| 3（未做） | `F5` 快存 / `F9` 快读 + 菜单里的调试入口 | ⏳ 顺延 |
+| 3 | **`F5` 快存 / `F9` 快读 + 菜单里的调试入口**：两条快存快读热键（仍写 9 个真槽位）、叠加层提示行与独立 toast、菜单「设置」页改为调试页（只读事实 + 打开叠加层） | ✅ 已完成（2026-10-19） |
 
 **批次 2 的对齐结论（2026-10-19，三问三答，均取推荐项）**
 
@@ -639,8 +642,46 @@ $P      = "G:\godot_project\mc-npr-godot"
    标尺，才让"< 0.5ms"从一句话变成一个可证伪的断言。教训归纳成一句：
    **凡是"某个东西很便宜"的断言，都必须同时证明"这套量法测得出它变贵"。**
 
+**批次 3 的对齐结论（2026-10-19，两问两答）**
+
+| 决策点 | 结论 |
+|---|---|
+| `F5` 撞上已占用槽位怎么办 | **只做直写，不弹菜单**。§3.5 的"覆盖必须二次确认"不因此豁免，而是把确认从"点弹窗"改成"再按一次 `F5`"：第一次 `F5` **不写**、只登记待确认并给出理由，`CONFIRM_WINDOW_FRAMES = 120` 帧内再按一次才真覆盖。这样"不弹菜单"与"不破坏契约"同时成立，且全程仍走 `SaveSystem.save_slot()`，本层不另立一套规则 |
+| 菜单调试入口放哪 | **填实现有的「设置」页**（不加新页、不加提示行）。原来那句"设置页还没做"是死文案；改成调试页后按钮路径 `Root/Home/Panel/Col/Actions/Settings` 不变（`verify.gd` 的节点表依赖它），真正的设置项留到 M6（S6.3） |
+
+**批次 3 的三条实现要点**
+1. **闸门必须在函数里，不能只在 `_input` 里**：`_input` 只挡按键，挡不住"有人直接调
+   `quick_save()`"。§3.5 要求发布构建**完全禁用**，所以 `quick_save()` / `quick_load()` 开头
+   各自检查 `_quick_enabled()`（= 两个 action 在不在，与 `F1`/`F3` 同一个事实来源，
+   不自己再判断构建类型 —— 那会破坏"全项目只有一处 `OS.is_debug_build`"）。
+   验收用例正是直接调方法验的：闸门关掉后调用返回 `ok=false` 且存档目录零变化。
+2. **提示必须独立于叠加层**：叠加层默认关着，若 `F5` 的反馈只画在面板里，按键就等于"什么都没发生"
+   —— 比报错更糟。故另起 `ToastLayer`（`LAYER + 1`），只在有话时可见，且同样服从 `F1`
+   （隐藏全部 UI 时不留一条浮字）。过期按**帧数**判定（`NOTICE_FRAMES = 180`），不用墙钟。
+3. **本地拒绝的结果必须与 `SaveSystem` 同形**：`ok/slot/reason/requires_confirm/warnings/bytes`
+   一个不少。否则调用方要区分"服务拒绝"与"本层拒绝"，`ok` 缺省会变成 `false` 还是 `true`
+   取决于读法（实测踩过：`res.get("ok", true)` 把空字典读成了成功）。
+
+**批次 3 的验收证据（2026-10-19，实测）**
+- `A-` **仍写 9 个真槽位、无旁路文件**（§3.5 原文）：`s0_4_quick` 遍历 `user://saves`，
+  除 `slot_1..9.json` 之外**任何文件都算失败**；并扫产品代码证明 `quicksave` 零命中
+  （没有"快存专用文件"这种东西）。
+- `A-` **覆盖确认没有被绕过**：空槽位一次 `F5` 就落盘且 `requires_confirm=false`；
+  已占用槽位第一次 `F5` 后**旧档 sha256 逐位不变**、`is_confirm_pending()==true`，
+  第二次才变 —— 这是"没有静默覆盖"的可观测证据，比只读返回值硬。
+  另验**窗口过期**：把 `_confirm_until` 推到过去后单按一次 `F5` 又回到"先拒绝"。
+- `A-` **无当前槽位时拒绝**：不发明槽位（目录哈希不变），并给出人话理由。
+- `A-` **发布构建闸门**：`ensure_debug_hotkeys(false)` 后两个 action 被删除、
+  `stats().quick_hotkeys==false`、直接调用 `quick_save()` 也不产生任何写入。
+- `A-` **菜单调试页与 `Debug` 同源**：`debug_facts()` 的 `hotkeys` / `quick_hotkeys` /
+  `overlay_on` / `scene` / `slot` 逐项等于 `Debug.stats()` 与 `SaveSystem.current_slot`；
+  「打开叠加层」按钮真的驱动 `Debug.set_overlay(true)`；`ESC` 从调试页回主页（与宫格同层级）。
+  ⚠️ 该用例是 `pure`（`--headless`），headless 下窗口尺寸 **0×0**、注入鼠标事件无处命中，
+  故按钮验的是"在 + 连着处理器 + 处理器真驱动 Debug"，鼠标命中路径由 headed 的
+  `s0_3_slots` 覆盖（同一套 `UiKit.button_page` 工厂与页面结构）。
+
 **依赖与风险**：S0.3。风险：单例过多导致隐式耦合 → 约定只有 `SceneRouter` 能切场景、只有 `SaveSystem` 能读写 `user://`。
-**状态**：🚧 进行中（批次 1 `ed92e66`、批次 2 已完成；剩 `F5`/`F9` 快存快读与菜单调试入口，及 `D-` 人工手感）
+**状态**：✅ 已验收（批次 1 `ed92e66`、批次 2 2026-10-19、批次 3 2026-10-19；`D-` 人工手感已通过）
 
 ### S0.5 工程规范与美术管线文档
 
@@ -1572,7 +1613,7 @@ $P      = "G:\godot_project\mc-npr-godot"
 | S0.1 | 目录与工程结构重组 | —（`B-` 前置 S0.6 已验收） | ✅ 已验收 | 6 批迁移全部完成（批次 1–4 为代码移动，`1bab8fd` / `16b7196` / `1aa739c` / `534e2bd`）；验收：窗口 `--all` 8 用例 / 152 断言全通过 / 退出码 0，headless 8 用例 0 失败 2 跳过，推送门禁 0 条 ERROR，`B-` 6 机位与迁移前基线**逐位一致（6/6 sha256 全等）**；产出 `docs/ENGINEERING.md` |
 | S0.2 | 验收工具链 v1 | —（原 S0.1，批准前置） | ✅ 已验收 | 提交 `1ff5283`；`tools/verify.gd --all` 窗口模式 6/6 用例、**87/87 断言通过**、退出码 0；headless 模式 5 通过 + 1 跳过、退出码 0；报告 `res://.verify/*.json`（gitignored）；结论见 `docs/成果.md` |
 | S0.3 | 全局服务骨架 | S0.2 | ✅ 已验收 | 执行方案与 4 批划分见 §5 S0.3（2026-10-16 对齐定稿）。**批次 1 ✅ 已完成**（提交 `39f0c34`，subject `feat(core): S0.3 批次 1 —— 新增 Rng / EventBus / GameState 三个全局服务`）：新增 `scripts/core/{rng,event_bus,game_state}.gd` 三个 autoload（3 → 6），`project.godot` 注册顺序 `Rng` 先于 `GameState`；新增用例 `s0_3_state`（72 断言全通过）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；`verify.gd --all` 9 用例 / 0 失败 / 2 跳过（178 断言）；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 2 ✅ 已完成（2026-10-16，提交 `93c25e6`）**：新增 `scripts/core/save_system.gd`（autoload `SaveSystem`，注册在 `GameState` 之后，3 → 7）：9 固定槽位（1-based）+ `schema_version: 1` + `meta` 槽位卡片字段（真实时间 / 游戏内日期时间 / 队伍名与等级 / 累计时长）+ 脏存档容错（非法 JSON / 数组根 / 高版本 / 无迁移路径 / 缺 `game` 一律拒读且不改动当前状态；未知·缺失·类型错误字段逐条告警并保留当前值）+ `migrations` 版本链钩子 + **无自动存档**（无 `_ready`/`_process`/`EventBus` 订阅，`SAVE_DIR` 由首次写入惰性创建）。新增 4 用例：`s0_3_roundtrip` 63 断言（**真跨进程**：子进程写 → 父进程逐字段比对 → 另一子进程读回并回吐快照文件）、`s0_3_dirty` 47 断言、`s0_3_atomic` 29 断言（跨进程并发 800 次写 / 170 次观测，**0 次半截内容**、读者重试后 **0 次读取失败**、最终与写者自述 sha256 逐位一致）、`s0_3_no_autosave` 17 断言（启动 + 世界重建 + 五种全局事实 + 完整启动子进程后，`user://saves` 全部文件哈希与 mtime **零变化**，且有正对照证明该检查真能检出显式存档）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **13 用例 / 0 失败 / 0 跳过（385 断言）/ 退出码 0**，headless 13 用例 / 0 失败 / 2 跳过；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`。**批次 3 ✅ 已完成（2026-10-16，提交 `2036423`）**：新增 `scripts/core/scene_router.gd`（autoload `SceneRouter`，7 → 8）与 `scenes/battle/battle_stub.tscn` + `scripts/battle/battle_stub.gd`（**占位靶子**，M2 替换）。`SceneRouter` 是**唯一**允许调用 `change_scene_to_file()` 的文件（守卫新规则 `scene_change_owner` 按属主路径放行）；浅栈 `world` → `battle`（`MAX_DEPTH=2`），越界一律显式失败并给出原因，拒绝不改动状态；栈与真实屏幕对账（场景被外部换掉/释放后 `current_route()` 归空，不沿用旧信念）；`_expected_path` 挡住同帧内的第二次切换（`change_scene_to_file` 只是登记，`current_scene` 要到帧末才更新）；只发自身事实 `route_changed(from,to)`，不发 `encounter_started`/`battle_finished`（留给 M1/M2，避免双重发射）；无 `_ready`、无 `_process`（批次 4 的 `paused` 不会卡住路由）。新增用例 `s0_3_router` 70 断言，覆盖：路由表与 API 契约、切换落地前的同帧语义、`world→battle→world` 后**节点数 ±0（101 → 101）**、世界子树**结构指纹逐条一致（92 条）**、**seed 派生值一致**（`spawn_point` + `height_at` + `Scatter.stats`）、栈深上限与三类越界的显式拒绝、`route_changed` 恰好 4 次且被拒调用一次不播报、占位场景正交相机/面着色网格（242 三角面）/`Style.toon()` + 逆壳描边、以及"栈不撒谎"。同批把 `s0_3_state` 的 autoload 契约 7 → 8、`s0_2_guard` 类数描述 7 类 → 8 类。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **14 用例 / 0 失败 / 0 跳过（460 断言）/ 退出码 0 / 50034 ms**，headless 14 用例 / 0 失败 / 2 跳过（411 断言）/ 13939 ms；**`B-` 6 机位逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`C-` fps_mean 59.97–60.02、ms/frame 16.662–16.676、三角面 219,978、绘制调用 96。批次 4（菜单 + 九宫格）→ **已完成 ✅（2026-10-16，提交 `f3006d3`，subject `feat(ui): S0.3 批次 4 —— 新增存档菜单与 3×3 九宫格，接入 ESC 暂停与 SaveSystem`）**：新增 `scripts/ui/menu_page.gd`（`CanvasLayer`，`layer=20` / `PROCESS_MODE_ALWAYS` / `add_to_group("menu")`；主页五入口 + 宫格页 + 覆盖确认弹窗三页；`ESC` 四级层级＝弹窗→宫格→主页→关闭，`keycode`/`physical_keycode`/`ui_cancel` 三者都认）与 `scripts/ui/save_grid.gd`（`COLUMNS=3` / `SLOT_COUNT=9`、卡片 296×104、`slot_pressed(slot)`；卡片正文**只读** `SaveSystem.slot_info(slot).label`，宫格自己不算、不缓存槽位数据）。`scenes/main.tscn` 挂载 `MenuLayer`（**默认隐藏**，否则 6 机位 `B-` 立即变红）；`scripts/core/render_clock.gd` 与 `scripts/ui/ui_panel.gd` 补 `PROCESS_MODE_ALWAYS`（陷阱 1 落地）；`scripts/core/capture.gd` 的 `--shots` 新增 UI 步骤驱动（`ui:["esc","click:<控件相对路径>"]` + `ui_expect` 自证行；**产品码不留演示状态后门**，"拍错屏"直接以非 0 退出而不是产出一张看着正常的 PNG）。新增用例 `s0_3_slots` **100 断言**（装配与层号、暂停契约、无当前槽位的两条跳转、空槽位直写与卡片刷新、`ESC` 层级、4 张 `B-` 截图两轮逐位一致 + 两两不同 + 非空图）与 `s0_3_overwrite` **34 断言**（整页弹窗先问后写、弹窗期间与取消后目录逐项 sha256+mtime 不变、`save_written` 计数 0 → +1、主页「保存」写已占用的当前槽位同样先问）。验收：headless 启动 60 帧 0 条 `ERROR`/`WARNING`；窗口 `verify.gd --all` **16 用例 / 0 失败 / 0 跳过 / 594 断言 / 退出码 0 / 71843 ms**，headless 16 用例 / 0 失败 / **4 跳过** / 411 断言 / 14672 ms；**`B-` 6 机位与 S0.1 基线逐位一致（6/6 sha256 全等）**，manifest `det=True hz=60.0 t=2.5 frame=150`；`B-` 菜单 4 张（1600×900，两轮独立进程逐位一致）`01_menu_home eeec5d02…` / `02_grid_empty ce9175ce…` / `03_grid_full a504ec4e…` / `04_overwrite_confirm 1563abf8…`；`C-` fps_mean 60.0、ms/frame 16.667、三角面 219,978、绘制调用 96（与批次 3 全等），**静态内存 91.3 → 126.13 MB、对象 1778 → 2034** —— 增量经独立探针拆开量过：**菜单子树 77 节点 = 34.29 MB / 254 对象**（headless 侧 99.52 → 65.23 MB，与窗口侧 +34.8 MB 相互印证），主体是中文 `SystemFont`（匹配到系统 CJK 字体）及其字形缓存，登记为"若日后压内存，首选项是换子集化随包字体"。**两条负面结论已回写**：① `--all` 在同**一个进程**里顺序跑完所有用例，因此"上一个用例停在哪个槽位"属于必须显式复原的状态（`s0_3_roundtrip` 走后 `current_slot` 停在 3，导致 `s0_3_slots` 的"无当前槽位"整段失效 —— `_restore_defaults()` 已补 `SaveSystem.current_slot`/`last_error`，两个新用例自带前置条件）；② 同一秒内状态没变时两次存档的**字节可以逐位相同**（`saved_at` 只到秒），"文件内容变了"不能当"确实写过了"的判据，要用 `save_written` 的发布次数。**未闭环项**：淡入淡出过渡**未纳入本批**（幕布必须活过 `change_scene_to_file()` 的场景释放 ⇒ 需要一个不挂在任何场景里的持久属主，属要先对齐的设计决定，顺延为独立小步）。**`D-` 人工试玩已通过（2026-10-16，用户）**：`ESC` 开合 / 宫格选槽 / 覆盖二次确认手感确认通过、无返工项 ⇒ 本步 `A-`/`B-`/`C-`/`D-` 全部闭环，状态置 `✅ 已验收` |
-| S0.4 | 调试与观测层 | S0.3 | 🚧 进行中 | **批次 1 ✅ `ed92e66`**：抽 `UiKit` 公共控件工厂（`ui_panel` / `menu_page` / `save_grid` 三份重复实现合一），三份 UI 的 `B-` 截图逐位不变。**批次 2 ✅ 已完成（2026-10-19）**：新增 autoload `Debug`（8 → 9，`scripts/core/debug_layer.gd`）—— 默认隐藏的叠加层（层号 30 > 菜单 20 > HUD 10，整层 `MOUSE_FILTER_IGNORE`）、帧时间曲线（纵轴固定 0–33ms ⇒ 图形是采样值的纯函数）、节点/分组计数、场景与路由栈（两级回退，见 §5 S0.4 实测结论 1）、时钟与 Rng 子流；`input_setup.gd` 新增 `debug_ui_hide`（`F1`）/`debug_overlay`（`F3`）与唯一闸门 `ensure_debug_hotkeys(OS.is_debug_build())`（关掉时**删除 action**）；`capture.gd` 支持 `ui: ["key:f3"]` 步骤与 `ui_expect.overlay/ui_hidden` 自证；`debug_layer.gd` 支持 `--obs-csv=`（纯修饰符，不触发截图、不抢退出码）。新增用例 `s0_4_overlay` 69 断言 + `s0_4_cost` 28 断言。验收：窗口 `--all` **18 用例 / 0 失败 / 0 跳过 / 618 断言 / 114618 ms**、退出码 0；headless 18 用例 / 0 失败 / 5 跳过、退出码 0；`A-` 开关前后世界结构指纹 + seed 派生量 + `GameState` 字段 + **`Rng` 子流 state** 逐项不变；`C-` 120 实体夹具叠加层**每帧成本 0.0044 ms < 0.5**（附 0.5ms/2ms 自旋标尺回收率 ≈100% 证明可分辨），且有 draw_calls 反向对照；`B-` 两批次各两轮独立进程 sha256 逐位一致、互不相同，`F1` 后 UI 面板底色**精确 0 像素**（基准图 3892），6 机位与 S0.1 基线**全等 6/6**。**仍留台账**：`F5`/`F9` 快存快读 + 菜单调试入口（批次 3，须单独验 §3.5 覆盖确认手感）、`D-` 人工手感 |
+| S0.4 | 调试与观测层 | S0.3 | ✅ 已验收 | **批次 1 ✅ `ed92e66`**：抽 `UiKit` 公共控件工厂（`ui_panel` / `menu_page` / `save_grid` 三份重复实现合一），三份 UI 的 `B-` 截图逐位不变。**批次 2 ✅ 2026-10-19**：新增 autoload `Debug`（8 → 9，`scripts/core/debug_layer.gd`）—— 默认隐藏的叠加层（层号 30 > 菜单 20 > HUD 10，整层 `MOUSE_FILTER_IGNORE`）、帧时间曲线（纵轴固定 0–33ms ⇒ 图形是采样值的纯函数）、节点/分组计数、场景与路由栈（两级回退，见 §5 S0.4 实测结论 1）、时钟与 Rng 子流；`input_setup.gd` 新增 `debug_ui_hide`（`F1`）/`debug_overlay`（`F3`）与唯一闸门 `ensure_debug_hotkeys(OS.is_debug_build())`（关掉时**删除 action**）；`capture.gd` 支持 `ui: ["key:f3"]` 步骤与 `ui_expect.overlay/ui_hidden` 自证；`debug_layer.gd` 支持 `--obs-csv=`（纯修饰符，不触发截图、不抢退出码）。**批次 3 ✅ 2026-10-19**：`F5` 快存 / `F9` 快读（`debug_quick_save` / `debug_quick_load`，仍写 9 个真槽位、无隐藏槽位与旁路文件；已占用槽位第一次只登记待确认、`CONFIRM_WINDOW_FRAMES = 120` 帧内再按一次才覆盖 ⇒ §3.5 的二次确认不被绕过；闸门做在函数内部而非只在 `_input`，发布构建直接调用也无动作）；快存快读反馈落在独立 `ToastLayer`（`LAYER + 1`，不依赖叠加层开着，服从 `F1`，按帧过期）；菜单「设置」页填实为调试页（只读事实与 `Debug.stats()` 同源 + 「打开叠加层」按钮，按钮路径 `Root/Home/Panel/Col/Actions/Settings` 不变）。新增用例 `s0_4_overlay` 70 断言 + `s0_4_cost` 32 断言 + `s0_4_quick` 62 断言。验收：窗口 `--all` **19 用例 / 0 失败 / 0 跳过 / 761 断言 / 108015 ms**、退出码 0；headless 同口径 0 失败、headed 用例跳过；`A-` 开关前后世界结构指纹 + seed 派生量 + `GameState` 字段 + **`Rng` 子流 state** 逐项不变；`C-` 120 实体夹具叠加层**每帧成本 0.0044 ms < 0.5**（附 0.5ms/2ms 自旋标尺回收率 ≈100% 证明可分辨），且有 draw_calls 反向对照；`B-` 两批次各两轮独立进程 sha256 逐位一致、互不相同，`F1` 后 UI 面板底色**精确 0 像素**（基准图 3892），6 机位与 S0.1 基线**全等 6/6**；`D-` 人工手感已由用户确认通过（批次 2 反馈"手感可以"） |
 | S0.5 | 工程规范与美术管线文档 | S0.1/S0.2 | ⏳ 未开始 | — |
 | S0.6 | 可复现渲染时钟（可注入 `u_time`） | S0.2 | ✅ 已验收 | 提交 `457a7d2`（实现）+ `953fd0d`（用例与守卫）；`tools/verify.gd --all` 窗口模式 **8/8 用例、152/152 断言**、退出码 0，headless 6 通过 + 2 跳过、退出码 0。关键证据 `s0_6_repro` 31/31：两独立进程同参数截图 `img_diff` **0 像素 / 0.0000%** 且 sha256 逐位相同（`s0_boot_follow`、`s0_boot_wide`），`--yaw=45→52` 与 `--frames=15→200` 反向对照均判不同；`s0_6_clock` 28/28；修复前同口径实测 1.62%–5.67%。`C-` 三次采样 ms/frame 16.685/16.667/16.667、三角面 219,978、绘制调用 96（vsync 封顶，仅证明未跌破上限）。结论与遗留见 `docs/成果.md` |
 
@@ -1691,6 +1732,10 @@ $P      = "G:\godot_project\mc-npr-godot"
 | 2026-10-19 | **更正过期台账：`_case_baseline` 的 `--out=` 透传缺陷其实早已修好**。2026-10-16 那行"登记既有缺陷（本次未修）"已过期 —— `git blame` 显示 `tools/verify.gd` 里 `--out=` 的透传由提交 `93c25e6` 引入，此后 `s0_2_baseline` 在任意 `--out=` 目录下都能拿到 baseline JSON。故**不做**无意义的重复修复，改为：① 在 `_case_baseline` 补一条**回归锚点**断言（换目录跑，报告必须落在新目录、且默认目录里没有它，防"两个目录都写"的假通过），`s0_2_baseline` 由 15 → 21 断言；② 在此更正记录。`docs/成果.md` 中两处"未修"同步更正 | 用户在批次 2 对齐时选择"单独提交修掉"，核查后发现无需修 —— 直接照办会造出一个改不动任何行为的空提交，且会把"已修"的事实继续留在"未修"的记录里 | 用户（对齐时的选择；核查结论回报后按推荐项改为补回归锚点） |
 | 2026-10-19 | **`C-` 开销断言改写：从"帧时间差"改为"直接给叠加层每帧工作计时"**。原写法"开层/关层帧时间差 < 0.5ms"经两次实测证明**测不出东西**：① vsync 开着时差值是**负**的（关层 18.75 / 开层 17.84 ms，量到的是 vsync 等待与抖动）；② 关掉 vsync 改逐帧墙钟后，注入确定的 2ms/帧 自旋负载**只回收 41%**（2.000 → 0.817）。即该断言叠加层再贵也会绿。改为直接计时 `_push_sample()`（每帧）+ `_refresh()`（每 6 帧），与 `_process()` 真实节奏一致，实测 **0.0044 ms/帧**（5 轮 × 400 帧中位数）；并新增**标尺**断言：同口径注入 0.5ms / 2ms 自旋，量到 0.5000 / 2.0000（回收率 ≈100%），先证明这套计时能分辨 0.5ms。另把 `_sample_ms()` 的监视器由 `Performance.TIME_PROCESS` 换成逐帧 `Time.get_ticks_usec()` 墙钟 | 一条"某东西很便宜"的断言，必须同时证明"这套量法测得出它变贵"，否则只是沉默的绿灯。`Performance.TIME_PROCESS` 在本工程连 2ms 负载都测不出（关 vsync 后量化到 78.58 / 6.204 两个离散值，带负载反而更低），不可用于 0.5ms 量级 | 实测登记（S0.4 批次 2 验收过程） |
 | 2026-10-19 | **`project.godot` 被编辑器改写的问题结案**。Godot 编辑器打开工程时会剥掉 `project.godot` 里的 `;` 注释并把 `[shader_globals]` 移到文件末尾 —— 本步期间发生两次。处理：`git checkout -- project.godot` 复原，再按 HEAD 的注释原样补回，并在末尾追加 `Debug` 的 4 行注释 + 注册行；复核 `git diff` 只含预期新增。**约定**：改 `project.godot` 后用 `git diff` 逐行确认，不要直接 `commit` | 编辑器把文件当作"自己的格式"重写，任何手写注释都会丢；若不复核就提交，会把无关的整文件重排混进功能提交（违反 §二 2.1「一次提交只承载一件事」） | 实测登记（S0.4 批次 2 验收过程） |
+| 2026-10-19 | **S0.4 批次 3 落地：`F5` 快存 / `F9` 快读 + 菜单调试页**。`input_setup.gd` 新增 `debug_quick_save`（`F5`）/`debug_quick_load`（`F9`），与 `F1`/`F3` 共用同一个闸门；`debug_layer.gd` 新增 `quick_save()` / `quick_load()` / `notice()` / `is_confirm_pending()` 与独立 `ToastLayer`（`LAYER + 1`，按帧过期，服从 `F1`）；`capture.gd` 的 `KEY_BY_NAME` 补 `f5`/`f9`；`menu_page.gd` 的「设置」占位改为调试页（`show_debug()` / `debug_facts()` / 「打开叠加层」按钮），`ESC` 层级由三级变四级（弹窗 → 宫格/调试页 → 主页 → 关闭）。新增用例 `s0_4_quick` 62 断言。窗口 `--all` **19 用例 / 0 失败 / 0 跳过 / 761 断言 / 108015 ms**、退出码 0 | 用户（本会话两问两答：`F5` 只做直写不弹菜单 / 菜单调试入口填实现有的「设置」页） | 用户（本会话明确选择） |
+| 2026-10-19 | **`F5` 的覆盖确认：不弹菜单，改为"再按一次"**。§3.5 要求覆盖已占用槽位必须二次确认，而批次 3 的对齐结论是"直写、不弹菜单"。两者同时成立的写法只有一种：确认落在按键上 —— 第一次 `F5` **不写盘**，只登记待确认（`CONFIRM_WINDOW_FRAMES = 120` 帧）并给出理由，窗口内再按一次才真覆盖。`s0_4_quick` 用"第一次按完旧档 sha256 逐位不变"取证，并另验窗口过期后单按一次又回到"先拒绝"。**注意**：这不是新增一套规则，写入仍全部走 `SaveSystem.save_slot()`，本层只决定"现在要不要发起这次写入" | 静默覆盖会直接违背 §3.5，也会让 `s0_3_overwrite` 那 34 条断言失去意义；而"不弹菜单"是用户对齐时的明确结论。若两者只能取一，应当回来问用户，而不是自行弱化其中一条 | 用户（对齐结论 + 本条补充说明） |
+| 2026-10-19 | **闸门必须做在函数内部，不能只在 `_input` 里**。`_input` 只挡按键，挡不住"有人直接调 `quick_save()`"。§3.5 要求发布构建**完全禁用**，故 `quick_save()` / `quick_load()` 开头各自检查 `_quick_enabled()`（= 两个 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**在调试页里再写一次 `OS.is_debug_build()`：`s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是这么写坏的（调试页加了一行 `OS.is_debug_build()`，该断言立刻从 1 处变 2 处而红）。构建类型的等价观测就是"调试热键注册了没有" | 一条"发布构建完全禁用"的断言，若只在输入路径上挡，任何直接调用（含未来新加的 UI 入口、测试代码）都能绕过；而"两处判断构建类型"是同一个事实的二次表述，迟早漂移 | 实测登记（S0.4 批次 3 验收过程） |
+| 2026-10-19 | **headless 下窗口尺寸 0×0 ⇒ `pure` 用例不能验鼠标命中**。本步给调试页按钮写点击断言时，`_click_control` 报告"矩形已排出、点击落下了"，但处理器一次都没跑。实测 `DisplayServer.get_name() == "headless"`、`window_get_size() == (0,0)`：注入的鼠标事件没有可命中的视口。改法：`pure` 用例只验"按钮在 + 连着处理器 + 处理器真驱动 `Debug`"（直接 `pressed.emit()`），鼠标命中路径交给 headed 的 `s0_3_slots`（同一套 `UiKit.button_page` 工厂与页面结构）。**一般结论**：凡是 `--headless` 下要验"点得着"，都得先问一句"这个视口存在吗" | 这是继陷阱 16–19 之后同一类的坑：headless 让某个观测维度整体归零，断言却照样绿或照样红，且失败信息（"点击落下了"）指向错误的方向。`_click_control` 的返回值只说明"矩形非退化"，不说明"事件被谁接住" | 实测登记（S0.4 批次 3 验收过程） |
 
 ---
 
