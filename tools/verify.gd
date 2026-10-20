@@ -252,6 +252,18 @@ const CASES := {
 				+ "间距不可行时降级为告警而不是死循环 / 锚点落水或 kind 非法时跳过并告警 / 一次 build 的耗时",
 		"kind": "pure",
 	},
+	"s1_1_gen": {
+		"desc": "序列化：同 seed 两次构建文本逐字节相同 / Canon 规范形式（无 CR、末尾单换行、读回再写幂等）/"
+				+ "顶层键码点升序 / 20 聚落 + 24 道路 + 3 势力 + 24 队伍按稳定键排序 / 锚点坐标逐位落进文本 / "
+				+ "指标与内存一致 / 换 seed 文本不同 / 整条生成链 < 800 ms（C-）",
+		"kind": "pure",
+	},
+	"s1_1_variety": {
+		"desc": "换 seed 后宏观指标真的变化：三个 seed 两两文本不同；海岸线长度 / region 面积分布 / "
+				+ "道路总长 / 聚落按 region 分布 四项里至少 3 项随 seed 动；并显式记录"
+				+ "「聚落数恒为 20，不能当变化指标」",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -645,6 +657,10 @@ func _dispatch(id: String) -> void:
 			await _case_regions()
 		"s1_1_world":
 			await _case_world()
+		"s1_1_gen":
+			await _case_world_gen()
+		"s1_1_variety":
+			await _case_world_variety()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -5595,6 +5611,256 @@ func _case_world() -> void:
 	WorldData.new(world_seed, params, field, regions, stream, anchor_list).build()
 	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
 	le(dt, 800.0, "一次 build %s ms < 800 ms" % str(snappedf(dt, 0.1)))
+
+
+## S1.1d — 序列化。同 seed 两次构建的文本**逐字节**相同、读回再写幂等、
+## 数组按稳定键排序、锚点坐标逐位落进文本；换 seed 后文本不同。
+## 同时量一次"整条生成链"（高度场 + region + 世界数据 + 序列化）的耗时。
+func _case_world_gen() -> void:
+	await process_frame
+	var fx := _world_fixture()
+	var params: Dictionary = fx["params"]
+	var anchors: Array = fx["anchors"]
+	var field: HeightField = fx["field"]
+	var regions: WorldRegions = fx["regions"]
+	var stream: RandomNumberGenerator = fx["stream"]
+	var state: int = fx["state"]
+	var world_seed: int = fx["seed"]
+
+	section("序列化：同 seed 两次构建，文本逐字节相同")
+	stream.state = state
+	var a := WorldData.new(world_seed, params, field, regions, stream, anchors)
+	a.build()
+	var res_a := a.to_text()
+	ok(bool(res_a["ok"]), "序列化成功", String(res_a.get("reason", "")))
+	var text_a := String(res_a["text"])
+	ok(text_a.length() > 0, "生成文本 %d 字符" % text_a.length())
+	stream.state = state
+	var b := WorldData.new(world_seed, params, field, regions, stream, anchors)
+	b.build()
+	var res_b := b.to_text()
+	ok(bool(res_b["ok"]), "第二次序列化成功", String(res_b.get("reason", "")))
+	var text_b := String(res_b["text"])
+	eq(text_b, text_a, "两次构建的文本逐字节相同（%d 字符）" % text_a.length())
+	eq(b.fingerprint(), a.fingerprint(), "指纹同样逐位相同")
+
+	section("文本是 Canon 规范形式：读回再写幂等、LF、无 CR")
+	eq(text_a.count("\r"), 0, "没有 CR")
+	ok(text_a.ends_with("\n") and not text_a.ends_with("\n\n"), "末尾恰好一个换行")
+	var back := Canon.from_text(text_a)
+	ok(bool(back["ok"]), "能读回成 JSON", String(back.get("reason", "")))
+	ok(typeof(back["value"]) == TYPE_DICTIONARY, "读回的是对象")
+	var parsed := Dictionary(back["value"])
+	var rewritten := Canon.to_text(parsed)
+	ok(bool(rewritten["ok"]), "读回的对象能重新序列化", String(rewritten.get("reason", "")))
+	eq(String(rewritten["text"]), text_a, "读回再序列化与原文逐字节相同（幂等）")
+	var canon := Canon.canonicalize(text_a)
+	ok(bool(canon["ok"]), "文本本身是合法 JSON", String(canon.get("reason", "")))
+	eq(String(canon.get("text", "")), text_a, "文本逐字节等于自己的规范化结果")
+
+	section("顶层键按码点升序（Canon 契约）")
+	var keys: Array = parsed.keys()
+	var sorted_keys: Array = keys.duplicate()
+	sorted_keys.sort()
+	eq(str(keys), str(sorted_keys), "顶层键顺序 = 码点升序（实际：%s）" % str(keys))
+	for want in ["schema", "world_seed", "params", "metrics", "settlements", "roads",
+			"factions", "parties"]:
+		ok(parsed.has(want), "顶层含 `%s`" % want)
+	eq(int(parsed.get("schema", 0)), WorldData.SCHEMA, "schema = %d" % WorldData.SCHEMA)
+	eq(int(parsed.get("world_seed", 0)), world_seed, "world_seed 原样写出")
+
+	section("内容完整：条数与内存一致（不写死 24 —— 边数取决于落点），且按稳定键排序")
+	var p_settlements: Array = Array(parsed["settlements"])
+	var p_roads: Array = Array(parsed["roads"])
+	var p_factions: Array = Array(parsed["factions"])
+	var p_parties: Array = Array(parsed["parties"])
+	eq(p_settlements.size(), a.settlements.size(), "聚落条数 = 内存里的 %d" % a.settlements.size())
+	eq(p_roads.size(), a.roads.size(), "道路条数 = 内存里的 %d" % a.roads.size())
+	eq(p_factions.size(), a.factions.size(), "势力条数 = 内存里的 %d" % a.factions.size())
+	eq(p_parties.size(), a.parties.size(), "队伍条数 = 内存里的 %d" % a.parties.size())
+	eq(a.settlements.size(), 20, "聚落 20 个（12 + 4 + 4 配额）")
+	eq(a.factions.size(), 3, "势力 3 个（参数表 factions）")
+	eq(a.parties.size(), 24, "队伍 24 支（参数表 ai_parties）")
+	ge(float(a.roads.size()), float(a.settlements.size()) - 1.0, "道路 ≥ n−1（单连通骨架，实际 %d 条）" % a.roads.size())
+	eq(_sorted_by_field(p_settlements, "id"), true, "聚落按 id 升序")
+	eq(_sorted_by_field(p_roads, "a"), true, "道路按 a 升序")
+	eq(_sorted_by_field(p_factions, "id"), true, "势力按 id 升序")
+	eq(_sorted_by_field(p_parties, "id"), true, "队伍按 id 升序")
+	var anchors_out := 0
+	for s in p_settlements:
+		if bool(s["anchor"]):
+			anchors_out += 1
+	eq(anchors_out, 3, "3 条锚点都带 anchor = true")
+	eq(_anchor_mismatches(p_settlements, anchors), 0, "序列化后的锚点坐标仍与表 100% 一致")
+	var total_road := 0.0
+	for r in p_roads:
+		total_road += float(r["length"])
+	# 每条边在文本里只保留 6 位小数，累加会攒到 n×5e-7；用 1 cm 容差，别按浮点后一位卡。
+	le(absf(total_road - float(a.road_length_total())), 0.01, "道路长度之和可累加（%s m）" % str(snappedf(total_road, 0.1)))
+
+	section("指标落在文本里，且与内存里的 metrics() 一致")
+	var m_in := a.metrics()
+	var m_out := Dictionary(Dictionary(parsed)["metrics"])
+	eq(String(Canon.to_text(m_out)["text"]), String(Canon.to_text(m_in)["text"]), "文本里的 metrics 与内存一致（按 Canon 规范文本比对）")
+	eq(int(m_out.get("settlement_count", 0)), 20, "settlement_count = 20")
+	eq(int(m_out.get("road_count", 0)), a.roads.size(), "road_count = %d" % a.roads.size())
+	le(absf(float(m_out.get("road_length", 0.0)) - float(a.road_length_total())), 0.01, "road_length 一致（6 位小数内）")
+	ok(float(m_out.get("coastline_length", 0.0)) > 0.0, "海岸线长度 > 0（%s m）" % str(snappedf(float(m_out.get("coastline_length", 0.0)), 0.1)))
+	ok(float(m_out.get("land_ratio", 0.0)) > 0.25 and float(m_out.get("land_ratio", 0.0)) < 0.85, "陆地占比在 25%%–85%%（%s）" % str(snappedf(float(m_out.get("land_ratio", 0.0)), 0.001)))
+	eq(Array(m_out.get("region_areas", [])).size(), int(m_out.get("region_count", 0)), "region_areas 条数 = region_count")
+	eq(Array(m_out.get("settlements_by_region", [])).size(), int(m_out.get("region_count", 0)), "settlements_by_region 条数 = region_count")
+	var by_region_sum := 0
+	for n in Array(m_out.get("settlements_by_region", [])):
+		by_region_sum += int(n)
+	eq(by_region_sum, 20, "按 region 的聚落计数之和 = 20（没有落在地图外的）")
+
+	section("反向对照：换 seed 后文本不同（不是恒真）")
+	stream.state = state
+	var other_field := HeightField.new(world_seed + 424242, params)
+	var other_regions := WorldRegions.new(other_field, stream, params)
+	other_regions.build()
+	var other := WorldData.new(world_seed + 424242, params, other_field, other_regions, stream, anchors)
+	other.build()
+	var other_res := other.to_text()
+	ok(bool(other_res["ok"]), "另一 seed 也能序列化", String(other_res.get("reason", "")))
+	ne(String(other_res["text"]), text_a, "换 seed 后文本不同")
+	ne(str(other.metrics()), str(a.metrics()), "换 seed 后指标也不同")
+
+	section("C- 整条链（高度场 + region + 世界数据 + 序列化）")
+	var longest := 0.0
+	var samples := PackedFloat32Array()
+	for i in range(3):
+		stream.state = state
+		var t0 := Time.get_ticks_usec()
+		var f := HeightField.new(world_seed, params)
+		var r := WorldRegions.new(f, stream, params)
+		r.build()
+		var d := WorldData.new(world_seed, params, f, r, stream, anchors)
+		d.build()
+		var _t := d.to_text()
+		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+		samples.append(ms)
+		longest = maxf(longest, ms)
+	le(longest, 800.0, "最慢一轮 %s ms < 800 ms（三次：%s）" % [str(snappedf(longest, 0.1)), str(samples)])
+
+
+## S1.1d — 宏观指标必须随 seed 变化。**不拿"聚落数"当指标**：默认配额固定
+## （12 + 4 + 4），它恒为 20，恒真断言证明不了任何事；改用 `settlements_by_region`
+## 这类真的会动的分布。见 `docs/ENGINEERING.md` §9.8。
+func _case_world_variety() -> void:
+	await process_frame
+	var fx := _world_fixture()
+	var params: Dictionary = fx["params"]
+	var anchors: Array = fx["anchors"]
+	var stream: RandomNumberGenerator = fx["stream"]
+	var state: int = fx["state"]
+
+	var seeds := [20250929, 20250930, 31415926]
+	var metrics_list: Array = []
+	var texts := PackedStringArray()
+	for s in seeds:
+		stream.state = state
+		var field := HeightField.new(int(s), params)
+		var regions := WorldRegions.new(field, stream, params)
+		regions.build()
+		var data := WorldData.new(int(s), params, field, regions, stream, anchors)
+		data.build()
+		metrics_list.append(data.metrics())
+		var res := data.to_text()
+		ok(bool(res["ok"]), "seed %s 序列化成功" % str(s), String(res.get("reason", "")))
+		texts.append(String(res["text"]))
+
+	section("三个 seed：文本两两不同")
+	eq(texts.size(), 3, "三次构建都产出了文本")
+	ne(texts[0], texts[1], "%s 与 %s 的文本不同" % [seeds[0], seeds[1]])
+	ne(texts[1], texts[2], "%s 与 %s 的文本不同" % [seeds[1], seeds[2]])
+	ne(texts[0], texts[2], "%s 与 %s 的文本不同" % [seeds[0], seeds[2]])
+
+	section("四个宏观指标：换 seed 必须动（至少 3 项）")
+	var moved := 0
+	for key in WorldData.METRIC_VARIETY:
+		var k := String(key)
+		var differ := false
+		for i in range(1, metrics_list.size()):
+			if str(Dictionary(metrics_list[0]).get(k)) != str(Dictionary(metrics_list[i]).get(k)):
+				differ = true
+		ok(differ, "指标 `%s` 至少在一个 seed 上变化" % k)
+		if differ:
+			moved += 1
+	ge(float(moved), 3.0, "至少 3 项指标随 seed 变化（实际 %d / %d）" % [moved, WorldData.METRIC_VARIETY.size()])
+
+	section("为什么不拿聚落数当指标：它恒为 20")
+	for i in range(metrics_list.size()):
+		eq(int(Dictionary(metrics_list[i]).get("settlement_count", 0)), 20,
+				"seed %s 的聚落数 = 20（配额固定 ⇒ 恒真）" % str(seeds[i]))
+
+	section("指标的取值范围（顺带守住爆炸与塌缩）")
+	for i in range(metrics_list.size()):
+		var m: Dictionary = metrics_list[i]
+		var label := str(seeds[i])
+		var ratio := float(m.get("land_ratio", 0.0))
+		ok(ratio > 0.25 and ratio < 0.85, "seed %s 陆地占比 %s 在 25%%–85%%" % [label, str(snappedf(ratio, 0.001))])
+		var coast := float(m.get("coastline_length", 0.0))
+		ok(coast > 1000.0 and coast < 40000.0, "seed %s 海岸线 %s m 在合理量级" % [label, str(snappedf(coast, 0.1))])
+		var rc := int(m.get("region_count", 0))
+		ok(rc >= 4 and rc <= 12, "seed %s 的 region 数 %d 落在安全区间 4–12" % [label, rc])
+		var areas: Array = Array(m.get("region_areas", []))
+		var area_min := INF
+		var area_max := 0.0
+		for area in areas:
+			area_min = minf(area_min, float(area))
+			area_max = maxf(area_max, float(area))
+		ok(area_min > 0.0, "seed %s 每个 region 面积都 > 0" % label)
+		ok(area_max / area_min < 50.0, "seed %s 最大/最小 region 面积比 %s < 50" % [label, str(snappedf(area_max / area_min, 0.01))])
+		var by_region: Array = Array(m.get("settlements_by_region", []))
+		eq(by_region.size(), rc, "seed %s 的分布向量长度 = region 数" % label)
+
+
+## 一次"参数表 + 锚点表 + 高度场 + region"夹具。`state` 是 region 建好之后的
+## `Rng` 状态，所有后续 `WorldData` 构建都从它重放（同 state ⇒ 同世界）。
+##
+## 子流种子在这里**显式钉住**（`stream.seed = p_seed`）。用例共享同一条
+## `Rng.stream("world_gen")`，谁先跑谁就把状态推远了 —— 不钉住的话，"同一个 seed
+## 的世界"会随用例执行顺序变化（`--all` 里跑出来的道路条数与单跑不同，本批就是
+## 这么抓到的）。真实游戏只在开局建一次世界，不受影响；用例必须自己把入口钉死。
+func _world_fixture(p_seed: int = 20250929) -> Dictionary:
+	var loaded := GenParams.load_from()
+	var params := Dictionary(loaded["params"])
+	var rng: Node = get_root().get_node_or_null("Rng")
+	# 把子流拨回"开局状态"：`Rng.reset()` 让每条子流重新等于 (master_seed, 名字) 派生的起点。
+	# 用例共享同一条 `world_gen` 子流，不拨回去的话，同一个 seed 会因为前面用例多抽了几个数
+	# 而生成不同的世界（本批实测：24 条边 vs 26 条边）。
+	rng.call("reset")
+	var stream: RandomNumberGenerator = rng.call("stream", "world_gen")
+	var field := HeightField.new(p_seed, params)
+	var regions := WorldRegions.new(field, stream, params)
+	regions.build()
+	var anchors: Array = []
+	var table := WorldData.load_anchors()
+	if bool(table["ok"]):
+		anchors = Array(table["anchors"])
+	return {
+		"params": params,
+		"anchors": anchors,
+		"field": field,
+		"regions": regions,
+		"stream": stream,
+		"state": stream.state,
+		"seed": p_seed,
+	}
+
+
+## 数组是否按给定文本字段升序排列（空数组 / 单元素视为已排序）。
+func _sorted_by_field(p_items: Array, p_key: String) -> bool:
+	var prev := ""
+	var first := true
+	for item in p_items:
+		var cur := String(Dictionary(item).get(p_key, ""))
+		if not first and cur < prev:
+			return false
+		prev = cur
+		first = false
+	return true
 
 
 ## 聚落 / 队伍的位置合法性（空结果 = 全合法）。`p_spacing > 0` 时同时查两两间距。

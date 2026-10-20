@@ -11,11 +11,11 @@ extends RefCounted
 ## so two builds with the same seed produce the same world — which is what the
 ## `A-` serialisation case in S1.1d will start from.
 ##
-## WHAT IS NOT IN HERE.  Serialising the world to bytes (`Canon` + `WorldData`
-## snapshot) and the three macro indicators are S1.1d.  Roads are a **graph**
-## (`{a, b, length}`), not a mesh: laying them on the terrain belongs to S1.2,
-## where the strategic renderer exists.  Rejecting water / steep ground is the
-## placer's job; drawing the ribbon is not.
+## SERIALISATION.  `to_dict()` / `to_text()` (S1.1d) emit the whole snapshot
+## through `Canon`, which is what makes "same seed, same bytes" checkable.  Roads
+## stay a **graph** (`{a, b, length}`), not a mesh: laying them on the terrain
+## belongs to S1.2, where the strategic renderer exists.  Rejecting water /
+## steep ground is the placer's job; drawing the ribbon is not.
 ##
 ## DETERMINISM RULE.  No `randf()`, no `randi()`, no time, no autoload reads —
 ## the only source of jitter is the `RandomNumberGenerator` handed to `_init()`
@@ -153,6 +153,157 @@ func fingerprint() -> String:
 		parts.append("p:%s|%d|%.3f|%.3f" % [String(p["id"]), int(p["faction"]),
 				float(p["x"]), float(p["z"])])
 	return "\n".join(parts)
+
+
+# --- serialisation + macro indicators (S1.1d) -------------------------------
+
+## The indicators the `A-` variety case compares.  They must *move* when the seed
+## moves, otherwise "another seed gives another world" is a claim with nothing
+## behind it.
+##
+## NOT `settlement_count`.  With the default table the quotas are fixed
+## (12 + 4 + 4), so that count is 20 for every seed that does not degrade — an
+## indicator that never moves proves nothing.  `settlements_by_region` is the
+## distribution that actually answers to the seed, and it is what the variety
+## case compares instead (see `docs/ENGINEERING.md` §9.8).
+const METRIC_VARIETY := ["coastline_length", "region_areas", "road_length",
+		"settlements_by_region"]
+
+## Macro indicators of the generated world.
+##
+## `coastline_length` is measured on the **region grid** (32 m cells: the sum of
+## every interior edge between a land cell and a water cell) rather than by
+## sampling `height_at`.  Why: it is then a property of the same partition the
+## rest of the game reads, it costs one pass over an array we already have, and
+## it cannot drift when a sampler changes.  Edges on the map border are **not**
+## counted — they are not coast.
+##
+## `region_areas` and `settlements_by_region` are in region-id order, so they are
+## directly comparable between two builds (same id = same slot in the vector).
+## A missing / empty region layer degrades to zeroes instead of failing: the
+## indicator is diagnostic, never load-bearing.
+func metrics() -> Dictionary:
+	var land_ratio := 0.0
+	var coastline := 0.0
+	var region_count := 0
+	var areas: Array = []
+	var by_region: Array = []
+	if regions != null and regions.grid_w > 0 and regions.grid_h > 0:
+		var w := regions.grid_w
+		var h := regions.grid_h
+		var total := w * h
+		var land := 0
+		var coast_edges := 0
+		for j in range(h):
+			for i in range(w):
+				var idx := j * w + i
+				var here := int(regions.owner[idx])
+				if here >= 0:
+					land += 1
+				if i + 1 < w:
+					var right := int(regions.owner[idx + 1])
+					if (here >= 0) != (right >= 0):
+						coast_edges += 1
+				if j + 1 < h:
+					var down := int(regions.owner[idx + w])
+					if (here >= 0) != (down >= 0):
+						coast_edges += 1
+		land_ratio = float(land) / float(total)
+		coastline = float(coast_edges) * regions.cell
+		region_count = regions.regions.size()
+		for r in regions.regions:
+			areas.append(float(r["area"]))
+			by_region.append(0)
+	for s in settlements:
+		var rid := int(s.get("region", -1))
+		if rid >= 0 and rid < by_region.size():
+			by_region[rid] = int(by_region[rid]) + 1
+	return {
+		"land_ratio": land_ratio,
+		"coastline_length": coastline,
+		"region_count": region_count,
+		"region_areas": areas,
+		"settlements_by_region": by_region,
+		"settlement_count": settlements.size(),
+		"road_count": roads.size(),
+		"road_length": road_length_total(),
+		"party_count": parties.size(),
+	}
+
+
+## Canon-shaped snapshot of the world: everything the world **is**, and nothing
+## the runtime added (no warnings, no paths, no timings), so two builds of the
+## same seed serialise to the same bytes.
+##
+## Every array is sorted by a stable textual key before it is emitted.  Generation
+## order already happens to be stable, but serialisation must not *rely* on that:
+## a future change to placement order would then silently reorder the file and
+## break "same seed, same bytes" for a reason that has nothing to do with the
+## world being different.
+func to_dict() -> Dictionary:
+	var out := {
+		"schema": SCHEMA,
+		"world_seed": world_seed,
+		"params": params.duplicate(true),
+		"metrics": metrics(),
+		"settlements": [],
+		"roads": [],
+		"factions": [],
+		"parties": [],
+	}
+	for s in _sorted_by(settlements, "id"):
+		out["settlements"].append({
+			"id": String(s["id"]),
+			"kind": String(s["kind"]),
+			"name": String(s["name"]),
+			"x": float(s["x"]),
+			"z": float(s["z"]),
+			"region": int(s["region"]),
+			"faction": int(s["faction"]),
+			"anchor": bool(s["anchor"]),
+		})
+	for r in _sorted_by(roads, "a"):
+		out["roads"].append({
+			"a": String(r["a"]),
+			"b": String(r["b"]),
+			"length": float(r["length"]),
+		})
+	for f in _sorted_by(factions, "id"):
+		out["factions"].append({
+			"id": String(f["id"]),
+			"name": String(f["name"]),
+			"color_index": int(f["color_index"]),
+			"capital": String(f["capital"]),
+		})
+	for p in _sorted_by(parties, "id"):
+		out["parties"].append({
+			"id": String(p["id"]),
+			"faction": int(p["faction"]),
+			"home": String(p["home"]),
+			"x": float(p["x"]),
+			"z": float(p["z"]),
+		})
+	return out
+
+
+## The serialised world → `{ok, text, reason}` (the same contract as every
+## `Canon` entry point, so a caller that ignores the error has to ignore an
+## explicit flag).  `Canon` owns the format (schema + code-point key order +
+## integers as integers + `%.6f` otherwise + LF); this class only decides *what*
+## goes in and in what order.
+func to_text() -> Dictionary:
+	return Canon.to_text(to_dict())
+
+
+## Copy of `p_items` sorted by the textual field `p_key`.  A copy, because the
+## returned array must never be an alias of live generation state.
+func _sorted_by(p_items: Array, p_key: String) -> Array:
+	var out: Array = []
+	for item in p_items:
+		out.append(item)
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get(p_key, "")) < String(b.get(p_key, "")))
+	return out
 
 
 # --- generation -------------------------------------------------------------
