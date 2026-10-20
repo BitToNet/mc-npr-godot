@@ -28,7 +28,7 @@ extends SceneTree
 ##     ⇒ 本文件内**禁止**书写 `Style.xxx` / `Capture.xxx`；
 ##       必须 get_root().get_node_or_null("Style") 动态取用。
 ##  2) 全局 class_name（MeshUtil / Terrain / InputSetup / …）在本模式下正常可用。
-##  3) 场景用例模式 = instantiate 主场景 + add_child + await process_frame；
+##  3) 场景用例模式 = instantiate 夹具场景（diorama）+ add_child + await process_frame；
 ##     实测可行（世界会正常生成），不需要子进程 hack。
 ##     注意：add_child 之后**必须** await 一帧再查节点组，否则组注册可能未完成。
 ##  4) headless 下没有任何渲染指标（RENDER_* 恒为 0，TIME_FPS 恒为 1），
@@ -39,18 +39,17 @@ extends SceneTree
 
 const REPORT_DIR := "res://.verify"
 
-## 主场景路径。S1.0a 由 `res://scenes/main.tscn` 迁到 `res://scenes/dev/diorama.tscn`
-## （内容逐字节不变，只换路径）。
+## 产品主场景路径（S1.0d 起）＝ 路由 `world` 的目标：战略图空壳。
 ##
 ## 为什么在这里留一个字面量而不是从 `SceneRouter` 读：本文件要能**独立**发现
 ## "路由表改了、测试没改"和"测试改了、路由表没改"两种漂移。若两边共读一个源，
 ## 任何一边被改都会一起跟着走，断言就永远绿。
 ## 真正不依赖字面量的交叉校验是 `_case_router` 里的 `run/main_scene` 断言。
-const MAIN_SCENE := "res://scenes/dev/diorama.tscn"
+const WORLD_SCENE := "res://scenes/world/strategic_map.tscn"
 
-## S1.0c 新增的第三条路由目标（空壳场景）。与 `MAIN_SCENE` 同理：这里留字面量，
-## 才能独立发现"路由表改了、用例没改"与"用例改了、路由表没改"两种漂移。
-const STRATEGIC_SCENE := "res://scenes/world/strategic_map.tscn"
+## 演示岛。S1.0d 起它**不再是路由**，只是回归夹具：6 机位 `B-` 与内容用例直接加载它，
+## 取景则只能走 `capture.gd --scene=`。同样留字面量，才能独立发现"夹具被顺手换掉/删掉"。
+const DIORAMA_SCENE := "res://scenes/dev/diorama.tscn"
 
 ## 自旋固定微秒数，返回实际耗时（毫秒）。用于给"量法分辨率"做标尺。
 func _spin_us(usec: int) -> float:
@@ -98,11 +97,11 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s0_2_boot": {
-		"desc": "主场景 headless 启动 60 帧，退出码 0 且日志无 ERROR/SCRIPT ERROR",
+		"desc": "开机场景（战略图空壳）headless 启动 60 帧，退出码 0 且日志无 ERROR/SCRIPT ERROR",
 		"kind": "pure",
 	},
 	"s0_2_scene_api": {
-		"desc": "场景用例模式：加载主场景 + await，19 个既有公开 API 符号可解析",
+		"desc": "场景用例模式：加载 diorama 夹具 + await，19 个既有公开 API 符号可解析",
 		"kind": "pure",
 	},
 	"s0_2_baseline": {
@@ -128,16 +127,23 @@ const CASES := {
 		"kind": "headed",
 	},
 	"s1_0_scene_arg": {
-		"desc": "capture.gd 的 --scene=res://…：同参两次独立进程逐位一致；--scene=diorama 的哈希组与缺省"
-				+ "完全相同；反向对照（换 battle_stub）哈希必变；清单自报 scene；坏路径退出码 1；"
-				+ "只带 --scene= 不触发批次也不抢退出码；守卫属主清单没有放宽",
+		"desc": "capture.gd 的 --scene=res://…：同参两次独立进程逐位一致；缺省（战略图空壳）"
+				+ "与 --scene=diorama 的哈希组必须不同；反向对照（battle_stub 与两者都不同）"
+				+ "哈希必变；清单自报 scene；坏路径退出码 1；只带 --scene= 不触发批次也不抢退出码；"
+				+ "守卫属主清单没有放宽",
 		"kind": "headed",
 	},
 	"s1_0_routes": {
-		"desc": "S1.0c 路由登记：三条路由（含 strategic）且路径真实存在、path↔route 双向映射、"
-				+ "strategic_map.tscn 是可实例化的空壳（Node3D / 零子节点 / 无脚本）、"
-				+ "world 与 run/main_scene 仍指 diorama、MAX_DEPTH 仍为 2、"
-				+ "没有 goto_strategic()，且『已在 world 再 goto_world()』被拒后路由栈/屏幕/表条目零变化",
+		"desc": "S1.0d 路由收口：两条路由（world→战略图 / battle）且路径真实存在、path↔route "
+				+ "双向映射唯一（diorama 不再回指任何路由）、strategic_map.tscn 是可实例化的空壳"
+				+ "（Node3D / 零子节点 / 无脚本）、run/main_scene 同步、MAX_DEPTH 仍为 2、"
+				+ "没有 goto_strategic()，且『已在 world 再 goto_world()』被拒后路由栈/屏幕/实例数零变化",
+		"kind": "pure",
+	},
+	"s1_0_migration": {
+		"desc": "S1.0d 迁移闭环：路由 world → 文件 → 场景根类（Node3D/StrategicMap/无脚本/零子节点）"
+				+ "三者一致；run/main_scene 已改指且 diorama 退居可加载的回归夹具；"
+				+ "引擎直接加载的战略图被 _sync() 认领为 world，此时 goto_world() 被拒且不重载同一文件",
 		"kind": "pure",
 	},
 	"s0_4_overlay": {
@@ -565,6 +571,8 @@ func _dispatch(id: String) -> void:
 			await _case_scene_arg()
 		"s1_0_routes":
 			await _case_routes()
+		"s1_0_migration":
+			await _case_migration()
 		"s0_4_overlay":
 			await _case_overlay()
 		"s0_4_cost":
@@ -906,8 +914,11 @@ func _case_boot() -> void:
 	eq(exit_code, 0, "启动 60 帧退出码 = 0")
 	not_contains(joined, "SCRIPT ERROR", "日志无 SCRIPT ERROR")
 	not_contains(joined, "ERROR:", "日志无 ERROR:")
-	contains(joined, "[terrain] seed=", "日志含地形生成行（证明世界真的建起来了）")
-	contains(joined, "[terrain] spawn=", "日志含出生点行")
+	# S1.0d：开机场景已从 diorama 换成战略图空壳（无脚本 / 无地形 / 无相机）。所以这里
+	# 改**反向断言**：日志里不能再出现地形生成行。S1.0c 之前这条正向断言证明"世界真的建
+	# 起来了"，现在它证明的是相反的事实 —— 开机确实换了场景，而不是"还偷偷加载着 diorama"。
+	# 正向证据在 `s1_0_migration`：run/main_scene == 路由 world == 该文件真实存在。
+	not_contains(joined, "[terrain]", "启动场景不是 diorama（没有地形生成行）")
 
 
 ## --- s0_2_scene_api ---------------------------------------------------------
@@ -916,8 +927,8 @@ func _case_boot() -> void:
 func _case_scene_api() -> void:
 	await process_frame
 	section("场景用例基类模式")
-	var main := await _load_main()
-	ok(main != null, "主场景可 instantiate 并 add_child")
+	var main := await _load_diorama()
+	ok(main != null, "diorama 夹具可 instantiate 并 add_child")
 	if main == null:
 		return
 	ok(get_first_node_in_group("main") != null, "节点组 #main 已注册")
@@ -935,7 +946,7 @@ func _case_scene_api() -> void:
 	section("既有多帧运行")
 	for i in 30:
 		await process_frame
-	ok(true, "加载主场景后连续跑 30 帧无异常")
+	ok(true, "加载夹具后连续跑 30 帧无异常")
 
 	section("公开 API 契约（19 个符号）")
 	ok(_has_callable(main, "rebuild"), "Main.rebuild")
@@ -966,7 +977,7 @@ func _case_scene_api() -> void:
 	section("清理")
 	main.queue_free()
 	await process_frame
-	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+	ok(get_first_node_in_group("main") == null, "夹具已释放，组 #main 清空")
 
 
 ## --- s0_2_baseline -----------------------------------------------------------
@@ -1143,7 +1154,10 @@ func _case_repro() -> void:
 	await process_frame
 	var base := _opt_out.path_join("repro")
 	DirAccess.make_dir_recursive_absolute(base)
+	# S1.0d：缺省开机场景已是空壳，截图批次必须显式指定 diorama 夹具，否则拍到的
+	# 是一张没有相机的纯背景图 —— 两张同为纯色，"逐位一致"就退化成真空通过。
 	var shot_args := PackedStringArray([
+		"--scene=" + DIORAMA_SCENE,
 		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
 	])
 
@@ -1245,27 +1259,24 @@ func _case_repro() -> void:
 
 
 ## --- s1_0_scene_arg ------------------------------------------------------------
-## S1.0b：`capture.gd` 的 `--scene=res://…`（ROADMAP §5 S1.0b）。
-##
-## 验收原文两条，这里逐条落到进程上：
-##   ① 同参数两次独立进程截图 sha256 相同 —— 说明 `--scene=` 是确定性通道；
-##   ② `--scene=res://scenes/dev/diorama.tscn` 得到与缺省**完全相同**的哈希组 ——
-##      说明"换场景"没有顺带改变像素。②特别值钱：它同时证明了"世界生成是种子的纯
-##      函数"以及"换场景没有多跑一帧"（云是增量积分，多一帧哈希就变，实测踩过）。
-##
-## 另外三条防"假绿"，缺一条这个用例就只是自娱自乐：
-##   ③ **反向对照**：换一个真不一样的场景（`battle_stub`）哈希必须变 ——
-##      否则 `--scene=` 可能完全没生效，而 ② 仍然"通过"（因为默认场景恰好也是
-##      diorama）。这条是本用例的命门，曾经用"改 `run/main_scene`"实现时正是这样
-##      假绿的（引擎取该路径早于 autoload，改了不生效，见 capture.gd `_swap_scene`）。
-##   ④ **清单自报场景**：manifest 的 `scene` 字段 == 实际加载的路径，图与参数可对账。
-##   ⑤ **失败要显式**：路径不存在 / 非 `res://` 一律退出码 1；只带 `--scene=` 不加
+## S1.0b 的 `--scene=res://…`（ROADMAP §5 S1.0b），S1.0d 之后**前提变了**：
+## 缺省场景不再是 diorama，而是战略图空壳。于是本用例的语义从"换场景不改像素"
+## 变成"缺省确实是空壳，而 `--scene=` 能把夹具换回来"：
+##   ① 同参数两次独立进程截图 sha256 相同 —— `--scene=` 是确定性通道；
+##   ② 缺省（空壳）与 `--scene=diorama` 的哈希**必须不同** —— 这是 S1.0d 的
+##      "开机真的换了场景"的像素级证据（旧版本的 ② 是"两者相同"，本步正好反过来）；
+##   ③ 反向对照：`battle_stub` 与缺省、与 diorama 都不同 —— 三个场景三种像素，
+##      否则"`--scene=` 没生效"仍可能靠"两个场景碰巧一样"混过去；
+##   ④ 清单自报场景：manifest 的 `scene` 字段 == 实际加载的路径，图与参数可对账；
+##   ⑤ 失败要显式：路径不存在 / 非 `res://` 一律退出码 1；只带 `--scene=` 不加
 ##      `--shots` 时必须是空转（退出码 0、不写清单），否则它会抢掉验收运行器的退出码。
+## 注意：空壳场景没有相机，缺省批次拍到的是一张纯背景图 —— 它只用于证明"缺省换了
+## 场景"与"两次进程一致"，**不**是新的视觉基线（视觉证据仍是 `B-` diorama 6 机位）。
 func _case_scene_arg() -> void:
 	await process_frame
 	var base := _opt_out.path_join("scene_arg")
 	DirAccess.make_dir_recursive_absolute(base)
-	var dio := "res://scenes/dev/diorama.tscn"
+	var dio := DIORAMA_SCENE
 	var battle := "res://scenes/battle/battle_stub.tscn"
 	var shot_args := PackedStringArray([
 		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
@@ -1297,26 +1308,35 @@ func _case_scene_arg() -> void:
 		shas[label] = per
 		eq(per.size(), 2, "批次 %s 产出 2 张图" % label)
 
-	section("清单自报场景：图与 --scene= 参数可对账（⑤ 的一半）")
-	eq(String(scenes.get("default", "")), dio, "缺省批次的 scene == run/main_scene")
+	section("清单自报场景：缺省 = 战略图（S1.0d 后的真开机场景）")
+	eq(String(scenes.get("default", "")), WORLD_SCENE,
+			"缺省批次的 scene == run/main_scene == 战略图")
 	eq(String(scenes.get("scene_a", "")), dio, "--scene=diorama 批次的 scene == 指定路径")
 	eq(String(scenes.get("battle", "")), battle, "--scene=battle 批次的 scene == 指定路径")
 
-	section("② --scene=diorama 的哈希组与缺省逐位相同")
+	section("① 同参数两次独立进程：diorama 夹具批次逐位一致")
 	for name in ["s0_boot_follow", "s0_boot_wide"]:
-		var h_def := String(shas.get("default", {}).get(name, ""))
 		var h_a := String(shas.get("scene_a", {}).get(name, ""))
 		var h_b := String(shas.get("scene_b", {}).get(name, ""))
-		ok(h_def != "" and h_a != "" and h_b != "", "%s 三个批次都拿到了 sha256" % name)
-		eq(h_a, h_def, "%s：--scene=diorama == 缺省（换场景没有顺带改像素）" % name)
-		eq(h_b, h_def, "%s：同参数第二次独立进程 == 缺省（① 确定性）" % name)
+		ok(h_a != "" and h_b != "", "%s：diorama 两批都拿到了 sha256" % name)
+		eq(h_b, h_a, "%s：--scene=diorama 两次独立进程逐位一致（确定性通道）" % name)
 
-	section("③ 反向对照：换一个真不一样的场景，哈希必须变")
+	section("② --scene= 真的把夹具换回来了：diorama ≠ 缺省（空壳）")
 	for name in ["s0_boot_follow", "s0_boot_wide"]:
 		var h_def := String(shas.get("default", {}).get(name, ""))
+		var h_dio := String(shas.get("scene_a", {}).get(name, ""))
+		ok(h_def != "" and h_dio != "", "%s：缺省与 diorama 都拿到了 sha256" % name)
+		ok(h_def != h_dio,
+				"%s：缺省（战略图空壳）≠ --scene=diorama（有内容的世界）" % name)
+
+	section("③ 反向对照：battle 与缺省、与 diorama 都不相同")
+	for name in ["s0_boot_follow", "s0_boot_wide"]:
+		var h_def := String(shas.get("default", {}).get(name, ""))
+		var h_dio := String(shas.get("scene_a", {}).get(name, ""))
 		var h_bt := String(shas.get("battle", {}).get(name, ""))
 		ok(h_bt != "", "battle 批次拿到了 %s 的 sha256" % name)
-		ok(h_bt != h_def, "battle 与 diorama 的 %s 不同（--scene= 真的生效了）" % name)
+		ok(h_bt != h_def, "battle 与缺省（空壳）的 %s 不同" % name)
+		ok(h_bt != h_dio, "battle 与 diorama 的 %s 不同（三个场景三种像素）" % name)
 
 	section("⑤ 失败要显式：坏路径不许静默拍成默认场景")
 	for bad in ["res://nope/none.tscn", "scenes/dev/diorama.tscn"]:
@@ -1345,19 +1365,21 @@ func _case_scene_arg() -> void:
 
 
 ## --- s1_0_routes --------------------------------------------------------------
-## S1.0c：路由表登记 `strategic`，但**不接线**（ROADMAP §6 S1.0c）。
+## S1.0d：路由表收口 —— `world` 指向战略图空壳，S1.0c 的临时名 `strategic` 退役。
 ##
-## 这一步最容易退化成"表里多了一个键"的形式主义，所以每条判据都配一个反向形状：
-##   ① **双向映射**：名字 → 路径（`scene_path_for`）与路径 → 名字（`_route_for_path`，
-##      场景落地后 `_sync()` 靠它认领路由）必须同时成立。只测一个方向时，路径写错仍能
-##      全绿，直到真有人切进去才炸。
+## 为什么删临时名：一个文件留两个名字会让 `_route_for_path()`（`_sync()` 开机认领路由
+## 用的就是它）二义。S1.0c 登记 `strategic` 只是为了让本步只有"改指向"一件事可做；
+## 现在它到期了，表回到 world / battle 两条。
+##
+## 每条判据都配一个反向形状：
+##   ① **双向映射唯一**：名字 → 路径 与 路径 → 名字 同时成立，且 diorama 路径**不**
+##      回指任何路由（回归夹具不是世界）；
 ##   ② **场景真的能被读**：load + instantiate，逐项检查根节点类型/名字/子节点数/脚本。
-##      空壳是**本步的验收物**，不是"还没做完"：S1.2 才填内容，提前放美术占位反而要拆。
-##   ③ **world 没被顺手切走**：`world` 与 `run/main_scene` 仍指 diorama。若本步切了 world，
-##      S1.0d 就无事可做，6 机位也会在无人注意时换了夹具。
-##   ④ **接线面没被扩大**：没有 `goto_strategic()`；`goto_world()` 在已处于 world 时被拒，
-##      且拒绝后路由栈 / 当前路由 / 屏幕 / "在飞行中"标记一个都没变。
-##   ⑤ **栈深没变**：`MAX_DEPTH` 仍为 2 —— 新增的是"路径表条目"，不是阶梯上的一层。
+##      空壳仍是本步的验收物：S1.2 才填内容；
+##   ③ **接线面没被扩大**：仍然没有 `goto_strategic()`；
+##   ④ **拒绝不改状态**：已在 world 时 `goto_world()` 被拒，且**不重载同一个文件** ——
+##      这正是 S1.0c 留到本步的那个语义问题，现在有了机器判定；
+##   ⑤ **栈深没变**：`MAX_DEPTH` 仍为 2 —— 迁移的是指向，不是阶梯。
 func _case_routes() -> void:
 	await process_frame
 	var router := get_root().get_node_or_null("SceneRouter")
@@ -1365,57 +1387,55 @@ func _case_routes() -> void:
 		return
 	var consts: Dictionary = router.get_script().get_script_constant_map()
 
-	section("表条目：三条路由、路径真实存在、world 仍指 diorama")
+	section("表条目：两条路由，world 已指向战略图，diorama 不再是路由")
 	var names: Array = []
 	for n in router.call("route_names"):
 		names.append(String(n))
 	names.sort()
-	eq(names, ["battle", "strategic", "world"], "登记的路由恰好三条（本步新增 strategic）")
+	eq(names, ["battle", "world"], "登记的路由恰好两条（S1.0c 的临时名 strategic 已退役）")
 	var scenes: Dictionary = consts.get("SCENES", {})
-	eq(scenes.size(), 3, "SCENES 表恰好三条（与 route_names() 同源，不是两条表 + 一条侧门）")
-	eq(String(consts.get("STRATEGIC", "")), "strategic", "常量 STRATEGIC 与表键同字（不抄第二次字面量）")
+	eq(scenes.size(), 2, "SCENES 表恰好两条（与 route_names() 同源）")
+	ok(not consts.has("STRATEGIC"), "常量 STRATEGIC 已删除：一个文件只留一个名字")
 	var seen := {}
 	for r in names:
 		var p := String(router.call("scene_path_for", r))
 		ok(p != "" and ResourceLoader.exists(p), "%s → 文件真实存在" % r, p)
 		seen[p] = true
-	eq(seen.size(), 3, "三条路由指向三个不同文件（没有复制粘贴成同一路径）")
-	eq(String(router.call("scene_path_for", "strategic")), STRATEGIC_SCENE,
-			"strategic → scenes/world/strategic_map.tscn")
-	eq(String(router.call("scene_path_for", "world")), MAIN_SCENE,
-			"world 仍指 diorama（切 world 是 S1.0d 的事）")
-	eq(String(ProjectSettings.get_setting("application/run/main_scene", "")), MAIN_SCENE,
-			"run/main_scene 未动（本步不碰 project.godot）")
+	eq(seen.size(), 2, "两条路由指向两个不同文件（没有复制粘贴成同一路径）")
+	eq(String(router.call("scene_path_for", "world")), WORLD_SCENE,
+			"world → scenes/world/strategic_map.tscn（S1.0d 的迁移结果）")
+	eq(String(ProjectSettings.get_setting("application/run/main_scene", "")), WORLD_SCENE,
+			"run/main_scene 同步改到战略图（开机即落在 world）")
 
-	section("反向映射：_sync() 靠 path → route 认领路由")
-	eq(String(router.call("_route_for_path", STRATEGIC_SCENE)), "strategic",
-			"strategic_map.tscn 的路径回指 strategic")
-	eq(String(router.call("_route_for_path", MAIN_SCENE)), "world", "diorama 的路径回指 world")
+	section("反向映射唯一：文件 → 路由，且夹具不会被误认成世界")
+	eq(String(router.call("_route_for_path", WORLD_SCENE)), "world",
+			"strategic_map.tscn 的路径回指 world（_sync() 开机认领靠这条）")
+	eq(String(router.call("_route_for_path", DIORAMA_SCENE)), "",
+			"diorama 不再是路由：取景夹具不会被误认成世界")
 	eq(String(router.call("_route_for_path", "res://scenes/dev/art_samples.tscn")), "",
-			"未登记场景不映射成任意路由（取景夹具不会被误认成世界）")
+			"未登记场景不映射成任意路由")
 
-	section("场景解剖：空壳是验收物，不是缺内容")
-	var ps := load(STRATEGIC_SCENE) as PackedScene
-	if ok(ps != null, "strategic_map.tscn 可加载为 PackedScene", STRATEGIC_SCENE):
+	section("场景解剖：世界根 = StrategicMap 空壳")
+	var ps := load(WORLD_SCENE) as PackedScene
+	if ok(ps != null, "strategic_map.tscn 可加载为 PackedScene", WORLD_SCENE):
 		var inst: Node = ps.instantiate()
 		if ok(inst != null, "可实例化"):
 			eq(inst.get_class(), "Node3D", "根节点是 Node3D")
-			eq(String(inst.name), "StrategicMap",
-					"根名 = StrategicMap（S1.0d 的『路由→文件→根』第三段）")
+			eq(String(inst.name), "StrategicMap", "根名 = StrategicMap（路由→文件→根 第三段）")
 			eq(inst.get_child_count(), 0, "零子节点：S1.2 之前不含任何内容")
 			eq(inst.get_script(), null,
 					"根节点无脚本：不提前造一个什么都不做的 strategic_map.gd")
+			eq(String(inst.scene_file_path), WORLD_SCENE, "场景自报路径 == 路由表路径")
 			inst.free()
 
-	section("接线面没有被顺手扩大（S1.0c 只登记）")
+	section("接线面：没有 goto_strategic()，既有 API 与栈深不变")
 	ok(not _has_callable(router, "goto_strategic"),
-			"没有 goto_strategic()：入口留给 S1.0d")
+			"没有 goto_strategic()：战略图就是 world，不需要第二个入口")
 	for sym in ["goto_world", "goto_battle", "return_to_world"]:
 		ok(_has_callable(router, sym), "既有导航 API 仍在：%s" % sym)
-	eq(int(consts.get("MAX_DEPTH", -1)), 2,
-			"MAX_DEPTH 仍是 2：新增的是路径表条目，不是一层阶梯")
+	eq(int(consts.get("MAX_DEPTH", -1)), 2, "MAX_DEPTH 仍是 2：迁移的是指向，不是阶梯")
 
-	section("拒绝不改状态：已在 world 时 goto_world() 必须被拒且零副作用")
+	section("拒绝不改状态：已在 world 时 goto_world() 被拒，且不重载同一个文件")
 	if String(router.call("current_route")) != "world":
 		ok(bool(router.call("goto_world")), "前置：先站到 world 上", String(router.get("last_error")))
 		ok(await _await_route("world"), "前置：world 已落地")
@@ -1425,6 +1445,7 @@ func _case_routes() -> void:
 	var scene0 := ""
 	if current_scene != null:
 		scene0 = current_scene.scene_file_path
+	var inst0 := _count_scene_instances(WORLD_SCENE)
 	var names0: Array = []
 	for n in router.call("route_names"):
 		names0.append(String(n))
@@ -1438,14 +1459,16 @@ func _case_routes() -> void:
 	if current_scene != null:
 		scene1 = current_scene.scene_file_path
 	eq(scene1, scene0, "拒绝后屏幕没换（current_scene 路径逐字相同）")
+	eq(_count_scene_instances(WORLD_SCENE), inst0,
+			"★ 拒绝后世界实例数不变（%d）：没有把同一个文件重载一遍" % inst0)
 	eq(bool(router.call("is_transitioning")), false, "拒绝没有留下『切换在飞行中』标记")
 	var names1: Array = []
 	for n in router.call("route_names"):
 		names1.append(String(n))
 	eq(names1, names0, "拒绝后表条目一条没少、没多")
 
-	# 本用例为了验"已在 world 被拒"真的切到了 world；不清理会让下一个用例的
-	# `_load_main()` 变成**第二个**世界（两个 #main / 两台相机），与 s0_3_router 同口径收尾。
+	# 本用例为了验"已在 world 被拒"真的切到了 world；不清理会让下一个用例的世界夹具
+	# 落在**第二个**世界里（两个 #main / 两台相机），与 s0_3_router 同口径收尾。
 	var live: Node = current_scene
 	if live != null:
 		live.queue_free()
@@ -1453,6 +1476,80 @@ func _case_routes() -> void:
 		await process_frame
 	_restore_defaults()
 	eq(String(router.call("current_route")), "", "收尾：场景释放后路由归空，现场交还后续用例")
+
+
+## --- s1_0_migration -----------------------------------------------------------
+## S1.0d 的验收物：**路由 → 文件 → 场景根类**三段一致（ROADMAP §5 S1.0d）。
+##
+## 与 `s1_0_routes` 的分工：那边管"表长什么样、拒绝逻辑对不对"（机制），这边管
+## "开机到底落在哪、那个文件是不是同一个人"（身份）。三条断言不是重复：
+##   ① 三环绑定：`scene_path_for("world")` → 文件可加载 → 根类 `Node3D` / 根名
+##      `StrategicMap` / 无脚本 / 零子节点；
+##   ② 开机契约：`run/main_scene` == world 路径 —— 引擎自己就会落在 world 上，
+##      不需要任何 `goto_*` 调用（这条是 S1.0a 建立的三处事实源断言的延续）；
+##   ③ 认领与不重载：把战略图设成 `current_scene`（模拟引擎开机），`_sync()` 必须把它
+##      认领成 `world`；此时 `goto_world()` 被拒且屏幕上仍只有一个实例 —— S1.0c 的
+##      follow-up（"开机即 strategic 时会不会重载同一文件"）在此闭环。
+func _case_migration() -> void:
+	await process_frame
+	var router := get_root().get_node_or_null("SceneRouter")
+	if not ok(router != null, "autoload SceneRouter 节点存在于 root"):
+		return
+
+	# 清场：本用例要模拟"开机第一现场"，先把上一个用例可能留下的场景拿掉。
+	if current_scene != null:
+		var old: Node = current_scene
+		old.queue_free()
+		await process_frame
+		await process_frame
+	_restore_defaults()
+	eq(current_scene, null, "前置：现场已清空，能从零模拟开机")
+
+	section("① 三环绑定：路由 world → 文件 → 场景根类")
+	var path := String(router.call("scene_path_for", "world"))
+	eq(path, WORLD_SCENE, "路由 world 的路径 == 用例独立持有的字面量")
+	ok(ResourceLoader.exists(path), "该路径在文件系统里真实存在", path)
+	var ps := load(path) as PackedScene
+	if ok(ps != null, "该路径可加载为 PackedScene"):
+		var inst: Node = ps.instantiate()
+		if ok(inst != null, "可实例化"):
+			eq(inst.get_class(), "Node3D", "根类是 Node3D（与路由表的『世界』定位一致）")
+			eq(String(inst.name), "StrategicMap", "根名是 StrategicMap")
+			eq(inst.get_child_count(), 0, "零子节点：内容留给 S1.2")
+			eq(inst.get_script(), null, "无脚本：空壳阶段不挂伪入口")
+			eq(String(inst.scene_file_path), path, "文件自报路径 == 路由表路径")
+			inst.free()
+
+	section("② 开机契约：run/main_scene == world 路径，diorama 退居夹具")
+	var declared := String(ProjectSettings.get_setting("application/run/main_scene", ""))
+	eq(declared, path, "run/main_scene 与 world 逐字相同")
+	ok(declared != DIORAMA_SCENE, "diorama 不再是主场景（否则开机仍是演示岛）")
+	ok(FileAccess.file_exists(DIORAMA_SCENE), "diorama 文件仍在（回归夹具没被删）")
+	ok(load(DIORAMA_SCENE) != null, "diorama 仍可加载（夹具没被搬坏）")
+	ok(not bool(router.call("is_known_route", "strategic")),
+			"临时路由名 strategic 已不在表里（一个文件只留一个名字）")
+
+	section("③ 开机认领：引擎直接加载的场景被 _sync() 认领为 world，且不重载")
+	var inst2: Node = (load(path) as PackedScene).instantiate()
+	get_root().add_child(inst2)
+	current_scene = inst2
+	eq(String(router.call("current_route")), "world",
+			"引擎直接加载的场景被认领成 world（不需要先 goto_world()）")
+	eq(int(router.call("route_depth")), 1, "栈里恰好一条（不是零条，也不是两条）")
+	ok(not bool(router.call("goto_world")), "开机即 world：goto_world() 被拒")
+	ok(String(router.get("last_error")).contains("world"), "拒绝理由指名 world",
+			String(router.get("last_error")))
+	eq(_count_scene_instances(WORLD_SCENE), 1,
+			"★ 被拒后世界实例数仍为 1：没有把同一个文件重载一遍")
+
+	# 收尾：释放本用例造的场景，把现场交还后续用例（与 s1_0_routes 同口径）。
+	var live: Node = current_scene
+	if live != null:
+		live.queue_free()
+		await process_frame
+		await process_frame
+	_restore_defaults()
+	eq(String(router.call("current_route")), "", "收尾：场景释放后路由归空")
 
 
 ## --- s0_4_overlay -------------------------------------------------------------
@@ -1492,13 +1589,13 @@ func _case_overlay() -> void:
 	eq(bool(dbg.get("hud_hidden")), false, "默认不隐藏 HUD")
 	eq(bool(dbg.call("is_panel_visible")), false,
 			"默认整层不可见（S0.4 之前录的 6 机位基线继续逐位有效的前提）")
-	var main := await _load_main()
-	if not ok(main != null, "主场景可加载"):
+	var main := await _load_diorama()
+	if not ok(main != null, "diorama 夹具可加载"):
 		return
 	var hud := main.get_node_or_null("UI") as CanvasLayer
 	var menu := main.get_node_or_null(MENU_NODE) as CanvasLayer
 	var dlay := dbg.get_node_or_null("DebugLayer") as CanvasLayer
-	if not ok(dlay != null, "Debug 自带 CanvasLayer（跨场景常驻，不挂在 main.tscn 上）"):
+	if not ok(dlay != null, "Debug 自带 CanvasLayer（跨场景常驻，不挂在世界场景上）"):
 		main.queue_free()
 		return
 	var consts: Dictionary = dbg.get_script().get_script_constant_map()
@@ -1555,7 +1652,7 @@ func _case_overlay() -> void:
 	dbg.call("set_ui_hidden", true)
 	ok(menu != null and not bool(menu.call("is_open")), "F1 后菜单已关闭")
 	ok(not paused, "暂停已解除（否则就是假死态）")
-	ok(main.can_process(), "主场景恢复处理")
+	ok(main.can_process(), "夹具恢复处理")
 	ok(hud != null and not hud.visible, "HUD 仍然隐藏（F1 的语义没有被菜单改写）")
 	dbg.call("set_ui_hidden", false)
 
@@ -1596,8 +1693,8 @@ func _case_overlay() -> void:
 	eq(String(row.get("ms_process", "x")), "", "确定性模式 ms_process 留空")
 	eq(int(row.get("nodes", -1)), int(dbg.call("stats")["nodes"]),
 			"行里的节点数与 stats() 一致（同一份事实）")
-	# ⚠️ 本用例直接加载主场景，路由器的栈是空的（启动时主场景本来就由引擎直接加载，
-	# 不经 SceneRouter）——所以这里断言的是"字段与路由器同源"，而不是写死 world。
+	# ⚠️ 本用例直接加载 diorama 夹具，路由器的栈是空的（`--script` 模式不替我们加载主场景，
+	# 夹具也只是 add_child 的子节点）——所以这里断言的是"字段与路由器同源"，而不是写死 world。
 	# 面板/CSV 不许自己发明一份场景事实。
 	var sr := get_root().get_node_or_null("SceneRouter")
 	eq(String(row.get("scene", "x")), String(dbg.call("scene_label")),
@@ -1623,7 +1720,10 @@ func _case_overlay() -> void:
 		if FileAccess.file_exists(csv):
 			DirAccess.remove_absolute(csv)
 		var out: Array = []
+		# S1.0d：显式拍 diorama 夹具 —— 缺省开机场景已是空壳，draw_calls 恒为 0，
+		# 那样"CSV 里有真实渲染指标"这条证据就没了。
 		var code := _exec_user(PackedStringArray(), PackedStringArray([
+			"--scene=" + DIORAMA_SCENE,
 			"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
 			"--obs-csv=" + csv, "--out=" + dir,
 		]), out)
@@ -1635,6 +1735,12 @@ func _case_overlay() -> void:
 			"A=%s B=%s" % [csv_shas[0], csv_shas[1]])
 	var det_lines := _read_lines(base.path_join("det_a").path_join("obs.csv"))
 	ok(det_lines.size() > 10, "CSV 有表头 + 每帧一行", "行数=%d" % det_lines.size())
+	# S1.0d：确定性模式下调试层**不采样**渲染列（draw_calls/prims 留空），所以这里改验
+	# `scene` 列 —— 它证明 `--scene=diorama` 在真实批次里生效了，拍的不是缺省空壳。
+	if det_lines.size() > 1:
+		var det_row := String(det_lines[1]).split(",")
+		if det_row.size() >= 10:
+			eq(String(det_row[3]), "diorama", "CSV 的 scene 列 == diorama（--scene= 在批次里生效）")
 	if det_lines.size() > 0:
 		eq(String(det_lines[0]), "frame,t_s,dt_ms,scene,stack,depth,nodes,draw_calls,prims,ms_process",
 				"表头 == 脚本里的列定义（两边不许各写一份）")
@@ -1646,9 +1752,13 @@ func _case_overlay() -> void:
 	if FileAccess.file_exists(solo_csv):
 		DirAccess.remove_absolute(solo_csv)
 	var solo_out: Array = []
-	# ⚠️ 必须**窗口模式**：headless 用的是 dummy 渲染器，`RENDER_TOTAL_DRAW_CALLS_IN_FRAME`
-	# 恒为 0、`TIME_PROCESS` 也没有意义 —— 那样"列里有值"会退化成"列里是 0.000"，
-	# 断言看起来通过、证据其实全假（实测踩过一次）。
+	# ⚠️ 必须**窗口模式**：headless 用的是 dummy 渲染器，`TIME_PROCESS` 没有意义 ——
+	# 那样"列里有值"会退化成"列里是 0.000"，断言看起来通过、证据其实全假（实测踩过一次）。
+	# ⚠️ 这里**不再**断言 `draw_calls > 0`：S1.0d 起开机主场景是战略图空壳（无相机、无网格），
+	# 一个空场景的 draw_calls 本来就是 0 —— 把它当失败是假红，把它当证据是假绿。
+	# "窗口模式真在渲染"的证据改由上面 diorama 批次的 `det_draw_rows` 承担。
+	# 另注：`--scene=` 只在截图批次里生效（换场景发生在 `Capture._run()`），
+	# 所以这条"纯修饰符"探针跑的自然就是缺省的空壳场景。
 	var solo_code := _exec_user(PackedStringArray(), PackedStringArray([
 		"--obs-csv=" + solo_csv, "--quit-after=90",
 	]), solo_out, 400)
@@ -1657,19 +1767,22 @@ func _case_overlay() -> void:
 	var solo_lines := _read_lines(solo_csv)
 	ok(solo_lines.size() >= 60, "至少 60 帧数据", "行数=%d" % solo_lines.size())
 	var env_rows := 0
-	var draw_rows := 0
 	for i in range(1, solo_lines.size()):
 		var cols := String(solo_lines[i]).split(",")
 		if cols.size() < 10:
 			continue
 		if float(String(cols[9])) > 0.0:
 			env_rows += 1
-		if int(String(cols[7])) > 0:
-			draw_rows += 1
 	ok(env_rows >= 30, "实时模式 ms_process 列有**非零**实测值（C- 取证靠它）",
 			"ms_process>0 的行数=%d" % env_rows)
-	ok(draw_rows >= 30, "实时模式 draw_calls 列有非零实测值（证明是窗口模式真在渲染）",
-			"draw_calls>0 的行数=%d" % draw_rows)
+	# S1.0d 的运行时证据：这个进程没有调用任何 `goto_*`，路由器却已把开机场景认领成 world ——
+	# CSV 的 scene / stack / depth 三列如实写出 world / world / 1（`_sync()` 在生产进程里也成立）。
+	if solo_lines.size() > 1:
+		var solo_row := String(solo_lines[1]).split(",")
+		if solo_row.size() >= 10:
+			eq(String(solo_row[3]), "world", "CSV 的 scene 列 == world（开机即被认领，无需 goto_world）")
+			eq(String(solo_row[4]), "world", "CSV 的 stack 列 == world")
+			eq(int(String(solo_row[5])), 1, "CSV 的 depth 列 == 1（栈里恰好一条）")
 	ok(not _dir_has_json(solo_dir), "--obs-csv= 没有触发截图批次（该目录无任何清单）")
 
 	section("清理：状态复位，别把全局残留留给后面的用例")
@@ -1679,7 +1792,7 @@ func _case_overlay() -> void:
 	InputSetup.ensure_debug_hotkeys(true)
 	main.queue_free()
 	await process_frame
-	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+	ok(get_first_node_in_group("main") == null, "夹具已释放，组 #main 清空")
 
 
 ## --- s0_4_cost ----------------------------------------------------------------
@@ -1709,8 +1822,8 @@ func _case_debug_cost() -> void:
 	dbg.call("set_ui_hidden", false)
 
 	section("夹具：120 个真实实体（MeshUtil.blob + Style.toon，含反向外壳描边）")
-	var main := await _load_main()
-	if not ok(main != null, "主场景可加载"):
+	var main := await _load_diorama()
+	if not ok(main != null, "diorama 夹具可加载"):
 		return
 	var terrain := get_first_node_in_group("terrain")
 	var style := get_root().get_node_or_null("Style")
@@ -1735,7 +1848,7 @@ func _case_debug_cost() -> void:
 		mi.position = Vector3(gx * 1.8, y + 0.7, gz * 1.8)
 		holder.add_child(mi)
 		made += 1
-	eq(made, 120, "120 个 MeshInstance3D 已挂到主场景")
+	eq(made, 120, "120 个 MeshInstance3D 已挂到夹具世界")
 	for i in 20:
 		await process_frame   # 让网格上传/着色器编译/阴影贴图先稳定下来
 
@@ -1820,6 +1933,7 @@ func _case_debug_cost() -> void:
 			var dir := base.path_join("%s_%s" % [String(case_id), String(label)])
 			var out: Array = []
 			var code := _exec_user(PackedStringArray(), PackedStringArray([
+				"--scene=" + DIORAMA_SCENE,
 				"--shots", "--case=" + String(case_id), "--warmup=60", "--frames=15",
 				"--out=" + dir,
 			]), out)
@@ -1844,6 +1958,7 @@ func _case_debug_cost() -> void:
 	var ref_dir := base.path_join("boot_ref")
 	var ref_out: Array = []
 	var ref_code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--scene=" + DIORAMA_SCENE,
 		"--shots", "--case=s0_boot", "--warmup=60", "--frames=15",
 		"--out=" + ref_dir,
 	]), ref_out)
@@ -1880,7 +1995,7 @@ func _case_debug_cost() -> void:
 	main.queue_free()
 	await process_frame
 	_restore_defaults()
-	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+	ok(get_first_node_in_group("main") == null, "夹具已释放，组 #main 清空")
 
 
 ## --- s0_4_quick ---------------------------------------------------------------
@@ -1920,8 +2035,8 @@ func _case_quick() -> void:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
 
-	var main := await _load_main()
-	if not ok(main != null, "主场景可加载"):
+	var main := await _load_diorama()
+	if not ok(main != null, "diorama 夹具可加载"):
 		_saves_end()
 		return
 	var menu := main.get_node_or_null(MENU_NODE)
@@ -2106,7 +2221,7 @@ func _case_quick() -> void:
 	await process_frame
 	_restore_defaults()
 	_saves_end()
-	ok(get_first_node_in_group("main") == null, "主场景已释放，组 #main 清空")
+	ok(get_first_node_in_group("main") == null, "夹具已释放，组 #main 清空")
 
 
 ## --- s0_3_state ---------------------------------------------------------------
@@ -2792,7 +2907,7 @@ func _case_no_autosave() -> void:
 	eq(_saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR)), before, "本进程跑满一轮后哈希与 mtime 全不变")
 	var out: Array = []
 	var code := _exec_godot(PackedStringArray(["--headless", "--quit-after", "120"]), out)
-	ok(code == 0, "子进程完整启动主场景 120 帧退出码 = 0",
+	ok(code == 0, "子进程完整启动游戏 120 帧退出码 = 0",
 			"退出码=%d 输出=%s" % [code, _tail(out, 4)])
 	var errs := _error_lines(out)
 	eq(errs.size(), 0, "子进程日志无 ERROR / SCRIPT ERROR：%s" % str(errs))
@@ -2846,20 +2961,20 @@ func _case_router() -> void:
 	for n in router.call("route_names"):
 		names.append(String(n))
 	names.sort()
-	eq(names, ["battle", "strategic", "world"],
-			"登记的路由恰好是 world / battle / strategic 三个")
-	eq(String(router.call("scene_path_for", "world")), MAIN_SCENE, "world → diorama.tscn")
+	eq(names, ["battle", "world"], "登记的路由恰好是 world / battle 两条（S1.0d 收口）")
+	eq(String(router.call("scene_path_for", "world")), WORLD_SCENE,
+			"world → strategic_map.tscn（战略图接管世界）")
 	eq(String(router.call("scene_path_for", "battle")), "res://scenes/battle/battle_stub.tscn",
 			"battle → battle_stub.tscn")
-	eq(String(router.call("scene_path_for", "strategic")), STRATEGIC_SCENE,
-			"strategic → strategic_map.tscn（S1.0c 只登记，world 仍是 diorama）")
+	ok(not bool(router.call("is_known_route", "strategic")),
+			"S1.0c 的临时名 strategic 已退役（一个文件只留一个名字）")
 	eq(String(router.call("scene_path_for", "nowhere")), "", "未登记路由返回空路径")
 
 	# S1.0a：路径是**三处**事实（路由表 / project.godot / 主场景文件本身），
 	# 只改两处会让第三处静默漂移。这条断言把「改完用 git diff 逐行确认」升级成机器判定。
 	section("三处事实源一致：路由表 == project.godot 的 run/main_scene == 真实存在的文件")
 	var declared := String(ProjectSettings.get_setting("application/run/main_scene", ""))
-	eq(declared, MAIN_SCENE, "project.godot 的 run/main_scene 指向同一个文件")
+	eq(declared, WORLD_SCENE, "project.godot 的 run/main_scene 指向同一个文件")
 	eq(declared, String(router.call("scene_path_for", "world")),
 			"run/main_scene 与路由表的 world 条目逐字相同")
 	ok(ResourceLoader.exists(declared), "该路径在文件系统里真的存在", declared)
@@ -2887,16 +3002,16 @@ func _case_router() -> void:
 			bus.connect(sig, func(_a: Dictionary) -> void:
 				facts.append(sig))
 
-	section("世界基线：节点数 + 结构指纹 + seed 派生值")
+	section("世界基线：S1.0d 起 world 是战略图空壳（内容在 S1.2）")
 	var base_nodes := get_node_count()
-	var base_fp := _world_fingerprint()
-	var base_seed := _world_seed_signature()
-	ok(base_nodes > 20, "世界节点数 = %d（不是空场景，断言有内容可测）" % base_nodes)
-	ok(base_fp != "", "结构指纹非空（%d 条）" % base_fp.split("|").size())
-	print("    [note] 世界基线：节点 %d，指纹 %s，%s" % [
-		base_nodes, base_fp.sha256_text().substr(0, 16), base_seed])
-	print("    [note] 世界 seed 仍由 main.tscn 的 @export 决定，与 GameState.world_seed "
-			+ "的接线属 ROADMAP S1.2；当前两者同值，故本用例不区分二者")
+	var base_fp := _world_fingerprint(current_scene)
+	ok(base_nodes > 5, "世界节点数 = %d（空壳 + autoload，不是空指针）" % base_nodes)
+	eq(base_fp, "StrategicMap:Node3D:0",
+			"结构指纹只有空壳根：没有内容，也没有提前接线的脚本")
+	eq(get_nodes_in_group("main").size(), 0, "空壳世界没有 #main 组（S1.2 挂内容时再加）")
+	eq(get_nodes_in_group("terrain").size(), 0, "空壳世界没有地形")
+	eq(_world_seed_signature(), "", "空壳世界没有 seed 派生值（S1.2 才接 GameState.world_seed）")
+	print("    [note] 世界基线：节点 %d，指纹 %s" % [base_nodes, base_fp])
 
 	section("进入战斗：world → battle（含切换落地前的同帧语义）")
 	ok(bool(router.call("goto_battle", {"reason": "s0_3_router"})), "goto_battle() 被接受",
@@ -2941,19 +3056,19 @@ func _case_router() -> void:
 	ok(await _await_route_settled(), "等上一次切换彻底落地")
 	ok(bool(router.call("return_to_world", {"result": "win", "turns": 3})), "return_to_world() 被接受",
 			String(router.get("last_error")))
-	ok(await _await_route("world"), "main.tscn 重新成为 current_scene")
+	ok(await _await_route("world"), "战略图重新成为 current_scene")
 	eq(String(router.call("current_route")), "world", "current_route() 回到 world")
 	eq(int(router.call("route_depth")), 1, "栈深回到 1（battle 条目已弹出）")
 	var payload: Dictionary = router.call("current_payload")
 	var result: Dictionary = payload.get("battle_result", {})
 	eq(String(result.get("result", "")), "win", "世界条目收下了战斗结算结果（上下文传递不是空谈）")
 	eq(int(result.get("turns", 0)), 3, "结算结果逐字段原样带回")
-	eq(get_nodes_in_group("main").size(), 1, "世界里只有一个 #main 实例（没有泄漏的旧场景）")
-	eq(get_nodes_in_group("terrain").size(), 1, "地形节点组恢复为 1")
+	eq(_count_scene_instances(WORLD_SCENE), 1, "世界里只有一个 StrategicMap 实例（没有泄漏的旧场景）")
+	eq(get_nodes_in_group("main").size(), 0, "空壳世界仍没有 #main 组（与基线一致）")
 	var after_nodes := get_node_count()
 	eq(after_nodes, base_nodes, "★ 节点数 ±0：%d → %d" % [base_nodes, after_nodes])
-	eq(_world_fingerprint(), base_fp, "★ 结构指纹逐条一致（%d 条）" % base_fp.split("|").size())
-	eq(_world_seed_signature(), base_seed, "★ seed 派生值一致（同一片地形）")
+	eq(_world_fingerprint(current_scene), base_fp,
+			"★ 结构指纹逐条一致（%d 条）" % base_fp.split("|").size())
 
 	section("非战斗状态下 return_to_world 被拒")
 	ok(not bool(router.call("return_to_world")), "在世界里调 return_to_world() 被拒")
@@ -3037,11 +3152,33 @@ func _router_stack(router: Node) -> Array:
 	return out
 
 
+## 统计根下有多少个节点的 `scene_file_path` 等于给定路径。
+##
+## 用途：证明"`goto_world()` 被拒时没有把同一个文件重载一遍" —— 只断言路由栈不变
+## 抓不到重复加载（栈会被 `_sync()` 归一到同一个名字，但屏幕上可能多了一个世界）。
+func _count_scene_instances(path: String) -> int:
+	var root := get_root()
+	var count := 0
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var cur: Node = stack.pop_back()
+		if cur != root and cur.scene_file_path == path:
+			count += 1
+		for c in cur.get_children():
+			stack.append(c)
+	return count
+
+
 ## 世界结构指纹：去自动命名（`@MeshInstance3D@28` 里带全局计数器，两次加载必然不同）后
 ## 逐条记录「名字或类 : 类 : 子节点数」。比节点总数强：总数相同但结构换了也抓得住。
-func _world_fingerprint() -> String:
+##
+## `root` 缺省时取 `#main` 组（diorama 夹具的入口）；S1.0d 之后战略图空壳没有 `#main`
+## 组，路由用例改为显式传 `current_scene` —— 这样两个世界都能被同一套指纹度量，
+## 而不是"空壳时指纹恒为空、相等断言自动真空通过"。
+func _world_fingerprint(root: Node = null) -> String:
 	var ctx := {"parts": PackedStringArray()}
-	_walk_fingerprint(get_first_node_in_group("main"), ctx)
+	var top: Node = root if root != null else get_first_node_in_group("main")
+	_walk_fingerprint(top, ctx)
 	return "|".join(ctx["parts"])
 
 
@@ -3109,13 +3246,13 @@ func _case_slots() -> void:
 	ok(not DirAccess.dir_exists_absolute(SAVES_DIR), "起步是『一个存档都没有』的干净状态")
 
 	section("装配：菜单隐藏挂载、层高于调试 HUD、注册到 group=menu")
-	var main := await _load_main()
+	var main := await _load_diorama()
 	if main == null:
-		ok(false, "主场景可加载")
+		ok(false, "diorama 夹具可加载")
 		_saves_end()
 		return
 	var menu := main.get_node_or_null(MENU_NODE)
-	if not ok(menu != null, "main.tscn 挂着 MenuLayer"):
+	if not ok(menu != null, "diorama 夹具挂着 MenuLayer"):
 		main.queue_free()
 		_saves_end()
 		return
@@ -3141,7 +3278,7 @@ func _case_slots() -> void:
 	ok(bool(menu.call("is_open")), "ESC 打开菜单")
 	eq(String(menu.call("page_name")), "home", "打开后落在主页")
 	ok(paused, "菜单打开时 get_tree().paused == true")
-	ok(not main.can_process(), "暂停时主场景 can_process() == false（世界真的停了）")
+	ok(not main.can_process(), "暂停时夹具世界 can_process() == false（世界真的停了）")
 	ok(menu.can_process(), "暂停时菜单 can_process() == true（否则它连点击都收不到）")
 	ok(clock.can_process(), "暂停时 Clock can_process() == true")
 	# Clock 照走：先切到确定性模式，好让"照走"是可数的而不是"看起来在动"。
@@ -3207,7 +3344,7 @@ func _case_slots() -> void:
 	ok(not bool(menu.call("is_open")), "第二次 ESC 关闭菜单")
 	ok(not paused, "关闭后解除暂停")
 	ok(not (menu as CanvasLayer).visible, "关闭后不可见")
-	ok(main.can_process(), "关闭后主场景恢复处理")
+	ok(main.can_process(), "关闭后夹具世界恢复处理")
 
 	section("B- 截图：两个数据状态 × 两轮独立进程")
 	await _shoot_menu_rounds()
@@ -3244,7 +3381,7 @@ func _case_overwrite() -> void:
 	_restore_defaults()
 	for n in _saves_begin():
 		print("    · ", n)
-	var main := await _load_main()
+	var main := await _load_diorama()
 	var menu := main.get_node_or_null(MENU_NODE)
 	if not ok(menu != null, "MenuLayer 在树上"):
 		main.queue_free()
@@ -3377,6 +3514,7 @@ func _shoot_menu_rounds() -> void:
 func _shoot_menu_case(case_name: String, out_dir: String, expect_shots: int) -> int:
 	var out: Array = []
 	var code := _exec_user(PackedStringArray(), PackedStringArray([
+		"--scene=" + DIORAMA_SCENE,
 		"--shots", "--case=" + case_name, "--warmup=60", "--frames=15",
 		"--out=" + out_dir,
 	]), out)
@@ -4018,20 +4156,18 @@ func _case_doc_conventions() -> void:
 		print("    · 泄漏点：", script_leaks)
 
 	# ① 反向 B：`res://scenes/dev/` 走**登记清单**，不搞零容忍。
-	#    S1.0a 把演示岛搬成 `res://scenes/dev/diorama.tscn` 后，`scene_router.gd` 必须
-	#    引用它 —— 此时"零容忍"就不再是正确的约束，而是与路线图自相矛盾。
-	#    改为：每个引用 `scenes/dev/` 的文件都必须在此逐条登记并写明理由，多一个少一个都红。
-	#    S1.0d 让战略图接管 `world` 之后，`scene_router.gd` 这条会到期，清单自然收紧回 0。
+	#    S1.0a 把演示岛搬成 `res://scenes/dev/diorama.tscn` 后，`scene_router.gd` 曾必须
+	#    引用它 —— 那时"零容忍"就不再是正确的约束，于是改成"逐条登记、多一个少一个都红"。
+	#    S1.0d 战略图接管 `world` 后那条登记到期，清单**已收紧回 0 条**：夹具场景只允许
+	#    被 `tools/`（回归用例与取景脚本）和 `--scene=` 引用，正式构建里一个都不许出现。
 	var scene_refs: Array = []
 	for dir_path in ["res://scenes", "res://scripts", "res://shaders"]:
 		_collect_dev_refs(dir_path, scene_refs, "res://scenes/dev/")
 	scene_refs.sort()
-	var scene_refs_want: Array = [
-		# 唯一允许的产品码引用点：路由表的 world 条目（S1.0a → S1.0d 期间有效）
-		"res://scripts/core/scene_router.gd",
-	]
+	var scene_refs_want: Array = []
 	eq(scene_refs, scene_refs_want,
-			"引用 scenes/dev/ 的产品码恰好是登记的那 1 处（多一处就说明夹具场景漏进了正式构建）")
+			"引用 scenes/dev/ 的产品码为 0 处（S1.0d 起战略图接管 world，diorama 只是夹具，"
+			+ "只能由 tools/ 与 --scene= 引用）")
 	for p in scene_refs_want:
 		ok(FileAccess.file_exists(p), "登记为可引用 scenes/dev/ 的文件真的存在", p)
 	# 反向对照：登记清单不是"随便写个路径就能过" —— 未登记的引用必须被抓住。
@@ -4155,8 +4291,12 @@ func _read_text_file(path: String) -> String:
 func _is_headless() -> bool:
 	return DisplayServer.get_name() == "headless"
 
-func _load_main() -> Node:
-	var ps := load(MAIN_SCENE) as PackedScene
+## 加载**回归夹具**（diorama）。S1.0d 之后产品主场景是战略图空壳；内容用例（场景 API、
+## 叠加层、快存、九宫格、覆盖确认）要的是一片有内容的世界，所以显式加载夹具，而不是
+## 依赖 `run/main_scene`。夹具以**子节点**身份进树（不抢 `current_scene`），与 S1.0a
+## 起的口径一致。
+func _load_diorama() -> Node:
+	var ps := load(DIORAMA_SCENE) as PackedScene
 	if ps == null:
 		return null
 	var m := ps.instantiate()
@@ -4199,7 +4339,7 @@ func _exec_godot(extra: PackedStringArray, out_lines: Array) -> int:
 ##
 ## ⚠️ `--` 不是可选的分隔符。Godot 只把 `--` 之后的参数交给
 ## `OS.get_cmdline_user_args()`；少了它，`capture.gd` 收不到 `--shots`，
-## 既不会触发截图也不会 `quit()`，子进程会一直跑主场景——
+## 既不会触发截图也不会 `quit()`，子进程会一直跑着游戏——
 ## 实测后果是整个验收套件静默挂死（`OS.execute` 没有超时）。
 ## 因此本函数强制插入 `--`，并通过 `--quit-after` 兜底：
 ## 万一将来还有谁忘了回归，子进程最多跑 `safety_frames` 帧就退出，

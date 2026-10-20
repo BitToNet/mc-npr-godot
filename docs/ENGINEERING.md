@@ -16,7 +16,7 @@
 
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
-| `scenes/` | 场景文件 | `dev/diorama.tscn`（**主场景**；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**，只改路径；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`world/strategic_map.tscn`（战略图**空壳**，S1.0c：`Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，只被 `SceneRouter` 登记为 `strategic`；`world` 仍指 diorama，S1.0d 才切，S1.2 填真内容）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
+| `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；战略图**空壳** —— `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，真内容在 S1.2）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
@@ -87,8 +87,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | `tools/*` | 工具不属于分层约束范围，保持扁平 |
 
 > `scenes/main.tscn` **已不再是未移动项**：S1.0a 把它换路径为 `scenes/dev/diorama.tscn`
-> （内容逐字节不变，6 机位 `B-` 逐位仍等于基线）。S1.0d 之后它还会从"主场景"降为
-> "仅供回归与取景"，届时 `run/main_scene` 改指 `scenes/world/strategic_map.tscn`。
+> （内容逐字节不变，6 机位 `B-` 逐位仍等于基线）。**S1.0d 起它已从"主场景"降为"仅供回归与取景"**：
+> `run/main_scene` 改指 `scenes/world/strategic_map.tscn`，diorama 只能经 `--scene=res://scenes/dev/diorama.tscn`
+> 或 `tools/` 进入（缺省批次拍到的是没有相机的空壳）。
 
 > ⚠️ `ROADMAP.md` 的 **§5 S0.6 叙述**、**§16 变更日志**与**附录 A/B** 保留重组前的历史路径
 > （它们记录的是当时的事实）。以路径为准时，请查本表。
@@ -118,29 +119,29 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 ## 4. 迁移前基线（S0.1 的 `B-` 判定基准）
 
 **采集时间**：2026-10-16，S0.1 任何文件移动**之前**（提交 `437f08f` 时点）。
-**命令**（确定性时钟，6 机位，1600×900；不写 `--scene=` 即取 `run/main_scene`）：
+**命令**（确定性时钟，6 机位，1600×900；⚠️ **S1.0d 起必须带 `--scene=`**，见下方复现命令）：
 
 ```powershell
 & "G:\godot_project\_godotengine\Godot_v4.7-stable_win64.exe" --path G:\godot_project\mc-npr-godot `
   -- --shots --warmup=60 --frames=15 --out=res://.shots/s01_pre_a
 ```
 
-> **S1.0a 之后这条命令仍然有效**：`run/main_scene` 已改指 `res://scenes/dev/diorama.tscn`，
-> 而场景内容逐字节未变 —— 所以"不写 `--scene=`"取到的还是同一个演示岛。这正是 S1.0a 的
-> 验收口径：换路径后 6 机位 sha256 **逐位仍等于**下表。
+> **S1.0a 之后、S1.0d 之前**：`run/main_scene` 曾改指 `res://scenes/dev/diorama.tscn`，而场景内容逐字节
+> 未变 —— 那段时间"不写 `--scene=`"取到的还是同一个演示岛（S1.0a 的验收口径就是"换路径后哈希逐位不变"）。
 >
-> **S1.0b 之后可以用 `--scene=` 显式指定**，两种写法必须给出**同一组哈希**（`s1_0_scene_arg`
-> 就是这么验的）：
+> **S1.0d 起这条裸命令拍不到基线了**：`run/main_scene` 已是战略图**空壳**（无相机、无内容），
+> 不写 `--scene=` 得到的是一张纯背景图。**当前复现命令必须显式指定夹具**：
 >
 > ```powershell
-> & "…Godot_v4.7-stable_win64.exe" --path G:\godot_project\mc-npr-godot `
+> & "G:\godot_project\_godotengine\Godot_v4.7-stable_win64.exe" --path G:\godot_project\mc-npr-godot `
 >   -- --shots --scene=res://scenes/dev/diorama.tscn --warmup=60 --frames=15 --out=res://.shots/s11_cam_a
 > ```
 >
 > `--scene=` 是**纯修饰符**（和 `--case=` / `--out=` 同级），单独出现不触发截图批次。换场景
 > 发生在快门之前且不额外消耗帧，所以"显式指定"与"缺省"在快门前的 dt 序列完全相同 ——
 > 这一条不是容差，是逐位相等：云是增量积分（`position.x += drift * Clock.dt`），多跑一帧
-> 哈希就变（实现时实测踩过）。
+> 哈希就变（实现时实测踩过）。S1.0b 曾用"显式 vs 缺省哈希相同"证明这一点，S1.0d 之后该对照
+> 自动失效（缺省已无内容），`s1_0_scene_arg` 改为断言"缺省 ≠ 夹具"。
 
 **基线 sha256**（`res://.shots/s01_pre_a/default.json`；同参数另一次独立进程实测 6/6 相同）：
 
@@ -268,7 +269,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > **本批最值得记住的设计结论**：浅栈 + **显式越界失败**比"能回退到任意深度"更适合当前规模。
 > 梯度上只有 `world → battle` 两段时，栈深上限（2）本身就隐含了"不能再进"，故把深度检查放在来源检查**之前**，
 > 让拒绝理由说"栈已满"而不是"来源不对"——否则深度上限这条规则永远不可观测、等于没写。
-> （S1.0c 起路由**表**有 3 个名字，但可达的**梯度**仍只有这两段：`strategic` 只登记、不接线。）
+> （S1.0d 起路由**表**回到 2 个名字：`world → strategic_map.tscn` / `battle`，可达梯度仍是这两段；
+> S1.0c 那个临时名 `strategic` 已删，一个文件只留一个名字。）
 > 同理，"回到世界是不是同一片世界"若不查结构与 seed，只查节点总数，那么"重建出一片同规模的
 > 另一片地形"也会通过——**弱断言会让错误的实现在验收里活下来**。
 

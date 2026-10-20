@@ -38,8 +38,10 @@ extends Node
 ## S1.0b — `--scene=res://…` 指定**拍哪个场景**（缺省 = `run/main_scene`）。与
 ## `--case=` / `--out=` 同级，是**纯修饰符**：单独出现不触发截图，也不抢退出码。
 ## 具体命令写在 `docs/ENGINEERING.md` §4，本文件**不写死**那条路径 —— 产品码里出现
-## `scenes/dev/` 会被 `s0_5_doc_conventions` 的登记表拦下（只给 SceneRouter 留一个例外），
+## `scenes/dev/` 会被 `s0_5_doc_conventions` 的登记表拦下（S1.0d 起该表已收紧回 0 条），
 ## 这条门禁的用处正是"夹具场景别漏进正式构建"，不该为了抄一个路径就放宽它。
+## S1.0d 之后这条参数也是 diorama 的**唯一**入口：开机主场景已是战略图空壳（无相机），
+## 缺省批次拍不到世界，6 机位 `B-` 必须显式 `--scene=` 到 `dev/diorama.tscn`。
 ## 实现见 `_swap_scene()`：手动换 `SceneTree.current_scene`，不调
 ## `change_scene_to_*()`（`scene_change_owner` 只放行 `SceneRouter`，ROADMAP §3.2），
 ## 也不去改 `run/main_scene`（实测引擎取该路径早于 autoload，改了不生效）。

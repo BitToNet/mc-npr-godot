@@ -20,41 +20,37 @@ extends Node
 ##   * no transition effect — `_switch_to()` is a hard cut.  The fade layer is UI and
 ##     arrives with the menu in batch 4 (it would also have to be cleared in the `B-`
 ##     six-camera gate, which is a batch-4 question, not this one).
-##   * the world seed is still whatever `scenes/dev/diorama.tscn` exports; agreeing it with
-##     `GameState.world_seed` is S1.2's job (see the note in the `s0_3_router` case).
+##   * no world content: that is S1.2's job.  Since S1.0d the `world` route **is** the
+##     strategic shell (`scenes/world/strategic_map.tscn`, an empty `Node3D`), and the
+##     diorama is a regression fixture now — reachable only through `capture.gd --scene=`.
+##     The shell exports no world seed yet; agreeing it with `GameState.world_seed` is S1.2.
 ##
 ## Depth is capped at 2 on purpose: world → battle is the only *stack* this game has until
 ## M1 adds the settlement screen.  Deeper stacks now would be unused speculation.
 ##
-## THREE ROUTES, ONE LADDER (S1.0c).  `strategic` is registered because `scenes/world/
-## strategic_map.tscn` now exists and S1.0d will repoint `world` at it — but this step
-## deliberately stops at registration:
-##   * no `goto_strategic()` and no change to `goto_world()` / `goto_battle()` semantics;
-##   * nothing in the shipped game can reach `strategic` yet, so the stack is still only
-##     world → battle.  `s1_0_routes` asserts both halves of that sentence (entry present,
-##     public navigation surface unchanged), so a half-wired API is caught rather than
-##     silently accepted.
-## FOLLOW-UP for S1.0d: `goto_world()` currently only refuses when already on `world` or on
-## `battle`.  Once `world` IS `strategic`, boot lands on `strategic` and `goto_world()` would
-## reload that same file — that semantic must be decided in S1.0d, not papered over here.
+## WORLD IS THE STRATEGIC MAP (S1.0d).  S1.0c registered a third name `strategic` while
+## `world` still pointed at the diorama; that name was scaffolding.  Now `world` owns the
+## strategic file and `strategic` is gone — one path, one route, so `_route_for_path()`
+## stays unambiguous.  The diorama is still on disk (the 6-camera `B-` fixture and the
+## content cases load it directly); it is simply not a route any more.
+##   * Boot: `run/main_scene` == `WORLD`'s path, so the engine lands on `world` by itself and
+##     `_sync()` adopts it.  `goto_world()` from there is refused ("already in the world") and
+##     does **not** reload the file — that closes the follow-up S1.0c left open.
+##   * Nothing can navigate yet: no menu entry calls `goto_*`, so the shipped game boots the
+##     shell and stops there until S1.2 gives it a camera and S1.4 a way in.
 
 const WORLD := "world"
 const BATTLE := "battle"
-## Not reachable yet (see the header).  S1.0d repoints `world` here; S1.2 fills the scene.
-const STRATEGIC := "strategic"
 
 ## Route name → scene file.  Key order is `route_names()` order.
 ##
-## S1.0a: the diorama moved from `res://scenes/main.tscn` to `res://scenes/dev/diorama.tscn`
-## (content byte-identical; only the path changed).  `run/main_scene` points at the same
-## file, and `s0_3_router` asserts the two agree — the path is a fact in three places, so
-## a test now fails if only two of them are updated.
+## S1.0a moved the diorama into the `dev/` fixture folder; S1.0d moved `world` off it.
+## `run/main_scene` points at `world`'s file and `s0_3_router` asserts the two agree — the
+## path is a fact in three places (table / project.godot / file), so a test fails if only
+## two of them are updated.
 const SCENES := {
-	WORLD: "res://scenes/dev/diorama.tscn",
+	WORLD: "res://scenes/world/strategic_map.tscn",
 	BATTLE: "res://scenes/battle/battle_stub.tscn",
-	# S1.0c: registered but not navigable.  The scene is an empty `Node3D` on purpose —
-	# S1.2 builds the real strategic layer, and an art placeholder here would be thrown away.
-	STRATEGIC: "res://scenes/world/strategic_map.tscn",
 }
 
 ## Hard cap on stack depth (see the header).
