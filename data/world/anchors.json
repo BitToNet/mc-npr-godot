@@ -1,0 +1,26 @@
+{
+  "anchors": [
+    {
+      "id": "fortress_seat",
+      "kind": "fortress",
+      "name": "北岬堡",
+      "x": -780,
+      "z": 564
+    },
+    {
+      "id": "town_seat",
+      "kind": "town",
+      "name": "云顶城",
+      "x": 308,
+      "z": 308
+    },
+    {
+      "id": "village_seat",
+      "kind": "village",
+      "name": "东风村",
+      "x": 628,
+      "z": -76
+    }
+  ],
+  "schema": 1
+}

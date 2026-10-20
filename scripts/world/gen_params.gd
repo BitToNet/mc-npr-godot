@@ -38,6 +38,8 @@ const DEFAULTS := {
 	"base_height": -18.0,
 	"hill_amplitude": 120.0,
 	"detail_amplitude": 8.0,
+	"settlement_min_spacing": 120.0,
+	"settlement_slope_limit": 0.35,
 }
 
 ## Fields measured in metres, not counts.  They are kept separate because the
@@ -46,7 +48,8 @@ const DEFAULTS := {
 ## table.  `Canon` still writes an integral float as `120` (JSON has no int/float
 ## distinction), so the table reads back as `120.0` — stable, but worth knowing
 ## before you edit it by hand.
-const FLOAT_FIELDS := ["water_level", "base_height", "hill_amplitude", "detail_amplitude"]
+const FLOAT_FIELDS := ["water_level", "base_height", "hill_amplitude", "detail_amplitude",
+		"settlement_min_spacing", "settlement_slope_limit"]
 
 ## Safe ranges (ROADMAP §6 Q14: 600–4000 / 4–12 / 8–40 / 2–5 / 4–40).
 ## Settlement counts are also bounded *in total* by `SETTLEMENTS_RANGE`.
@@ -65,6 +68,8 @@ const RANGES := {
 	"base_height": [-120.0, 40.0],
 	"hill_amplitude": [40.0, 300.0],
 	"detail_amplitude": [0.0, 30.0],
+	"settlement_min_spacing": [40.0, 600.0],
+	"settlement_slope_limit": [0.05, 1.0],
 }
 const SETTLEMENTS_RANGE := [8, 40]
 

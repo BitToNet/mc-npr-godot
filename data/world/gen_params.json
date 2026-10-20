@@ -9,6 +9,8 @@
   "regions_max": 9,
   "regions_min": 6,
   "schema": 1,
+  "settlement_min_spacing": 120,
+  "settlement_slope_limit": 0.350000,
   "towns": 4,
   "villages": 12,
   "water_level": 0

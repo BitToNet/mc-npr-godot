@@ -245,6 +245,13 @@ const CASES := {
 				+ "重放同一 Rng 状态逐格相同、换 seed 必变 / 一次 build 的耗时",
 		"kind": "pure",
 	},
+	"s1_1_world": {
+		"desc": "世界数据：聚落配额（12 村 + 4 镇 + 4 要塞）全放出且零告警 / 每个聚落与队伍都在陆地、"
+				+ "坡度合法、聚落两两间距达标 / 道路图单连通（删一条边即断）且总长可累加 / "
+				+ "3 个锚点坐标逐位等于表、排在最前 / 同 seed 两次构建指纹逐位相同、换 seed 必变 / "
+				+ "间距不可行时降级为告警而不是死循环 / 锚点落水或 kind 非法时跳过并告警 / 一次 build 的耗时",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -636,6 +643,8 @@ func _dispatch(id: String) -> void:
 			await _case_height_field()
 		"s1_1_regions":
 			await _case_regions()
+		"s1_1_world":
+			await _case_world()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -4086,7 +4095,7 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 16 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 17 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
@@ -4104,6 +4113,7 @@ func _case_doc_conventions() -> void:
 		"WaterSurface": "res://scripts/world/water.gd",
 		"HeightField": "res://scripts/world/height_field.gd",
 		"WorldRegions": "res://scripts/world/regions.gd",
+		"WorldData": "res://scripts/world/world_data.gd",
 		"GenParams": "res://scripts/world/gen_params.gd",
 	}
 	for cls in classes.keys():
@@ -4914,6 +4924,8 @@ func _case_gen_params() -> void:
 		"base_height": -18.0,
 		"hill_amplitude": 120.0,
 		"detail_amplitude": 8.0,
+		"settlement_min_spacing": 120.0,
+		"settlement_slope_limit": 0.35,
 	}
 	for key in expected_float.keys():
 		var field := String(key)
@@ -4928,7 +4940,7 @@ func _case_gen_params() -> void:
 				% [field, str(float(bounds[1]))])
 		ok(GenParams.FLOAT_FIELDS.has(field), "`%s` 登记为浮点字段（不会被四舍五入）" % field)
 	var float_names := PackedStringArray(GenParams.FLOAT_FIELDS)
-	eq(float_names.size(), 4, "浮点字段恰好 4 个（与 ENGINEERING §9.6 一致）")
+	eq(float_names.size(), 6, "浮点字段恰好 6 个（与 ENGINEERING §9.6 一致）")
 	for field in float_names:
 		ok(GenParams.DEFAULTS.has(field), "浮点字段 `%s` 在 DEFAULTS 里" % field)
 		ok(GenParams.RANGES.has(field), "浮点字段 `%s` 在 RANGES 里" % field)
@@ -5356,6 +5368,304 @@ func _case_regions() -> void:
 	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
 	le(dt, 500.0, "一次 build 耗时 %s ms < 500 ms" % str(snappedf(dt, 0.1)))
 	eq(perf.grid_w, 75, "重复 build 不改变网格尺寸")
+
+
+## =============================================================================
+##  S1.1c 世界数据：聚落 / 道路 / 势力 / 队伍 + 手工锚点
+## =============================================================================
+func _case_world() -> void:
+	await process_frame
+
+	var loaded := GenParams.load_from()
+	ok(bool(loaded["ok"]), "参数表可用", String(loaded.get("reason", "")))
+	eq(PackedStringArray(loaded["warnings"]).size(), 0, "真表零告警")
+	var params := Dictionary(loaded["params"])
+	var world_seed := 20250929
+
+	section("锚点表：3 条、字节规范、坐标全是有限数")
+	var anchors_path := WorldData.PATH
+	var raw := _read_text_file(anchors_path)
+	ok(raw.length() > 0, "锚点表可读（%d 字符）" % raw.length())
+	contains(raw, "\"schema\": 1", "锚点表带 schema = 1")
+	var canon := Canon.canonicalize(raw)
+	ok(bool(canon["ok"]), "锚点表是合法 JSON", String(canon.get("reason", "")))
+	eq(String(canon.get("text", "")), raw, "锚点表逐字节等于自己的规范化结果")
+	eq(raw.count("\r"), 0, "锚点表没有 CR")
+	ok(raw.ends_with("\n") and not raw.ends_with("\n\n"), "锚点表末尾恰好一个换行")
+
+	var loaded_anchors := WorldData.load_anchors()
+	ok(bool(loaded_anchors["ok"]), "锚点表经 load_anchors 可读", String(loaded_anchors.get("reason", "")))
+	eq(PackedStringArray(loaded_anchors["warnings"]).size(), 0, "真锚点表零告警")
+	var anchor_list: Array = loaded_anchors["anchors"]
+	eq(anchor_list.size(), 3, "锚点 3 条")
+	var kinds_seen := {}
+	for a in anchor_list:
+		var k := String(a["kind"])
+		kinds_seen[k] = int(kinds_seen.get(k, 0)) + 1
+		ok(is_finite(float(a["x"])) and is_finite(float(a["z"])), "锚点 `%s` 坐标有限" % String(a["id"]))
+	eq(kinds_seen.size(), 3, "三种 kind 各一条（村庄 / 城镇 / 要塞）")
+
+	section("生成：配额全部放出来，零告警")
+	var rng: Node = get_root().get_node_or_null("Rng")
+	ok(rng != null, "Rng autoload 在位（--script 下经 tree root 取）")
+	var stream: RandomNumberGenerator = rng.call("stream", "world_gen")
+	var field := HeightField.new(world_seed, params)
+	var regions := WorldRegions.new(field, stream, params)
+	ok(bool(regions.build()["ok"]), "region 划分成功")
+	var saved_state := stream.state
+
+	var data := WorldData.new(world_seed, params, field, regions, stream, anchor_list)
+	var built := data.build()
+	ok(bool(built["ok"]), "世界构建成功", String(built.get("reason", "")))
+	var warns := PackedStringArray(built["warnings"])
+	eq(warns.size(), 0, "默认参数零告警（实际：%s）" % str(warns))
+
+	var settlements: Array = built["settlements"]
+	var roads: Array = built["roads"]
+	var factions: Array = built["factions"]
+	var parties: Array = built["parties"]
+	var counts := Dictionary(built["counts"])
+	eq(settlements.size(), 20, "聚落 20 个（12 + 4 + 4）")
+	eq(int(counts.get("village", 0)), 12, "村庄 12")
+	eq(int(counts.get("town", 0)), 4, "城镇 4")
+	eq(int(counts.get("fortress", 0)), 4, "要塞 4")
+	eq(int(counts.get("village", 0)) + int(counts.get("town", 0)) + int(counts.get("fortress", 0)),
+			settlements.size(), "三类之和 = 总数（没有第四类混进来）")
+	eq(factions.size(), 3, "势力 3 个")
+	eq(parties.size(), 24, "AI 队伍 24 支")
+	var no_region := 0
+	for s in settlements:
+		if int(s["region"]) < 0:
+			no_region += 1
+	eq(no_region, 0, "每个聚落都落在某个 region 里（region id ≥ 0）")
+
+	section("合法性：陆地 + 坡度 + 间距")
+	var spacing := float(built["spacing"])
+	var limit := float(built["slope_limit"])
+	eq(spacing, float(params["settlement_min_spacing"]), "间距取自参数表")
+	eq(limit, float(params["settlement_slope_limit"]), "坡度上限取自参数表")
+	var bad_spots := _world_violations(settlements, field, spacing, limit)
+	eq(bad_spots.size(), 0, "20 个聚落全部合法（实际：%s）" % str(bad_spots))
+	var bad_parties := _world_violations(parties, field, 0.0, limit)
+	eq(bad_parties.size(), 0, "24 支队伍全部落在可站立处（实际：%s）" % str(bad_parties))
+	var min_gap := INF
+	for i in range(settlements.size()):
+		for j in range(i + 1, settlements.size()):
+			var d := Vector2(float(settlements[i]["x"]), float(settlements[i]["z"])).distance_to(
+					Vector2(float(settlements[j]["x"]), float(settlements[j]["z"])))
+			min_gap = minf(min_gap, d)
+	ge(min_gap, spacing, "最小聚落间距 %s m ≥ %s m" % [str(snappedf(min_gap, 0.1)), str(spacing)])
+
+	section("锚点 100% 生效：坐标逐位等于表，且排在最前")
+	eq(_anchor_mismatches(settlements, anchor_list), 0, "3 个锚点全部 100% 命中")
+	for a in anchor_list:
+		var s := data.settlement_by_id(String(a["id"]))
+		ok(not s.is_empty(), "锚点 `%s` 在聚落表里" % String(a["id"]))
+		eq(float(s["x"]), float(a["x"]), "锚点 `%s` 的 x 逐位等于表" % String(a["id"]))
+		eq(float(s["z"]), float(a["z"]), "锚点 `%s` 的 z 逐位等于表" % String(a["id"]))
+		eq(String(s["kind"]), String(a["kind"]), "锚点 `%s` 的 kind 跟随表" % String(a["id"]))
+		ok(bool(s["anchor"]), "锚点 `%s` 标记为手工锚点" % String(a["id"]))
+	ok(settlements.size() >= 3 and bool(settlements[0]["anchor"]) and bool(settlements[1]["anchor"])
+			and bool(settlements[2]["anchor"]), "前 3 个聚落都是锚点（先钉后撒）")
+
+	section("势力：首都唯一且是城镇、每座聚落都有归属、每方都有队伍")
+	var capitals := {}
+	for f in factions:
+		var cid := String(f["capital"])
+		var cap := data.settlement_by_id(cid)
+		ok(not cap.is_empty(), "势力 `%s` 的首都 `%s` 存在" % [String(f["id"]), cid])
+		ok(not capitals.has(cid), "首都 `%s` 不与其他势力共用" % cid)
+		capitals[cid] = true
+		eq(String(cap.get("kind", "")), "town", "首都 `%s` 是城镇" % cid)
+	for s in settlements:
+		ge(float(s["faction"]), 0.0, "聚落 `%s` 有势力归属" % String(s["id"]))
+		le(float(s["faction"]), float(factions.size() - 1), "聚落 `%s` 的势力号在范围内" % String(s["id"]))
+	var per_faction := {}
+	for p in parties:
+		var fid := int(p["faction"])
+		per_faction[fid] = int(per_faction.get(fid, 0)) + 1
+	eq(per_faction.size(), factions.size(), "每个势力都有队伍")
+	var fewest := 99
+	var most := 0
+	for fid in per_faction.keys():
+		fewest = mini(fewest, int(per_faction[fid]))
+		most = maxi(most, int(per_faction[fid]))
+	le(float(most - fewest), 1.0, "各势力队伍数相差不超过 1（轮流分配，实际 %d..%d）" % [fewest, most])
+	var party_ids := {}
+	for p in parties:
+		var hid := String(p["home"])
+		ok(not data.settlement_by_id(hid).is_empty(), "队伍 `%s` 的母城存在" % String(p["id"]))
+		eq(int(data.settlement_by_id(hid)["faction"]), int(p["faction"]), "队伍 `%s` 的母城属于同一势力" % String(p["id"]))
+		ok(not party_ids.has(String(p["id"])), "队伍 id `%s` 唯一" % String(p["id"]))
+		party_ids[String(p["id"])] = true
+
+	section("道路图：单连通、无自环、无重边、长度可累加")
+	eq(_graph_components(settlements, roads), 1, "整张图是 1 个连通分量")
+	ge(float(roads.size()), float(settlements.size() - 1), "边数 %d ≥ n-1 = %d" % [roads.size(), settlements.size() - 1])
+	var total := 0.0
+	var seen_edges := {}
+	for r in roads:
+		var a := data.settlement_by_id(String(r["a"]))
+		var b := data.settlement_by_id(String(r["b"]))
+		ok(not a.is_empty() and not b.is_empty(), "边 %s-%s 两端都存在" % [String(r["a"]), String(r["b"])])
+		ne(String(r["a"]), String(r["b"]), "没有自环")
+		var key := "%s|%s" % [String(r["a"]), String(r["b"])]
+		var key_rev := "%s|%s" % [String(r["b"]), String(r["a"])]
+		ok(not seen_edges.has(key) and not seen_edges.has(key_rev), "边 %s 没有重复" % key)
+		seen_edges[key] = true
+		var d := Vector2(float(a["x"]), float(a["z"])).distance_to(Vector2(float(b["x"]), float(b["z"])))
+		near(float(r["length"]), d, 0.001, "边长 = 两端直线距离")
+		total += d
+	near(float(built["road_length_total"]), total, 0.01, "总长 = 各边之和")
+
+	section("反向对照：删掉一个聚落的全部边必须断开；挪到水面必须被检出；改锚点表必须失配")
+	var isolated := String(settlements[0]["id"])
+	var cut: Array = []
+	for r in roads:
+		if String(r["a"]) != isolated and String(r["b"]) != isolated:
+			cut.append(r)
+	ge(float(_graph_components(settlements, cut)), 2.0, "把 `%s` 的边全删掉后，连通分量 ≥ 2" % isolated)
+	var sunk: Array = settlements.duplicate(true)
+	sunk[1]["x"] = -1190.0
+	sunk[1]["z"] = -1190.0
+	ge(float(_world_violations(sunk, field, spacing, limit).size()), 1.0, "挪到海角的聚落被合法性检查逮住")
+	var corrupt: Array = anchor_list.duplicate(true)
+	corrupt[0]["x"] = float(corrupt[0]["x"]) + 100.0
+	stream.state = saved_state
+	var corrupt_data := WorldData.new(world_seed, params, field, regions, stream, corrupt)
+	var corrupt_built := corrupt_data.build()
+	var corrupt_settlements: Array = corrupt_built["settlements"]
+	eq(_anchor_mismatches(corrupt_settlements, corrupt), 0, "锚点表被改后，新世界跟随新表（锚点仍 100% 生效）")
+	eq(_anchor_mismatches(corrupt_settlements, anchor_list), 1, "但拿旧表去核，恰好 1 条失配（说明断言不是恒真）")
+
+	section("坏锚点：kind 非法 / 落水 ⇒ 跳过并告警，配额照旧补齐")
+	stream.state = saved_state
+	var broken: Array = [
+		{"id": "bad_kind", "kind": "castle", "name": "错类", "x": 0.0, "z": 0.0},
+		{"id": "bad_water", "kind": "village", "name": "落水", "x": -1190.0, "z": -1190.0},
+	]
+	var broken_data := WorldData.new(world_seed, params, field, regions, stream, broken)
+	var broken_built := broken_data.build()
+	var broken_warns := PackedStringArray(broken_built["warnings"])
+	ge(float(broken_warns.size()), 2.0, "两条坏锚点各留一条告警（实际：%s）" % str(broken_warns))
+	ok(bool(broken_built["ok"]), "坏锚点不导致整次失败")
+	eq(Array(broken_built["settlements"]).size(), 20, "跳过坏锚点后仍按配额补齐 20 个")
+
+	section("间距不可行：降级为告警，不死循环、不崩")
+	var tight := GenParams.defaults()
+	tight["schema"] = GenParams.SCHEMA
+	tight["settlement_min_spacing"] = 900.0
+	stream.state = saved_state
+	var tight_data := WorldData.new(world_seed, tight, field, regions, stream, anchor_list)
+	var t_tight := Time.get_ticks_usec()
+	var tight_built := tight_data.build()
+	var tight_ms := float(Time.get_ticks_usec() - t_tight) / 1000.0
+	ok(bool(tight_built["ok"]), "仍返回 ok（降级不是失败）")
+	ge(float(PackedStringArray(tight_built["warnings"]).size()), 1.0, "有告警说明放不下")
+	ge(float(Array(tight_built["settlements"]).size()), 1.0, "仍放下至少 1 个")
+	ok(Array(tight_built["settlements"]).size() < 20, "数量确实少于 20")
+	le(tight_ms, 3000.0, "降级路径 %s ms 内结束（不是死循环）" % str(snappedf(tight_ms, 0.1)))
+
+	section("决定论：同 seed 两次构建指纹逐位相同")
+	stream.state = saved_state
+	var again := WorldData.new(world_seed, params, field, regions, stream, anchor_list)
+	var again_built := again.build()
+	eq(PackedStringArray(again_built["warnings"]).size(), 0, "复现时依旧零告警")
+	eq(again.fingerprint(), data.fingerprint(), "两次构建的指纹逐位相同")
+
+	section("反向对照：换 seed 后世界确实不同")
+	stream.state = saved_state
+	var field_b := HeightField.new(world_seed + 987654, params)
+	var regions_b := WorldRegions.new(field_b, stream, params)
+	regions_b.build()
+	var other := WorldData.new(world_seed + 987654, params, field_b, regions_b, stream, anchor_list)
+	other.build()
+	ne(other.fingerprint(), data.fingerprint(), "换 seed 后指纹不同")
+	var moved := 0
+	var other_settlements: Array = other.settlements
+	for i in range(mini(settlements.size(), other_settlements.size())):
+		if float(settlements[i]["x"]) != float(other_settlements[i]["x"]) \
+				or float(settlements[i]["z"]) != float(other_settlements[i]["z"]):
+			moved += 1
+	ge(float(moved), 10.0, "20 个聚落里 %d 个坐标变化（差异不只在 seed 那一行）" % moved)
+
+	section("代价（S1.1d 的 C- 预算 800 ms）")
+	stream.state = saved_state
+	var t0 := Time.get_ticks_usec()
+	WorldData.new(world_seed, params, field, regions, stream, anchor_list).build()
+	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
+	le(dt, 800.0, "一次 build %s ms < 800 ms" % str(snappedf(dt, 0.1)))
+
+
+## 聚落 / 队伍的位置合法性（空结果 = 全合法）。`p_spacing > 0` 时同时查两两间距。
+func _world_violations(p_list: Array, p_field: HeightField, p_spacing: float, p_limit: float) -> PackedStringArray:
+	var out := PackedStringArray()
+	for item in p_list:
+		var who := String(item.get("id", "?"))
+		var x := float(item["x"])
+		var z := float(item["z"])
+		if p_field.is_water(x, z):
+			out.append("%s 落在水面 (%.1f, %.1f)" % [who, x, z])
+		var slope := p_field.slope_at(x, z)
+		if slope > p_limit:
+			out.append("%s 坡度 %.3f > %.2f" % [who, slope, p_limit])
+	if p_spacing > 0.0:
+		for i in range(p_list.size()):
+			for j in range(i + 1, p_list.size()):
+				var d := Vector2(float(p_list[i]["x"]), float(p_list[i]["z"])).distance_to(
+						Vector2(float(p_list[j]["x"]), float(p_list[j]["z"])))
+				if d < p_spacing:
+					out.append("%s-%s 间距 %.1f < %.1f" % [String(p_list[i].get("id", "?")),
+							String(p_list[j].get("id", "?")), d, p_spacing])
+	return out
+
+
+## 道路图的连通分量数（独立于 `WorldData` 的并查集实现，按边做 BFS）。
+func _graph_components(p_settlements: Array, p_roads: Array) -> int:
+	var ids := PackedStringArray()
+	for s in p_settlements:
+		ids.append(String(s["id"]))
+	var adj := {}
+	for id in ids:
+		adj[id] = []
+	for r in p_roads:
+		var a := String(r["a"])
+		var b := String(r["b"])
+		adj[a].append(b)
+		adj[b].append(a)
+	var seen := {}
+	var components := 0
+	for id in ids:
+		if seen.has(id):
+			continue
+		components += 1
+		var queue := [id]
+		seen[id] = true
+		while not queue.is_empty():
+			var cur: String = queue.pop_back()
+			for nxt in adj[cur]:
+				if not seen.has(nxt):
+					seen[nxt] = true
+					queue.append(nxt)
+	return components
+
+
+## 锚点表与聚落表的失配条数（坐标或 kind 不同、或压根没生成都算一条）。
+func _anchor_mismatches(p_settlements: Array, p_anchors: Array) -> int:
+	var by_id := {}
+	for s in p_settlements:
+		by_id[String(s["id"])] = s
+	var bad := 0
+	for a in p_anchors:
+		var id := String(a["id"])
+		if not by_id.has(id):
+			bad += 1
+			continue
+		var s: Dictionary = by_id[id]
+		if float(s["x"]) != float(a["x"]) or float(s["z"]) != float(a["z"]) \
+				or String(s["kind"]) != String(a["kind"]):
+			bad += 1
+	return bad
 
 
 ## 造一份「默认值 + schema + 一个改动字段」的表，供上面的参数校验用。

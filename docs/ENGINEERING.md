@@ -18,7 +18,7 @@
 |---|---|---|
 | `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；战略图**空壳** —— `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，真内容在 S1.2）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`canon.gd`（**规范化序列化**，`class_name Canon`，S1.1a；见 §9）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
-| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b） |
+| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b）、`world_data.gd`（**聚落/道路/势力/队伍**，`class_name WorldData`，S1.1c；见 §9.7） |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
@@ -192,7 +192,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 21 | **"发布构建完全禁用"的闸门不能只做在 `_input` 里** | `_input` 只挡按键，挡不住"有人直接调 `quick_save()`"（未来的新 UI 入口、测试代码、任何脚本调用都能绕过），于是"完全禁用"名不副实 | 闸门做进**函数内部**：`quick_save()` / `quick_load()` 开头检查 `_quick_enabled()`（= 对应 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**为此再写一次 `OS.is_debug_build()` —— `s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是因为在调试页多写了一行而把该断言变红 |
 | 22 | **`var x := <返回 Variant 的调用>` 会编译失败，而不是警告** | 本步给 `capture.gd` 加 `--at=` 时写 `var p := _parse_point(...)`（该函数返回 `Variant`，成功给 `Vector3`、失败给 `null`）。工程开了"警告即错误"，于是 `Parse Error: The variable type is being inferred from a Variant value` ⇒ **整个 `capture.gd` 加载失败** ⇒ 9 个 autoload 里 `Capture` 挂了，引擎报 `Failed to instantiate an autoload` | 显式标注 `var p: Variant = _parse_point(...)`。**更值得记住的是排查路径**：窗口模式（`Godot_v4.7-stable_win64.exe`）跑截图时**静默挂死、一行输出都没有、进程还退干净了**；改用 `*_console.exe --headless --quit-after N` 跑同一场景，编译错误立刻打出来。**症状是"卡住/无输出"，病因往往在编译期，`*_console.exe` 是唯一的眼睛** |
 | 23 | **Godot 的 JSON 只有 float 一种数字，且 `String.unicode_compare` 不存在** | 写 `Canon` 时两处实测：① `JSON.parse` 把 `12` 解成 `12.0`、`-0` 解成 `0.0` ⇒ 纯 `%.6f` 的"读回再写"永远不可能与原文相等；② 照文档写的 `String.unicode_compare` 直接编译失败（`Cannot find member "unicode_compare" in base "String"`） | ① 数字规则改为"整数值写整数、非整数 `%.6f`"（理由与边角见 §9.5）；② 键序用 `keys.sort()`（`Array.sort()` 对 String 就是码点序，实测 `["1","A","Z","_x","a","b","中文"]`）。**教训**：格式契约里每条"看起来该有"的 API 都要先跑一次探针再写进文档 —— 这条坑正是"文档先写、代码后写、没人验中间那句"的产物 |
-| 24 | **参数表里 int 与 float 无从区分 ⇒ 米制字段会被"整数闸门"悄悄抹平** | S1.1a 的 `GenParams.validate()` 对所有字段一律 `int(roundf(v))`（计数类字段的正确做法）。S1.1b 加 `hill_amplitude` 等 4 个**米制浮点**字段后发现：`120.4` 会被四舍五入成 `120` 并附一条"不是整数"告警 —— 告警在 `warnings` 里，而**地形高度已经按 120 算了**，这种偏差在截图上看不出来，只会让"参数表里写的数"与"实际地形"永久对不上。另外 `Canon` 把整数值的 float 写成 `120`（JSON 无 int/float 之分），所以表文件里这些字段**看起来是整数**，更容易被误改成计数处理 | 显式维护 `GenParams.FLOAT_FIELDS`（当前 4 个）并在 `validate()` 里**先分支**：浮点字段只 clamp、不取整、int 输入自动升为 float；整数字段保留"四舍五入 + 告警"。用例把两侧都钉住：`137.5` 原样保留且**零告警**（`s1_1_params`），`3.7` → `4` 且**恰好一条**告警。**教训**：`JSON` 没有数字类型，"读到的 `8` 是计数还是 8 米"只能由**代码里的字段清单**回答；新增数值字段时必须同时决定它属于哪一侧 |
+| 24 | **参数表里 int 与 float 无从区分 ⇒ 米制字段会被"整数闸门"悄悄抹平** | S1.1a 的 `GenParams.validate()` 对所有字段一律 `int(roundf(v))`（计数类字段的正确做法）。S1.1b 加 `hill_amplitude` 等 4 个**米制浮点**字段后发现：`120.4` 会被四舍五入成 `120` 并附一条"不是整数"告警 —— 告警在 `warnings` 里，而**地形高度已经按 120 算了**，这种偏差在截图上看不出来，只会让"参数表里写的数"与"实际地形"永久对不上。另外 `Canon` 把整数值的 float 写成 `120`（JSON 无 int/float 之分），所以表文件里这些字段**看起来是整数**，更容易被误改成计数处理 | 显式维护 `GenParams.FLOAT_FIELDS`（S1.1c 起 **6 个**）并在 `validate()` 里**先分支**：浮点字段只 clamp、不取整、int 输入自动升为 float；整数字段保留"四舍五入 + 告警"。用例把两侧都钉住：`137.5` 原样保留且**零告警**（`s1_1_params`），`3.7` → `4` 且**恰好一条**告警。**教训**：`JSON` 没有数字类型，"读到的 `8` 是计数还是 8 米"只能由**代码里的字段清单**回答；新增数值字段时必须同时决定它属于哪一侧 |
+| 25 | **"同类聚落"的命名在表里是复数、在代码里是单数 ⇒ 配额静默变 0** | `WorldData.KINDS` 用单数 `village / town / fortress`（它是聚落自己的 `kind` 值），而 `gen_params.json` 的键是复数 `villages / towns / fortresses`（它是计数）。第一版直接写 `params.get(kind, 0)`：三个配额全取到 0 ⇒ 三条锚点各报"超出配额：跳过"、随机点一个不放 ⇒ `settlements` 为空、`build()` 返回 `ok = false`。**没有崩溃、没有报错**，只有三条措辞像是"参数表配错了"的告警 | 用显式映射表 `KIND_PARAM = {village: "villages", ...}`，`_kind_quotas()` 只走它。**教训**：跨文件的两套命名（枚举值 vs 表键）必须在**一个地方**转换，且转换表要有用例覆盖（`s1_1_world` 的"配额全部放出来"就是这条的回归锁）；`Dictionary.get(key, 0)` 在缺键时**不告警**，是本坑能静默的直接原因 |
 
 ---
 
@@ -358,8 +359,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ### 7.2 `class_name`（全局类）
 
-**16 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`；
-`grep -n "^class_name" scripts/**/*.gd`）：
+**17 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
+S1.1c 新增 `WorldData`；`grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
 |---|---|---|
@@ -378,6 +379,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | `WaterSurface` | `scripts/world/water.gd` | 水面 |
 | `HeightField` | `scripts/world/height_field.gd` | 战略尺度高度/生物群系场（S1.1b，§9.6） |
 | `WorldRegions` | `scripts/world/regions.gd` | Voronoi region 划分（S1.1b） |
+| `WorldData` | `scripts/world/world_data.gd` | 聚落 / 道路 / 势力 / 队伍 + 手工锚点（S1.1c，§9.7） |
 | `GenParams` | `scripts/world/gen_params.gd` | 世界生成参数表加载与钳制（S1.1a） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
@@ -593,6 +595,83 @@ Canon.write_file(path, value) # → {ok, path, bytes, sha256, reason}（写后�
 手法（掩码 + 岛屿幂 + 噪声叠加 + 山脊），但**参数、尺度、返回值语义都另立**（63 米演示岛 ↔
 2400 米战略图）。不要为了"少写一份"去改 `terrain.gd` 的签名或常量：那会同时改动 6 张基线图
 和 S0.3 的 `spawn_point` / `height_at` 断言。
+
+### 9.7 世界数据：聚落 / 道路 / 势力 / 队伍（S1.1c）
+
+> ✅ **已落地**：`scripts/world/world_data.gd`（`class_name WorldData`，`RefCounted`，**不占 autoload**）
+> + `data/world/anchors.json`。用例 `s1_1_world`（308 断言）。
+
+#### 9.7.1 生成顺序（先钉锚点，再撒随机，最后连图）
+
+`build()` 固定五步，顺序本身是契约：
+
+1. `_place_anchors()` —— 锚点表逐条校验后**直接采用坐标**（见 9.7.4）；
+2. `_place_generated()` —— 按 `villages / towns / fortresses` 的配额补齐（村庄先撒，城镇与要塞后挑）；
+3. `_assign_factions()` —— 首都 = 最远点采样选出的城镇，聚落按最近首都归属；
+4. `_build_roads()` —— 最近邻骨架 + 补边直至单连通；
+5. `_spawn_parties()` —— 每支队伍挂一个母城，在母城周围 40–200 m 环带里找可站立点。
+
+**为什么锚点必须先放**：随机点会挤占锚点周围的最小间距。先撒随机再钉锚点，就只能"把随机点
+删掉给锚点腾位置"，那会让同 seed 的世界依赖锚点表的长度 —— 锚点表一改，整张图全变。
+
+#### 9.7.2 落点合法性：四条闸门 + 有上限的重试
+
+一个点算"能放聚落"必须同时满足：① 在 `|x|,|z| ≤ map_size/2 − 80 m` 内；② 不在水面
+（`HeightField.is_water`）；③ `slope_at ≤ settlement_slope_limit`（默认 **0.35**）；④ 与所有已放
+聚落距离 `≥ settlement_min_spacing`（默认 **120 m**）。队伍只查 ①②③。
+
+- 每个聚落最多试 `MAX_PLACE_TRIES = 200` 次（**结构常量**，不进参数表：它不是玩法旋钮）。
+  用完仍放不下 ⇒ **告警 + 按实际数量降级**，`ok` 仍为 `true`。这是 ROADMAP 里"落不下则重试
+  有上限、上限内失败换噪声偏移（不是死循环）"的落地方式；`s1_1_world` 用 `spacing = 900 m`
+  把这条路径压出来，并断言 3 秒内结束。
+- 阈值参数化而非硬编码：`settlement_min_spacing` / `settlement_slope_limit` 都在
+  `gen_params.json`（安全区间 40–600 m / 0.05–1.0）。测过：默认地形上 `slope ≤ 0.35` 的陆地格
+  只占 **38.7%**（中位坡度 0.42），所以这两个数一动，"能放几个"会立刻变 —— 必须能调。
+
+#### 9.7.3 道路是图，不是网格
+
+每条路只记 `{a, b, length}`（两端聚落 id + 直线距离，米）。**本批不铺几何**：避水寻路、路面网格、
+桥与隧道都属于 S1.2 的战略渲染，现在铺一遍只会被相机换代推翻。
+
+连通性用并查集保证：每点连最近 `ROAD_K = 2` 个邻居（去重）→ 仍有多个分量时，反复挑"跨分量的
+最近点对"补边，直到单连通。因此**边数不是定值**（默认参数实测 24 条 / 7936.7 m），但
+"连通分量 = 1"是硬不变量。`s1_1_world` 的连通性断言用**独立实现的 BFS**，不调用 `WorldData`
+的并查集 —— 否则等于用被测代码验证被测代码。反向对照：把某个聚落的边全删掉，BFS 必须报出 ≥ 2 个分量。
+
+#### 9.7.4 锚点表契约（优先级最高，坏锚点只跳过）
+
+`data/world/anchors.json`：`{schema: 1, anchors: [{id, kind, name, x, z}]}`，`kind` ∈
+`village / town / fortress`，`id` 是稳定标识（存档与后续事件都靠它）。
+
+- **坐标逐位采用**，不抖动、不吸附、不重算 —— 这是 `A-`"锚点 100% 生效"能被逐位断言的前提。
+- 坏锚点（kind 非法 / 落水 / 坡度超限 / 与已放聚落太近 / 超出该类配额 / id 重复）⇒
+  **跳过 + 一条告警**，世界继续生成，配额由随机点补足。**绝不悄悄挪到"附近合法位置"**：
+  锚点的全部价值就是"它在那儿"。
+- 锚点坐标本身也是被断言的对象：地形参数一改导致锚点落水，`s1_1_world` 会立刻红 ——
+  这是特性（锚点与环境必须一致），不是误报。
+- 读表走 `WorldData.load_anchors()`（`{ok, anchors, warnings, reason}`）；表文件本身必须是
+  `Canon` 规范形式（用例逐字节比对 `Canon.canonicalize(file)`），且 `_read_text_file` 读到的
+  内容里 `\r` 必须为 0。
+
+#### 9.7.5 势力与队伍
+
+- 势力数 = `factions`（2–5）。**首都用最远点采样**从城镇里选（先取离地图中心最远的城镇，之后每次取
+  离已选集合最远的），全程无随机 —— 换 seed 时城镇自己会动，不需要再抽一次。
+- 聚落归属 = 最近首都（平局取小编号）。队伍数 = `ai_parties`，按 `i % factions` 轮流分配，
+  所以各方队伍数相差 ≤ 1；母城从本方聚落里随机取，落点在母城环带内找，找不到就退回母城坐标并
+  汇总一条告警。
+
+#### 9.7.6 实测（2026-10-20，默认参数 2400 米 / seed 20250929）
+
+| 指标 | 值 |
+|---|---|
+| 聚落 | **20**（12 村庄 + 4 城镇 + 4 要塞），锚点 3 条全部命中，**0 告警** |
+| 道路 | **24 条**，总长 **7936.7 m**，连通分量 **1** |
+| 最小聚落间距 | **131.0 m**（下限 120 m） |
+| 队伍 | **24** 支，三方各 **8** 支 |
+| 聚落按 region 分布 | 8 个 region 分到 4 / 3 / 6 / 2 / 2 / 1 / 1 / 1 |
+| `build()` 代价 | 中位 **2.31 ms**（min 2.23 / max 2.40，5 次） |
+| 换 seed | 20 个聚落里 **19** 个坐标变化 |
 
 ---
 
