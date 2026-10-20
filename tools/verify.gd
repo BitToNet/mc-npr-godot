@@ -135,13 +135,13 @@ const CASES := {
 	},
 	"s1_0_routes": {
 		"desc": "S1.0d 路由收口：两条路由（world→战略图 / battle）且路径真实存在、path↔route "
-				+ "双向映射唯一（diorama 不再回指任何路由）、strategic_map.tscn 是可实例化的空壳"
-				+ "（Node3D / 零子节点 / 无脚本）、run/main_scene 同步、MAX_DEPTH 仍为 2、"
+				+ "双向映射唯一（diorama 不再回指任何路由）、strategic_map.tscn 可实例化（S1.2a 起挂入口脚本）"
+				+ "（Node3D / 零子节点 / 入口脚本 / 无相机）、run/main_scene 同步、MAX_DEPTH 仍为 2、"
 				+ "没有 goto_strategic()，且『已在 world 再 goto_world()』被拒后路由栈/屏幕/实例数零变化",
 		"kind": "pure",
 	},
 	"s1_0_migration": {
-		"desc": "S1.0d 迁移闭环：路由 world → 文件 → 场景根类（Node3D/StrategicMap/无脚本/零子节点）"
+		"desc": "S1.0d 迁移闭环：路由 world → 文件 → 场景根类（Node3D/StrategicMap/入口脚本/零子节点）"
 				+ "三者一致；run/main_scene 已改指且 diorama 退居可加载的回归夹具；"
 				+ "引擎直接加载的战略图被 _sync() 认领为 world，此时 goto_world() 被拒且不重载同一文件",
 		"kind": "pure",
@@ -262,6 +262,13 @@ const CASES := {
 		"desc": "换 seed 后宏观指标真的变化：三个 seed 两两文本不同；海岸线长度 / region 面积分布 / "
 				+ "道路总长 / 聚落按 region 分布 四项里至少 3 项随 seed 动；并显式记录"
 				+ "「聚落数恒为 20，不能当变化指标」",
+		"kind": "pure",
+	},
+	"s1_2_boot": {
+		"desc": "世界入口：`WorldSession.boot()` 先按 seed 重置 Rng 再建世界 ⇒ 同 seed 两次 boot 文本"
+				+ "逐字节相同；先往 world_gen 子流里多抽 200 个数再 boot，结果不变（这是 S1.1d 前置缺陷的"
+				+ "反向对照）；换 seed 文本必变；boot 出的世界与 `_world_fixture()` 逐字节一致；"
+				+ "`strategic_map.tscn` 实例化后 session 非空、零告警、20 聚落；失败路径不抛异常",
 		"kind": "pure",
 	},
 }
@@ -661,6 +668,8 @@ func _dispatch(id: String) -> void:
 			await _case_world_gen()
 		"s1_1_variety":
 			await _case_world_variety()
+		"s1_2_boot":
+			await _case_world_session()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -972,7 +981,7 @@ func _case_boot() -> void:
 	eq(exit_code, 0, "启动 60 帧退出码 = 0")
 	not_contains(joined, "SCRIPT ERROR", "日志无 SCRIPT ERROR")
 	not_contains(joined, "ERROR:", "日志无 ERROR:")
-	# S1.0d：开机场景已从 diorama 换成战略图空壳（无脚本 / 无地形 / 无相机）。所以这里
+	# S1.0d：开机场景已从 diorama 换成战略图（当时空壳；S1.2a 起挂入口脚本，仍无地形 / 相机）。所以这里
 	# 改**反向断言**：日志里不能再出现地形生成行。S1.0c 之前这条正向断言证明"世界真的建
 	# 起来了"，现在它证明的是相反的事实 —— 开机确实换了场景，而不是"还偷偷加载着 diorama"。
 	# 正向证据在 `s1_0_migration`：run/main_scene == 路由 world == 该文件真实存在。
@@ -1473,16 +1482,26 @@ func _case_routes() -> void:
 	eq(String(router.call("_route_for_path", "res://scenes/dev/art_samples.tscn")), "",
 			"未登记场景不映射成任意路由")
 
-	section("场景解剖：世界根 = StrategicMap 空壳")
+	section("场景解剖：世界根 = StrategicMap（S1.2a 起挂世界入口脚本）")
 	var ps := load(WORLD_SCENE) as PackedScene
 	if ok(ps != null, "strategic_map.tscn 可加载为 PackedScene", WORLD_SCENE):
 		var inst: Node = ps.instantiate()
 		if ok(inst != null, "可实例化"):
 			eq(inst.get_class(), "Node3D", "根节点是 Node3D")
 			eq(String(inst.name), "StrategicMap", "根名 = StrategicMap（路由→文件→根 第三段）")
-			eq(inst.get_child_count(), 0, "零子节点：S1.2 之前不含任何内容")
-			eq(inst.get_script(), null,
-					"根节点无脚本：不提前造一个什么都不做的 strategic_map.gd")
+			eq(inst.get_child_count(), 0, "零子节点：地形 / 相机仍属 S1.2b / S1.2c")
+			# S1.2a 之前这里断言"根节点无脚本"，为的是不造一个什么都不做的占位入口。
+			# 现在脚本真的做事了（建世界），所以判据从"有没有脚本"改成"脚本是不是入口"。
+			var script: Script = inst.get_script()
+			ok(script != null, "根节点挂脚本（S1.2a 起）", WORLD_SCENE)
+			if script != null:
+				var src := String(script.source_code)
+				contains(src, "func _ready()", "脚本在 _ready() 里启动（不是空文件）")
+				contains(src, "WorldSession.boot", "走 WorldSession.boot() 这个唯一入口")
+				ok(not src.contains("TODO") and not src.contains("占位"),
+					"脚本不是占位：不含 TODO / 占位字样")
+			ok(inst.find_children("*", "Camera3D", true, false).is_empty(),
+				"仍无相机：镜头属 S1.2c")
 			eq(String(inst.scene_file_path), WORLD_SCENE, "场景自报路径 == 路由表路径")
 			inst.free()
 
@@ -1542,7 +1561,7 @@ func _case_routes() -> void:
 ## 与 `s1_0_routes` 的分工：那边管"表长什么样、拒绝逻辑对不对"（机制），这边管
 ## "开机到底落在哪、那个文件是不是同一个人"（身份）。三条断言不是重复：
 ##   ① 三环绑定：`scene_path_for("world")` → 文件可加载 → 根类 `Node3D` / 根名
-##      `StrategicMap` / 无脚本 / 零子节点；
+##      `StrategicMap` / 入口脚本（S1.2a 起）/ 零子节点 / 无相机；
 ##   ② 开机契约：`run/main_scene` == world 路径 —— 引擎自己就会落在 world 上，
 ##      不需要任何 `goto_*` 调用（这条是 S1.0a 建立的三处事实源断言的延续）；
 ##   ③ 认领与不重载：把战略图设成 `current_scene`（模拟引擎开机），`_sync()` 必须把它
@@ -1574,8 +1593,12 @@ func _case_migration() -> void:
 			eq(inst.get_class(), "Node3D", "根类是 Node3D（与路由表的『世界』定位一致）")
 			eq(String(inst.name), "StrategicMap", "根名是 StrategicMap")
 			eq(inst.get_child_count(), 0, "零子节点：内容留给 S1.2")
-			eq(inst.get_script(), null, "无脚本：空壳阶段不挂伪入口")
-			eq(String(inst.scene_file_path), path, "文件自报路径 == 路由表路径")
+			eq(inst.get_child_count(), 0, "零子节点：内容留给 S1.2b / S1.2c")
+			var script2: Script = inst.get_script()
+			ok(script2 != null, "根节点挂世界入口脚本（S1.2a 起）")
+			if script2 != null:
+				contains(String(script2.source_code), "WorldSession.boot",
+					"脚本真的接上 WorldSession.boot()，不是伪入口")
 			inst.free()
 
 	section("② 开机契约：run/main_scene == world 路径，diorama 退居夹具")
@@ -4111,7 +4134,7 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 17 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 18 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
@@ -4131,6 +4154,7 @@ func _case_doc_conventions() -> void:
 		"WorldRegions": "res://scripts/world/regions.gd",
 		"WorldData": "res://scripts/world/world_data.gd",
 		"GenParams": "res://scripts/world/gen_params.gd",
+		"WorldSession": "res://scripts/world/world_session.gd",
 	}
 	for cls in classes.keys():
 		var path := String(classes[cls])
@@ -5816,13 +5840,114 @@ func _case_world_variety() -> void:
 		eq(by_region.size(), rc, "seed %s 的分布向量长度 = region 数" % label)
 
 
+## 世界入口（S1.2a）：`WorldSession.boot()` 先把子流拨回 seed 派生的起点，再按固定顺序
+## 建高度场 → region → 世界数据。本用例证明三件事：boot 幂等；先污染子流也不影响结果
+## （并有反向对照证明"污染确实会改世界"，所以断言不是恒真）；`strategic_map.tscn` 真的
+## 把这个入口接上了。
+func _case_world_session() -> void:
+	var rng: Node = get_root().get_node_or_null("Rng")
+	ok(rng != null, "Rng autoload 存在")
+	if rng == null:
+		return
+	# 母种子回到项目默认值：boot() 自己会 `seed_from`，夹具则按当前母种子派生子流。
+	rng.call("seed_from", 20250929)
+
+	section("boot 的基本形状")
+	var a := WorldSession.boot(rng, 20250929)
+	ok(a.ok, "boot 成功（错误：%s）" % "; ".join(a.errors))
+	eq(a.errors.size(), 0, "无致命错误")
+	eq(a.warnings.size(), 0, "零告警")
+	eq(a.world_seed, 20250929, "session 记住 seed")
+	eq(a.region_count(), 8, "默认参数下 8 个 region")
+	eq(a.data.settlements.size(), 20, "20 个聚落")
+	eq(a.data.roads.size(), 24, "24 条道路")
+	eq(a.data.parties.size(), 24, "24 支队伍")
+	near(a.map_size(), 2400.0, 0.001, "地图边长 2400 m")
+	ge(float(a.metrics().size()), 8.0, "指标至少有 8 个键")
+	contains(a.summary_text(), "20 个聚落", "摘要可读")
+
+	var base_text := String(Dictionary(a.to_text())["text"])
+	ok(base_text.length() > 5000, "文本长度 > 5000 字符（实际 %d）" % base_text.length())
+
+	section("同 seed 两次 boot 逐字节相同")
+	var b := WorldSession.boot(rng, 20250929)
+	eq(String(Dictionary(b.to_text())["text"]), base_text, "两次 boot 文本逐字节相同")
+
+	section("反向对照：不重置子流，世界真的会变")
+	var stream: RandomNumberGenerator = rng.call("stream", WorldSession.STREAM_NAME)
+	for i in 200:
+		stream.randf()
+	var loaded := GenParams.load_from()
+	var params := Dictionary(loaded["params"])
+	var field := HeightField.new(20250929, params)
+	var regions := WorldRegions.new(field, stream, params)
+	regions.build()
+	var anchors: Array = []
+	var anchor_table := WorldData.load_anchors()
+	if bool(anchor_table["ok"]):
+		anchors = Array(anchor_table["anchors"])
+	var dirty := WorldData.new(20250929, params, field, regions, stream, anchors)
+	dirty.build()
+	var dirty_text := String(Dictionary(dirty.to_text())["text"])
+	ne(dirty_text, base_text, "先污染子流再直接建世界 ⇒ 文本不同（证明 seed 不是唯一输入时世界会漂）")
+
+	section("正向：污染之后 boot 仍然给出同一个世界")
+	var c := WorldSession.boot(rng, 20250929)
+	eq(String(Dictionary(c.to_text())["text"]), base_text, "boot 内部的 seed_from 把污染抹掉")
+	eq(c.data.roads.size(), a.data.roads.size(), "道路条数不受调用历史影响")
+
+	section("换 seed 必变")
+	var d := WorldSession.boot(rng, 20250930)
+	ne(String(Dictionary(d.to_text())["text"]), base_text, "seed 20250930 的文本不同")
+	eq(d.data.settlements.size(), 20, "换 seed 后聚落数仍是配额 20")
+
+	section("boot 与既有夹具是同一个世界（没有另立一套生成顺序）")
+	# 上一步 boot(20250930) 把母种子换掉了；夹具按**当前**母种子派生，所以先拨回来。
+	rng.call("seed_from", 20250929)
+	var fx := _world_fixture()
+	var fx_data := WorldData.new(int(fx["seed"]), Dictionary(fx["params"]),
+			fx["field"] as HeightField, fx["regions"] as WorldRegions,
+			fx["stream"] as RandomNumberGenerator, Array(fx["anchors"]))
+	var fx_result := fx_data.build()
+	ok(bool(fx_result["ok"]), "夹具世界构建成功")
+	eq(String(Dictionary(fx_data.to_text())["text"]), base_text,
+			"boot() 与 _world_fixture() 的世界逐字节相同")
+
+	section("strategic_map.tscn 真的接上了入口")
+	var packed: PackedScene = load("res://scenes/world/strategic_map.tscn") as PackedScene
+	ok(packed != null, "strategic_map.tscn 可加载")
+	if packed != null:
+		var scene := packed.instantiate()
+		get_root().add_child(scene)
+		await process_frame
+		var wired: WorldSession = scene.get("session") as WorldSession
+		ok(wired != null, "场景 _ready() 后 session 非空（boot 错误：%s）" % String(scene.get("boot_error")))
+		eq(String(scene.get("boot_error")), "", "场景零 boot 错误")
+		if wired != null:
+			ok(wired.ok, "场景里的世界 build 成功")
+			eq(wired.data.settlements.size(), 20, "场景里的世界 20 个聚落")
+			eq(wired.warnings.size(), 0, "场景里的世界零告警")
+			var state := get_root().get_node_or_null("GameState")
+			if state != null:
+				eq(wired.world_seed, int(state.get("world_seed")), "场景用的是 GameState.world_seed")
+		scene.queue_free()
+		await process_frame
+
+	section("失败路径不抛异常")
+	var broken := WorldSession.boot(null, 20250929)
+	eq(broken.ok, false, "没有 Rng 时 ok = false")
+	ge(float(broken.errors.size()), 1.0, "至少一条错误原因")
+	contains(broken.summary_text(), "失败", "摘要说明失败")
+
+
 ## 一次"参数表 + 锚点表 + 高度场 + region"夹具。`state` 是 region 建好之后的
 ## `Rng` 状态，所有后续 `WorldData` 构建都从它重放（同 state ⇒ 同世界）。
 ##
-## 子流种子在这里**显式钉住**（`stream.seed = p_seed`）。用例共享同一条
-## `Rng.stream("world_gen")`，谁先跑谁就把状态推远了 —— 不钉住的话，"同一个 seed
-## 的世界"会随用例执行顺序变化（`--all` 里跑出来的道路条数与单跑不同，本批就是
-## 这么抓到的）。真实游戏只在开局建一次世界，不受影响；用例必须自己把入口钉死。
+## 子流在这里**拨回开局状态**（`Rng.reset()`），因为用例共享同一条
+## `Rng.stream("world_gen")`：谁先跑谁就把状态推远了 —— 不拨回去的话，"同一个 seed
+## 的世界"会随用例执行顺序变化（`--all` 里 26 条边 / 8916.9 m，单跑 24 条 /
+## 7936.7 m，本批就是这么抓到的）。生产侧由 `WorldSession.boot()` 负责同一件事，
+## 见 `scripts/world/world_session.gd`、`ENGINEERING.md` §9.8.5 与 §5 陷阱 26。
 func _world_fixture(p_seed: int = 20250929) -> Dictionary:
 	var loaded := GenParams.load_from()
 	var params := Dictionary(loaded["params"])

@@ -16,9 +16,9 @@
 
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
-| `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；战略图**空壳** —— `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，真内容在 S1.2）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
+| `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；S1.2a 起根节点挂 `strategic_map.gd`、只持有 `WorldSession`（`_ready()` 里建世界），**仍零子节点 / 无相机** —— 地形网格与镜头属 S1.2b/c）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`canon.gd`（**规范化序列化**，`class_name Canon`，S1.1a；见 §9）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
-| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b）、`world_data.gd`（**聚落/道路/势力/队伍**，`class_name WorldData`，S1.1c；见 §9.7） |
+| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b）、`world_data.gd`（**聚落/道路/势力/队伍**，`class_name WorldData`，S1.1c；见 §9.7）、`world_session.gd`（**世界入口 / 组合根**，`class_name WorldSession`，S1.2a；先重置子流再按固定顺序建世界，见 §9.9）、`strategic_map.gd`（`scenes/world/strategic_map.tscn` 的根脚本，S1.2a；无 `class_name`） |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
@@ -196,6 +196,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 25 | **"同类聚落"的命名在表里是复数、在代码里是单数 ⇒ 配额静默变 0** | `WorldData.KINDS` 用单数 `village / town / fortress`（它是聚落自己的 `kind` 值），而 `gen_params.json` 的键是复数 `villages / towns / fortresses`（它是计数）。第一版直接写 `params.get(kind, 0)`：三个配额全取到 0 ⇒ 三条锚点各报"超出配额：跳过"、随机点一个不放 ⇒ `settlements` 为空、`build()` 返回 `ok = false`。**没有崩溃、没有报错**，只有三条措辞像是"参数表配错了"的告警 | 用显式映射表 `KIND_PARAM = {village: "villages", ...}`，`_kind_quotas()` 只走它。**教训**：跨文件的两套命名（枚举值 vs 表键）必须在**一个地方**转换，且转换表要有用例覆盖（`s1_1_world` 的"配额全部放出来"就是这条的回归锁）；`Dictionary.get(key, 0)` 在缺键时**不告警**，是本坑能静默的直接原因 |
 | 26 | **同一个 seed 生成出两个不同的世界 —— 子流的入口状态没钉住** | `Rng` 的每条子流是"按名字派生一次、之后一直用下去"的；`WorldData` 只承诺"从传入的 `stream` 当前状态开始重放"，**不承诺**"同一个 `world_seed` 永远同一个世界"。用例共享同一条 `world_gen` 子流，于是前一个用例多抽几个数，后一个用例的世界就变了：`--all` 里跑出 26 条边 / 8916.9 m，单跑 24 条 / 7936.7 m（同 seed 20250929）。**症状极具迷惑性** —— 看起来像"随机不稳定"，其实是"世界的定义漏了入口条件" | 定世界之前先定入口：`Rng.reset()`（把每条子流拨回由 `(master_seed, 名字)` 派生的起点）或 `seed_from(world_seed)`，然后再建 `HeightField` / `WorldRegions` / `WorldData`。用例侧见 `tools/verify.gd` 的 `_world_fixture()`；生产侧是 **S1.2 组合根的开工前置** —— 不钉住，"同一个存档种子重建同一个世界"会随玩家这一局先抽了多少随机数而漂移。诊断口径：任何"同一 seed 结果不同"的报障，先查**入口状态**，再查算法 |
 | 27 | **引擎运行会悄悄重写 `project.godot`** | 某些引擎路径（编辑器启动、部分导出 / 导入流程）会整段删除 `project.godot` 里的注释、把 `[shader_globals]` 从原位置挪到文件尾。文件功能上仍能跑，但 `git status` 变脏，一不留神就跟着真正的改动一起提交，diff 里全是噪声 | 每次跑完引擎先 `git status --short`；若只有 `project.godot` 变了而你没打算改它，`git checkout -- project.godot` 复原（本批即如此处理），**不要**把它算进功能提交。判据：`git diff project.godot` 里只有"注释消失 + 段序变化"，没有任何值变化 |
+| 28 | **`reset()` 只拨回"已存在"的子流，母种子是会话级可变输入** | 写 `s1_2_boot` 时：先 `boot(20250929)`、再 `boot(20250930)`，然后调既有夹具 `_world_fixture()` 想证明"入口与夹具是同一个世界" —— 结果 `region_areas` 全不一样。问题不在世界，而在**母种子已被上一步换成 20250930**：夹具用 `reset()` 按**当前**母种子派生，对照文本却来自 20250929。`Rng.master_seed` 是会话级可变状态，任何 `seed_from()` 都会改掉后续所有派生起点；跨阶段比对前必须把母种子显式拨回要对照的值（本批修法：夹具前 `seed_from(20250929)`） |
 
 ---
 
@@ -383,6 +384,7 @@ S1.1c 新增 `WorldData`；`grep -n "^class_name" scripts/**/*.gd`）：
 | `WorldRegions` | `scripts/world/regions.gd` | Voronoi region 划分（S1.1b） |
 | `WorldData` | `scripts/world/world_data.gd` | 聚落 / 道路 / 势力 / 队伍 + 手工锚点（S1.1c，§9.7） |
 | `GenParams` | `scripts/world/gen_params.gd` | 世界生成参数表加载与钳制（S1.1a） |
+| `WorldSession` | `scripts/world/world_session.gd` | 世界入口 / 组合根：先 seed_from(seed)，再按固定顺序建世界（S1.2a，§9.9） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
 只在两个文件之间用的类型应走 `preload()` 常量（见 §3），因为全局类会进
@@ -752,6 +754,65 @@ Canon.write_file(path, value) # → {ok, path, bytes, sha256, reason}（写后�
 
 **这条对 S1.2 是硬前置**：组合根在建世界之前必须 `Rng.reset()` 或 `seed_from(world_seed)`，否则"同一
 个存档种子重建同一个世界"会随玩家这一局先抽了多少随机数而悄悄漂移。`ENGINEERING.md` §5 陷阱 26。
+
+---
+
+### 9.9 世界入口与组合根（S1.2a）
+
+#### 9.9.1 为什么要有"入口"，而不是每个场景自己 `new`
+
+`HeightField` / `WorldRegions` / `WorldData` 都是**被动**的：它们从传入的 `RandomNumberGenerator`
+**当前状态**接着抽数，谁先抽、抽了几个，它们一概不知道。于是"同一个 seed 同一个世界"这句话，
+在这三个类的契约里根本不成立 —— 它只有在"调用方先把子流拨回 seed 派生的起点"时才成立。
+S1.1d 就是这么抓到 26 条边 vs 24 条边的（§9.8.5、§5 陷阱 26）。
+
+`WorldSession` 就是那个调用方，也是**唯一**的调用方：场景不 `new` 三个对象，只 `boot()` 一次；
+顺序、重置、参数装载、告警汇总都收在这一个函数里。这样"世界的定义"从一句话变成一段代码，
+后来加多少场景都不会各自漂。
+
+#### 9.9.2 契约
+
+| 项 | 内容 |
+|---|---|
+| 入口 | `WorldSession.boot(rng: Node, seed: int, params := {}, params_path := GenParams.PATH, anchors_path := WorldData.PATH) -> WorldSession` |
+| `rng` | **参数注入**，不取 autoload：`--script` 下 autoload 标识符不可编译，且用例要能注入真身（见 §9.9.3 的反向对照） |
+| 第一步 | `rng.seed_from(seed)` —— 丢掉所有旧子流，`stream("world_gen")` 因此只由 seed 决定 |
+| 顺序 | `HeightField`（地形）→ `WorldRegions.build()`（划分）→ `WorldData.build()`（聚落/道路/势力/队伍）。反过来会读到还没算出来的高度 / region |
+| 只读视图 | `ok` / `errors` / `warnings` / `world_seed` / `params` / `field` / `regions` / `data` / `anchors` / `metrics()` / `to_text()` / `map_size()` / `region_count()` / `summary_text()` |
+| 不做什么 | 不写 `user://`（落盘归 `SaveSystem`）、不建网格、不碰渲染、不注册 autoload |
+
+#### 9.9.3 失败语义：三级，不是一个 `bool`
+
+| 字段 | 含义 | 世界存在吗 |
+|---|---|---|
+| `ok` | 完整世界建成了 | — |
+| `errors` | 致命原因（参数表不可用 / 拿不到子流 / region 一个都没落下 / 聚落全部放不下） | **否**，`ok = false`，调用方应显示原因而不是继续 |
+| `warnings` | 降级原因（锚点表坏了、某类配额没放满、region 中心不足……） | **是**，`ok` 仍为 true，世界可玩但已知缺了什么 |
+
+锚点表坏掉被**故意**降级为告警：手工锚点是"更好看"，不是"能不能开局"。而参数表坏掉是致命的：
+没有地图尺寸就没有世界。
+
+#### 9.9.4 场景接线（`strategic_map.tscn`）
+
+- 根节点 `StrategicMap` 挂 `scripts/world/strategic_map.gd`，`_ready()` 里 `boot()` 一次；
+  `session` 与 `boot_error` 都是可读成员，方便用例与调试层。
+- **autoload 按路径取**（`/root/Rng`、`/root/GameState`），不写标识符：`--script` 模式照样能
+  实例化这个场景做接线断言。`GameState` 缺失时退回常量 `FALLBACK_SEED = 20250929`（与
+  `GameState.DEFAULT_WORLD_SEED` / `Rng.DEFAULT_MASTER_SEED` 同值）。
+- 本批**不渲染**：节点仍零子节点、无相机。批 2 往这个根上挂地形网格，批 3 挂镜头 —— 它们都从
+  `session` 取世界，不再自己建。
+
+#### 9.9.5 实测（2026-10-20）
+
+| 项 | 数值 |
+|---|---|
+| 一次 `boot()` | ≈ **16 ms**（批 4 实测整条链 15.36 / 15.32 / 16.01 ms，含高度场 + region + 世界数据 + 序列化） |
+| `s1_2_boot` 用例 | **31 断言 / 114 ms**（含 6 次 `boot()` + 一次 `_world_fixture()` + 场景实例化） |
+| 世界文本 | 10 298 字符（seed 20250929，20 聚落 / 24 道路 / 3 势力 / 24 队伍） |
+| 与批 4 的一致性 | `boot()` 的文本与 `_world_fixture()` **逐字节相同** ⇒ 入口没有另立一套生成顺序 |
+
+**已知边界**：`WorldSession` 只保证"从 seed 重放一次世界"。它不缓存、不做增量、也不定义
+"读档后如何重建"（S1.9）—— 那时要的是"从存档里的 `world_seed` 重放 + 状态覆盖"，同样走这个入口。
 
 ---
 
