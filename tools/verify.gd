@@ -39,7 +39,7 @@ extends SceneTree
 
 const REPORT_DIR := "res://.verify"
 
-## 产品主场景路径（S1.0d 起）＝ 路由 `world` 的目标：战略图空壳。
+## 产品主场景路径（S1.0d 起）＝ 路由 `world` 的目标：战略图（S1.2b 起有地形，仍无相机）。
 ##
 ## 为什么在这里留一个字面量而不是从 `SceneRouter` 读：本文件要能**独立**发现
 ## "路由表改了、测试没改"和"测试改了、路由表没改"两种漂移。若两边共读一个源，
@@ -97,7 +97,7 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s0_2_boot": {
-		"desc": "开机场景（战略图空壳）headless 启动 60 帧，退出码 0 且日志无 ERROR/SCRIPT ERROR",
+		"desc": "开机场景（战略图：地形 + 无相机）headless 启动 60 帧，退出码 0 且日志无 ERROR/SCRIPT ERROR",
 		"kind": "pure",
 	},
 	"s0_2_scene_api": {
@@ -127,7 +127,7 @@ const CASES := {
 		"kind": "headed",
 	},
 	"s1_0_scene_arg": {
-		"desc": "capture.gd 的 --scene=res://…：同参两次独立进程逐位一致；缺省（战略图空壳）"
+		"desc": "capture.gd 的 --scene=res://…：同参两次独立进程逐位一致；缺省（战略图：地形、无相机）"
 				+ "与 --scene=diorama 的哈希组必须不同；反向对照（battle_stub 与两者都不同）"
 				+ "哈希必变；清单自报 scene；坏路径退出码 1；只带 --scene= 不触发批次也不抢退出码；"
 				+ "守卫属主清单没有放宽",
@@ -269,6 +269,13 @@ const CASES := {
 				+ "逐字节相同；先往 world_gen 子流里多抽 200 个数再 boot，结果不变（这是 S1.1d 前置缺陷的"
 				+ "反向对照）；换 seed 文本必变；boot 出的世界与 `_world_fixture()` 逐字节一致；"
 				+ "`strategic_map.tscn` 实例化后 session 非空、零告警、20 聚落；失败路径不抛异常",
+		"kind": "pure",
+	},
+	"s1_2_mesh": {
+		"desc": "战略地形网格：32 m 网格 / 75×75 格 ⇒ 11 250 三角（C- 上限 34 611 的 1/3）；"
+				+ "6×6 分块（36 块陆 + 36 块水 + 外缘裙边）；水面只覆盖水下格、顶点色带泡沫衰减；"
+				+ "顶点全部有限且落在 ±1200 m 地图内；两次 build 逐字节一致；换 seed 几何必变；"
+				+ "场景接线后 StrategicTerrain 是唯一子节点且 11 250 三角",
 		"kind": "pure",
 	},
 }
@@ -670,6 +677,8 @@ func _dispatch(id: String) -> void:
 			await _case_world_variety()
 		"s1_2_boot":
 			await _case_world_session()
+		"s1_2_mesh":
+			await _case_strategic_mesh()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -1327,7 +1336,7 @@ func _case_repro() -> void:
 
 ## --- s1_0_scene_arg ------------------------------------------------------------
 ## S1.0b 的 `--scene=res://…`（ROADMAP §5 S1.0b），S1.0d 之后**前提变了**：
-## 缺省场景不再是 diorama，而是战略图空壳。于是本用例的语义从"换场景不改像素"
+## 缺省场景不再是 diorama，而是战略图（地形 + 无相机）。于是本用例的语义从"换场景不改像素"
 ## 变成"缺省确实是空壳，而 `--scene=` 能把夹具换回来"：
 ##   ① 同参数两次独立进程截图 sha256 相同 —— `--scene=` 是确定性通道；
 ##   ② 缺省（空壳）与 `--scene=diorama` 的哈希**必须不同** —— 这是 S1.0d 的
@@ -1394,7 +1403,7 @@ func _case_scene_arg() -> void:
 		var h_dio := String(shas.get("scene_a", {}).get(name, ""))
 		ok(h_def != "" and h_dio != "", "%s：缺省与 diorama 都拿到了 sha256" % name)
 		ok(h_def != h_dio,
-				"%s：缺省（战略图空壳）≠ --scene=diorama（有内容的世界）" % name)
+				"%s：缺省（战略图：地形、无相机）≠ --scene=diorama（有内容的世界）" % name)
 
 	section("③ 反向对照：battle 与缺省、与 diorama 都不相同")
 	for name in ["s0_boot_follow", "s0_boot_wide"]:
@@ -1432,7 +1441,7 @@ func _case_scene_arg() -> void:
 
 
 ## --- s1_0_routes --------------------------------------------------------------
-## S1.0d：路由表收口 —— `world` 指向战略图空壳，S1.0c 的临时名 `strategic` 退役。
+## S1.0d：路由表收口 —— `world` 指向战略图（S1.2b 起有地形），S1.0c 的临时名 `strategic` 退役。
 ##
 ## 为什么删临时名：一个文件留两个名字会让 `_route_for_path()`（`_sync()` 开机认领路由
 ## 用的就是它）二义。S1.0c 登记 `strategic` 只是为了让本步只有"改指向"一件事可做；
@@ -1835,7 +1844,7 @@ func _case_overlay() -> void:
 	var solo_out: Array = []
 	# ⚠️ 必须**窗口模式**：headless 用的是 dummy 渲染器，`TIME_PROCESS` 没有意义 ——
 	# 那样"列里有值"会退化成"列里是 0.000"，断言看起来通过、证据其实全假（实测踩过一次）。
-	# ⚠️ 这里**不再**断言 `draw_calls > 0`：S1.0d 起开机主场景是战略图空壳（无相机、无网格），
+	# ⚠️ 这里**不再**断言 `draw_calls > 0`：S1.2b 起开机主场景是战略图（有地形、仍无相机），
 	# 一个空场景的 draw_calls 本来就是 0 —— 把它当失败是假红，把它当证据是假绿。
 	# "窗口模式真在渲染"的证据改由上面 diorama 批次的 `det_draw_rows` 承担。
 	# 另注：`--scene=` 只在截图批次里生效（换场景发生在 `Capture._run()`），
@@ -3083,16 +3092,33 @@ func _case_router() -> void:
 			bus.connect(sig, func(_a: Dictionary) -> void:
 				facts.append(sig))
 
-	section("世界基线：S1.0d 起 world 是战略图空壳（内容在 S1.2）")
+	section("世界基线：S1.2b 起 world 是「地形 + 块」，但仍没有相机")
 	var base_nodes := get_node_count()
 	var base_fp := _world_fingerprint(current_scene)
-	ok(base_nodes > 5, "世界节点数 = %d（空壳 + autoload，不是空指针）" % base_nodes)
-	eq(base_fp, "StrategicMap:Node3D:0",
-			"结构指纹只有空壳根：没有内容，也没有提前接线的脚本")
-	eq(get_nodes_in_group("main").size(), 0, "空壳世界没有 #main 组（S1.2 挂内容时再加）")
-	eq(get_nodes_in_group("terrain").size(), 0, "空壳世界没有地形")
-	eq(_world_seed_signature(), "", "空壳世界没有 seed 派生值（S1.2 才接 GameState.world_seed）")
-	print("    [note] 世界基线：节点 %d，指纹 %s" % [base_nodes, base_fp])
+	ok(base_nodes > 5, "世界节点数 = %d（地形 + autoload，不是空指针）" % base_nodes)
+	# 判据从 S1.0d 的「空壳」迁到「形如地形」：仍是能力断言，不是删断言 —— 根只有
+	# 一个子节点、块里每个 MeshInstance3D 都真的有 mesh、而且**还没有相机**。
+	ok(String(base_fp).begins_with("StrategicMap:Node3D:1|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
+			"结构指纹形如『根 → 地形 → 块容器』：%s" % String(base_fp).substr(0, 64))
+	not_contains(base_fp, "Camera3D", "还没有相机（S1.2c 的交付物，本批不提前接线）")
+	var terr: Node = current_scene.get_node_or_null("StrategicTerrain")
+	ok(terr != null, "世界有 StrategicTerrain")
+	eq(current_scene.get_child_count(), 1, "根只有地形一个子节点")
+	var chunk_n := 0
+	var mesh_n := 0
+	if terr != null:
+		var chunks: Node = terr.get_node_or_null("Chunks")
+		if chunks != null:
+			for c in chunks.get_children():
+				chunk_n += 1
+				var mi := c as MeshInstance3D
+				if mi != null and mi.mesh != null and mi.mesh.get_surface_count() > 0:
+					mesh_n += 1
+	eq(mesh_n, chunk_n, "块节点 %d 个，全部带网格" % chunk_n)
+	ge(float(mesh_n), 36.0, "至少 36 块陆地形（实测 %d 块）" % mesh_n)
+	eq(get_nodes_in_group("main").size(), 0, "战略图不挂 #main 组（那是岛屿夹具的编排组）")
+	eq(get_nodes_in_group("terrain").size(), 0, "战略图不套岛屿夹具的 #terrain 组（63 m 夹具）")
+	eq(_world_seed_signature(), "", "战略图没有夹具的 seed 派生值（它是场 + 网格，不是夹具）")
 
 	section("进入战斗：world → battle（含切换落地前的同帧语义）")
 	ok(bool(router.call("goto_battle", {"reason": "s0_3_router"})), "goto_battle() 被接受",
@@ -3253,7 +3279,7 @@ func _count_scene_instances(path: String) -> int:
 ## 世界结构指纹：去自动命名（`@MeshInstance3D@28` 里带全局计数器，两次加载必然不同）后
 ## 逐条记录「名字或类 : 类 : 子节点数」。比节点总数强：总数相同但结构换了也抓得住。
 ##
-## `root` 缺省时取 `#main` 组（diorama 夹具的入口）；S1.0d 之后战略图空壳没有 `#main`
+## `root` 缺省时取 `#main` 组（diorama 夹具的入口）；S1.0d 之后战略图没有 `#main`
 ## 组，路由用例改为显式传 `current_scene` —— 这样两个世界都能被同一套指纹度量，
 ## 而不是"空壳时指纹恒为空、相等断言自动真空通过"。
 func _world_fingerprint(root: Node = null) -> String:
@@ -4134,7 +4160,7 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 18 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 19 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
@@ -4155,6 +4181,7 @@ func _case_doc_conventions() -> void:
 		"WorldData": "res://scripts/world/world_data.gd",
 		"GenParams": "res://scripts/world/gen_params.gd",
 		"WorldSession": "res://scripts/world/world_session.gd",
+		"StrategicTerrain": "res://scripts/world/strategic_terrain.gd",
 	}
 	for cls in classes.keys():
 		var path := String(classes[cls])
@@ -4390,7 +4417,7 @@ func _read_text_file(path: String) -> String:
 func _is_headless() -> bool:
 	return DisplayServer.get_name() == "headless"
 
-## 加载**回归夹具**（diorama）。S1.0d 之后产品主场景是战略图空壳；内容用例（场景 API、
+## 加载**回归夹具**（diorama）。S1.0d 之后产品主场景是战略图（S1.2b 起有地形）；内容用例（场景 API、
 ## 叠加层、快存、九宫格、覆盖确认）要的是一片有内容的世界，所以显式加载夹具，而不是
 ## 依赖 `run/main_scene`。夹具以**子节点**身份进树（不抢 `current_scene`），与 S1.0a
 ## 起的口径一致。
@@ -5938,6 +5965,174 @@ func _case_world_session() -> void:
 	eq(broken.ok, false, "没有 Rng 时 ok = false")
 	ge(float(broken.errors.size()), 1.0, "至少一条错误原因")
 	contains(broken.summary_text(), "失败", "摘要说明失败")
+
+
+
+## S1.2b：战略地形网格。断言分四组 —— 结构与预算、几何合法性、决定论、场景接线。
+## 网格是 ield 的纯函数（着色只用位置哈希，不抽随机数），所以「逐字节一致」是可证的；
+## 反向对照是换 seed 必须换几何，否则 11 250 三角只是数出来的常量。
+func _case_strategic_mesh() -> void:
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var s := WorldSession.boot(rng, 20250929)
+	ok(s.ok, "前置：世界建成（否则网格无从谈起）")
+
+	section("结构与预算：32 m 网格 / 6×6 分块 / 三角预算")
+	var t := StrategicTerrain.new()
+	var usec := Time.get_ticks_usec()
+	var st := t.build(s.field)
+	var build_ms := float(Time.get_ticks_usec() - usec) / 1000.0
+	ok(bool(st.get("ok", false)), "build() 成功", str(st.get("reason", "")))
+	eq(int(st["cells"]), 75, "75 格：2400 m / 32 m")
+	near(float(st["step"]), 32.0, 0.001, "格距恰为 32 m")
+	eq(int(st["chunks"]), 36, "6×6 = 36 块")
+	eq(int(st["land_tris"]), 11250, "陆面 75×75×2 = 11 250 三角")
+	le(int(st["land_tris"]), 34611, "C- 面数不超上限（岛屿 21 632 × 1.6）")
+	ok(int(st["water_tris"]) > 0, "有水面三角：%d" % int(st["water_tris"]))
+	eq(int(st["water_tris"]) % 2, 0, "水面三角成对（整格拆分）")
+	eq(int(st["skirt_tris"]), 1200, "外缘裙边：4 边 × 75 格 × 2 三角 × 2 段")
+	ge(float(st["coast_cells"]), 20.0, "海岸墨线覆盖 %d 个干格" % int(st["coast_cells"]))
+	var bands: Array = st["bands"]
+	eq(bands.size(), 5, "五条色带都有统计")
+	var band_sum := 0
+	for v in bands:
+		band_sum += int(v)
+	eq(band_sum, 75 * 75, "色带计数覆盖每一格")
+	ok(int(bands[1]) > 0, "海滩带非空：%d 格（海岸环定义，不看绝对高度）" % int(bands[1]))
+	ok(int(bands[4]) > 0, "雪顶带非空：%d 格" % int(bands[4]))
+	ge(float(st["rock_cells"]), 1.0, "陡坡露出岩石：%d 格" % int(st["rock_cells"]))
+	ok(int(st["water_tris"]) > 0 and int(st["water_tris"]) < int(st["land_tris"]),
+			"水面三角 %d 少于陆面（海只在低处）" % int(st["water_tris"]))
+	le(build_ms, 400.0, "建网格耗时 %.1f ms < 400 ms" % build_ms)
+
+	section("实测网格：数与统计一致、顶点合法、水面在海平面")
+	var holder := t.get_node("Chunks")
+	var land_nodes := _count_nodes(holder, "Land_")
+	var water_nodes := _count_nodes(holder, "Water_")
+	var curtain_nodes := _count_nodes(holder, "Curtain")
+	eq(land_nodes, 36, "36 个陆块 = 6×6")
+	eq(curtain_nodes, 1, "1 个外缘裙边")
+	ge(float(water_nodes), 1.0, "水面块 %d 个（只在水下格子上才建，所以可能少于 36）" % water_nodes)
+	eq(holder.get_child_count(), land_nodes + water_nodes + curtain_nodes, "块节点数 = 陆 + 水 + 裙边")
+	eq(_count_mesh_tris(holder, "Land_"), 11250, "实测陆面三角 == 11 250")
+	eq(_count_mesh_tris(holder, "Water_"), int(st["water_tris"]), "实测水面三角 == 统计值")
+	var bad := 0
+	var ymin := 1e30
+	var ymax := -1e30
+	var xmax := 0.0
+	var zmax := 0.0
+	var water_y_bad := 0
+	var curtain_ymin := 1e30
+	for child in holder.get_children():
+		var mi := child as MeshInstance3D
+		ok(mi != null and mi.mesh != null, "块 %s 有网格" % String(child.name))
+		if mi == null or mi.mesh == null:
+			continue
+		var verts: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		var is_water := String(child.name).begins_with("Water_")
+		var is_curtain := String(child.name).begins_with("Curtain")
+		for v in verts:
+			if not (is_finite(v.x) and is_finite(v.y) and is_finite(v.z)):
+				bad += 1
+				continue
+			if is_curtain:
+				curtain_ymin = minf(curtain_ymin, v.y)
+			elif is_water:
+				if not is_equal_approx(v.y, 0.0):
+					water_y_bad += 1
+			else:
+				ymin = minf(ymin, v.y)
+				ymax = maxf(ymax, v.y)
+				xmax = maxf(xmax, absf(v.x))
+				zmax = maxf(zmax, absf(v.z))
+	eq(bad, 0, "顶点无 NaN / Inf")
+	eq(water_y_bad, 0, "水面顶点 y 恰为海平面")
+	le(xmax, 1200.001, "陆面顶点在 ±1200 m 内（|x| 最大 %.3f）" % xmax)
+	le(zmax, 1200.001, "陆面顶点在 ±1200 m 内（|z| 最大 %.3f）" % zmax)
+	ge(ymax - ymin, 100.0, "垂直落差 > 100 m（真的有起伏：%.1f m）" % (ymax - ymin))
+	le(curtain_ymin, ymin - 55.0, "外缘裙边比最低地形再低 ≥ 55 m（%.1f vs %.1f）" % [curtain_ymin, ymin])
+	near(ymin, float(st["min_y"]), 0.02, "最低点与统计一致（%.2f m）" % float(st["min_y"]))
+	near(ymax, float(st["max_y"]), 0.02, "最高点与统计一致（%.2f m）" % float(st["max_y"]))
+
+	section("决定论：同 field 逐字节一致，换 seed 必变")
+	var sig := _terrain_signature(t)
+	ok(sig.length() > 0, "签名非空：%s" % sig)
+	var t2 := StrategicTerrain.new()
+	var st2 := t2.build(s.field)
+	ok(bool(st2.get("ok", false)), "第二次 build 也成功")
+	eq(_terrain_signature(t2), sig, "两次 build 几何逐字节一致")
+	t2.build(s.field)
+	eq(t2.get_node("Chunks").get_child_count(), holder.get_child_count(), "重复 build 不叠加块")
+	rng.call("seed_from", 20250930)
+	var s2 := WorldSession.boot(rng, 20250930)
+	ok(s2.ok, "前置：换 seed 的世界建成")
+	var t3 := StrategicTerrain.new()
+	t3.build(s2.field)
+	ne(_terrain_signature(t3), sig, "换 seed 几何必变（反向对照）")
+	ne(int(t3.stats["max_y"]), int(st["max_y"]), "换 seed 最高点不同")
+
+	section("场景接线：StrategicTerrain 是唯一子节点")
+	rng.call("seed_from", 20250929)
+	var ps := load(WORLD_SCENE) as PackedScene
+	ok(ps != null, "strategic_map.tscn 可加载")
+	var inst: Node = ps.instantiate()
+	get_root().add_child(inst)
+	await process_frame
+	ok(inst.terrain != null, "场景建出了 StrategicTerrain")
+	eq(inst.get_child_count(), 1, "场景只有一个子节点（地形；相机在 S1.2c）")
+	eq(String(inst.get_child(0).name), "StrategicTerrain", "子节点就是地形")
+	var sc: Dictionary = inst.terrain_stats()
+	eq(int(sc.get("land_tris", 0)), 11250, "场景里的地形也是 11 250 三角")
+	eq(int(sc.get("cells", 0)), 75, "场景里的地形也是 75 格")
+	eq(inst.terrain.get_node("Chunks").get_child_count(), holder.get_child_count(), "场景里的块数与离树构建一致")
+	inst.queue_free()
+
+	# 清场：不留块节点，也不把母种子留在 20250930
+	t.free()
+	t2.free()
+	t3.free()
+	rng.call("seed_from", 20250929)
+## 数一个容器下前缀匹配的子节点个数（`Land_` / `Water_` / `Curtain` 各算一类）。
+func _count_nodes(container: Node, prefix: String) -> int:
+	var total := 0
+	for child in container.get_children():
+		if String(child.name).begins_with(prefix):
+			total += 1
+	return total
+
+
+## 数一个容器下前缀匹配的块里有多少三角（非索引网格：顶点数 / 3）。
+func _count_mesh_tris(container: Node, prefix: String) -> int:
+	var total := 0
+	for child in container.get_children():
+		if not String(child.name).begins_with(prefix):
+			continue
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var verts: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		total += verts.size() / 3
+	return total
+
+
+## 位置的定点哈希：跨实例比较「同一张网格」，只吃顶点坐标。
+func _terrain_signature(t: StrategicTerrain) -> String:
+	var acc := 2166136261
+	var holder := t.get_node_or_null("Chunks")
+	if holder == null:
+		return ""
+	for child in holder.get_children():
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var verts: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		acc = (acc * 16777619 + verts.size()) & 0x7fffffff
+		for v in verts:
+			acc = (acc * 16777619 + int(round(v.x * 1000.0))) & 0x7fffffff
+			acc = (acc * 16777619 + int(round(v.y * 1000.0))) & 0x7fffffff
+			acc = (acc * 16777619 + int(round(v.z * 1000.0))) & 0x7fffffff
+	return str(acc)
+
 
 
 ## 一次"参数表 + 锚点表 + 高度场 + region"夹具。`state` 是 region 建好之后的
