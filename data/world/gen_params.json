@@ -1,0 +1,11 @@
+{
+  "ai_parties": 24,
+  "factions": 3,
+  "fortresses": 4,
+  "map_size": 2400,
+  "regions_max": 9,
+  "regions_min": 6,
+  "schema": 1,
+  "towns": 4,
+  "villages": 12
+}

@@ -17,8 +17,8 @@
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
 | `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；战略图**空壳** —— `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，真内容在 S1.2）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
-| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
-| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
+| `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`canon.gd`（**规范化序列化**，`class_name Canon`，S1.1a；见 §9）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
+| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`） |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
@@ -26,7 +26,7 @@
 | `shaders/common/` | 全场景共用着色器 | `toon.gdshader`（3 阶阶梯硬光影）、`outline.gdshader`（逆壳描边） |
 | `shaders/terrain/` | 地形/水体专用 | `water.gdshader` |
 | `shaders/character/`、`shaders/fx/` | **待建** | 角色与特效着色器（M3 起） |
-| `data/` | 资源与数据表（`units/ weapons/ frames/ world/ economy/`） | **待建**（M1 起，数据驱动要求见 §3.2） |
+| `data/` | 资源与数据表（`units/ weapons/ frames/ world/ economy/`） | **已建**（S1.1a 起）：`world/gen_params.json`（世界生成参数表，schema=1）。其余子目录随 M1 之后的数据驱动步骤逐个建 |
 | `tools/` | 验收用例与离线脚本 | `verify.gd`（断言运行器）、`img_diff.gd`、`baseline.gd`、`analyze.gd`、`diag.gd`、`probe.gd`、`windtest.gd` |
 | `docs/` | 文档 | `ROADMAP.md`（唯一事实来源）、`成果.md`（只追加成果台账）、`ENGINEERING.md`（本文件） |
 | `.shots/`、`.verify/` | 产物目录，**不进版本库** | 截图与验收报告 |
@@ -191,6 +191,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 20 | **headless 下窗口尺寸是 0×0 ⇒ `pure` 用例验不了鼠标命中** | 给菜单调试页按钮写点击断言时，`_click_control` 报告"矩形已排出尺寸、点击真的落下去了"，但处理器**一次都没跑**、提示行原封不动。实测 `DisplayServer.get_name() == "headless"`、`DisplayServer.window_get_size() == (0, 0)`：注入的鼠标事件没有可命中的视口 | `pure` 用例只验"控件在 + 连着处理器 + 处理器真驱动目标"（直接 `pressed.emit()`），鼠标命中路径交给 `headed` 用例（同一套 `UiKit.button_page` 工厂与页面结构）。**注意** `_click_control` 的返回值只说明"矩形非退化"，**不说明事件被谁接住** —— 想区分这两件事，得让处理器留下可观测痕迹（如改写提示行） |
 | 21 | **"发布构建完全禁用"的闸门不能只做在 `_input` 里** | `_input` 只挡按键，挡不住"有人直接调 `quick_save()`"（未来的新 UI 入口、测试代码、任何脚本调用都能绕过），于是"完全禁用"名不副实 | 闸门做进**函数内部**：`quick_save()` / `quick_load()` 开头检查 `_quick_enabled()`（= 对应 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**为此再写一次 `OS.is_debug_build()` —— `s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是因为在调试页多写了一行而把该断言变红 |
 | 22 | **`var x := <返回 Variant 的调用>` 会编译失败，而不是警告** | 本步给 `capture.gd` 加 `--at=` 时写 `var p := _parse_point(...)`（该函数返回 `Variant`，成功给 `Vector3`、失败给 `null`）。工程开了"警告即错误"，于是 `Parse Error: The variable type is being inferred from a Variant value` ⇒ **整个 `capture.gd` 加载失败** ⇒ 9 个 autoload 里 `Capture` 挂了，引擎报 `Failed to instantiate an autoload` | 显式标注 `var p: Variant = _parse_point(...)`。**更值得记住的是排查路径**：窗口模式（`Godot_v4.7-stable_win64.exe`）跑截图时**静默挂死、一行输出都没有、进程还退干净了**；改用 `*_console.exe --headless --quit-after N` 跑同一场景，编译错误立刻打出来。**症状是"卡住/无输出"，病因往往在编译期，`*_console.exe` 是唯一的眼睛** |
+| 23 | **Godot 的 JSON 只有 float 一种数字，且 `String.unicode_compare` 不存在** | 写 `Canon` 时两处实测：① `JSON.parse` 把 `12` 解成 `12.0`、`-0` 解成 `0.0` ⇒ 纯 `%.6f` 的"读回再写"永远不可能与原文相等；② 照文档写的 `String.unicode_compare` 直接编译失败（`Cannot find member "unicode_compare" in base "String"`） | ① 数字规则改为"整数值写整数、非整数 `%.6f`"（理由与边角见 §9.5）；② 键序用 `keys.sort()`（`Array.sort()` 对 String 就是码点序，实测 `["1","A","Z","_x","a","b","中文"]`）。**教训**：格式契约里每条"看起来该有"的 API 都要先跑一次探针再写进文档 —— 这条坑正是"文档先写、代码后写、没人验中间那句"的产物 |
 
 ---
 
@@ -356,7 +357,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ### 7.2 `class_name`（全局类）
 
-**12 个**（S0.5 实测，`grep -n "^class_name" scripts/**/*.gd`）：
+**14 个**（S0.5 实测 12 个，S1.1a 新增 2 个；
+`grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
 |---|---|---|
@@ -364,14 +366,16 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | `CameraRig` | `scripts/core/camera_rig.gd` | 正交等距相机 |
 | `InputSetup` | `scripts/core/input_setup.gd` | 输入映射 + 唯一调试热键闸门 |
 | `MeshUtil` | `scripts/core/mesh_util.gd` | 低模几何库 |
+| `Canon` | `scripts/core/canon.gd` | 规范化序列化（S1.1a，§9） |
 | `UiKit` | `scripts/ui/ui_kit.gd` | 公共控件工厂 |
 | `UiPanel` | `scripts/ui/ui_panel.gd` | 调试 HUD 面板 |
 | `BrutalSlider` | `scripts/ui/ui_slider.gd` | 方形滑块 |
 | `CloudField` | `scripts/world/clouds.gd` | 云层 |
 | `DayNight` | `scripts/world/day_night.gd` | 昼夜与光照 |
 | `Scatter` | `scripts/world/scatter.gd` | 植被散布 |
-| `Terrain` | `scripts/world/terrain.gd` | 地形生成 |
+| `Terrain` | `scripts/world/terrain.gd` | 地形生成（演示岛尺度） |
 | `WaterSurface` | `scripts/world/water.gd` | 水面 |
+| `GenParams` | `scripts/world/gen_params.gd` | 世界生成参数表加载与钳制（S1.1a） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
 只在两个文件之间用的类型应走 `preload()` 常量（见 §3），因为全局类会进
@@ -442,14 +446,14 @@ var p: Variant = _parse_point(text)   # ✅ 显式声明
 
 ## 9. 数据表格式（`Canon` 契约）
 
-> ⏳ **`Canon` 未实现**。`scripts/core/canon.gd` 目前**不存在**（`ROADMAP` 附录 A 把它列为
-> S1.1 的新增文件）。本节只写**契约**，供 S1.1 照着实现；`s0_5_doc_conventions` 用例
-> 断言的就是"本节确实标了『待建』"，而不是假装它已经在跑。
+> ✅ **`Canon` 已落地**（S1.1a）：`scripts/core/canon.gd`，`class_name Canon`（不是 autoload，
+> 纯静态，余量留给 M1–M6）。本节由"契约草案"改为"实现说明"；`s0_5_doc_conventions`
+> 断言的是"本节标了已落地 + `canon.gd` 真的存在 + 三个入口都在"，以及"旧的『未实现』标记已清空"。
 
 ### 9.1 为什么需要规范化序列化
 
 世界生成与存档要做**字节级比对**（"同一个 seed 是否真的生成了同一个世界"）。
-`JSON.stringify()` 的键序取决于字典内部顺序、浮点打印位数也不固定，同一份数据能写出
+`JSON.stringify()` 的键序取决于字典插入顺序、浮点打印位数也不固定，同一份数据能写出
 不同字节。所以需要一个规范化出口。
 
 ### 9.2 契约
@@ -458,22 +462,62 @@ var p: Variant = _parse_point(text)   # ✅ 显式声明
 |---|---|
 | 编码 | UTF-8，**不带 BOM** |
 | 换行 | `\n`（LF），**不用** `\r\n`；文件末尾**恰好一个** `\n` |
-| 键序 | 字典序（`String.unicode_compare` 升序），嵌套对象递归排序 |
-| 浮点 | `%.6f`（定点 6 位小数，不用科学计数法） |
-| 整数 | 十进制，无前导零 |
+| 键序 | 按 Unicode **码点**升序（`Array.sort()`），嵌套对象递归排序。⚠️ 原文写的是 `String.unicode_compare` —— **该 API 在 Godot 4 不存在**（实测 `Cannot find member "unicode_compare" in base "String"`），S1.1a 更正 |
+| 浮点 | 非整数值 `%.6f`（定点 6 位，不用科学计数法）；**整数值写成整数**（`2400.0` → `2400`）。原因见 §9.5 ① |
+| 整数 | 十进制，无前导零；`\|x\| > 2^53` 的整数值 float 用 `%.0f`（仍是纯整数位串，不用 `1e+20`） |
+| 负零 | 归一为 `0` / `0.000000`：`-1e-9` 不会被写成 `-0.000000` |
 | 布尔/null | `true` / `false` / `null` |
-| 数组 | 保序（不排序） |
-| schema 字段 | 每个顶层对象必须含 `"schema": <int>`，用于版本迁移（§3.5） |
+| 数组 | **保序**（不排序；顺序是数据，不是迭代副作用） |
+| 空容器 | `{}` / `[]`，写在一行 |
+| schema 字段 | 每个顶层对象必须含 `"schema": <整数>`，用于版本迁移（§3.5）。写成 `1.0` 也接受（读回按整数写），写成 `1.5` 拒绝 |
+| 不支持的值 | `Vector3` / `Color` / `Object` / 非字符串键 / `NAN`·`Inf` → **整次序列化失败**并报出键路径（如 `$.a.b[1]`）。**绝不退化成 `str()`** —— 那会把"逐字节相等"偷偷降级成"`str()` 相等" |
+| 嵌套上限 | 64 层（自引用结构会在这里被拦住，而不是爆栈） |
 | 文本 | 一律存 **key**（如 `"ui.menu.save"`），不存已翻译的字符串 —— 语言切换时存档不用重写 |
-| 读入容错 | 数值超范围时**钳制到合法区间并 `push_warning`**，不静默接受、也不整份拒读 |
+| 读入容错 | 数值超范围时**钳制到合法区间**，不静默接受、也不整份拒读。⚠️ 原因写进返回值的 `warnings`，**由调用方决定是否 `push_warning`**（`GenParams` 与 `SaveSystem` 同口径；纯函数保持可测、不打日志） |
 
-### 9.3 与 `SaveSystem` 的边界
+### 9.3 与 `SaveSystem` 的边界（并更正一处过期说法）
 
-`SaveSystem`（S0.3，已实现）**已经**是"键字典序 + `%.6f` + `\n`"的实现，
-但它带着存档专属逻辑（槽位、原子写、迁移钩子），不适合给世界生成复用。
-`Canon` 是把其中**纯序列化**那一层抽出来的结果 —— S1.1 落地时应以
-`save_system.gd` 的现有行为为**基准**（先让它通过同一批字节断言，再替换调用点），
-而不是重新发明一套格式。
+⚠️ 本节原文声称"`SaveSystem`（S0.3，已实现）**已经**是键字典序 + `%.6f` + `\n`"，
+**S1.1a 实测为假**：`save_system.gd` 用的是
+`JSON.stringify(_build_payload(slot), "  ", false)` —— 键序是**插入序**（`false` 是"不排序"），
+浮点是**最短往返表示**（`0.1 + 0.2` 打成 `0.3`）。`Canon` 因此是**新写的**纯序列化层，
+不是"从 `SaveSystem` 抽出来"的。
+
+所以 **S1.1a 不动 `SaveSystem` 的写出路径**（改了会让 9 槽位 / 原子写用例的字节断言全变），
+分工先记为：
+
+| | 负责 | 格式 |
+|---|---|---|
+| `SaveSystem` | 存档：槽位、原子写、迁移钩子 | 暂不动（插入序 + 最短浮点） |
+| `Canon` | 世界生成 / 数据表 / 任何要逐字节比对的产物 | 本节契约 |
+
+统一留到 **S1.9（存档 schema v2）**：那时一次性把存档写出切到 `Canon`，并重跑 `s0_3_*`。
+
+### 9.4 四个入口
+
+```gdscript
+Canon.to_text(value)          # → {ok, text, reason}
+Canon.from_text(text)         # → {ok, value, reason}（数字一律是 float，见 §9.5 ①）
+Canon.canonicalize(text)      # 解析后重新规范化 → {ok, text, reason}（判断"这个文件是否规范"）
+Canon.write_file(path, value) # → {ok, path, bytes, sha256, reason}（写后回读校验，失败不落盘）
+```
+
+返回 `Dictionary` 而不是裸 `String`：空串与"合法但为空"无法区分，想忽略错误的人必须显式忽略 `ok`。
+
+**第一张按本契约落地的表**：`data/world/gen_params.json`（`scripts/world/gen_params.gd`，
+`GenParams.load_from()` / `validate()`）。它的表文件逐字节等于自己的 `canonicalize()` 结果 ——
+手改破坏格式会被 `s1_1_params` 逮住（`docs/ROADMAP.md` §6 S1.1）。
+
+### 9.5 两处实测更正（S1.1a）
+
+① **Godot 的 JSON 解析把每个数字都变 float**：`parse("12")` → `12.0`，`parse("-0")` → `0.0`。
+若坚持纯 `%.6f`，`schema: 1` 会写成 `1.000000`、读回再写仍是 `1.000000`（看似幂等），
+但任何 int 字段一旦经过一次解析就永久变成浮点形态；而"整数值写整数"让
+`表文件 == canonicalize(表文件)` 这种**文件级**断言成立。这是选它的唯一理由，不是为了好看。
+
+② **`%.6f` 的两个边角**：`"%.6f" % 1e-9` → `0.000000`（很小但非零的数会被写没，属可接受的定点损失）；
+`"%.6f" % -1e-9` → `-0.000000`（负零噪声，已归一到 `0.000000`）。
+`is_finite(NAN) == false`，所以非有限数走失败分支而不是写成 `nan`。
 
 ---
 

@@ -220,6 +220,19 @@ const CASES := {
 				+ "6 张教材截图存在且 sha256 与 s0_5_samples 批次清单一致",
 		"kind": "pure",
 	},
+	"s1_1_canon": {
+		"desc": "Canon 规范化序列化：键按码点升序（乱序插入也必须排好）/ 整数值写整数、非整数 %.6f / "
+				+ "2 空格缩进 + LF + 恰好一个结尾换行、无 BOM / 字符串转义可回读 / "
+				+ "顶层 schema 必填 / 不支持的值（Color/Vector3/非字符串键/NAN/自引用）fail-fast 且报出键路径 / "
+				+ "两次序列化逐位一致 + 读回再写幂等；反向对照：手写未排序 JSON ≠ Canon 输出",
+		"kind": "pure",
+	},
+	"s1_1_params": {
+		"desc": "gen_params.json 参数表：表文件本身是 Canon 规范形式、默认值 = ROADMAP 初值且在安全区间内 / "
+				+ "越界 clamp + 告警 / 类型错误回退默认 / regions_min>max 修正 / 聚落总数上下钳制 / "
+				+ "未知键与缺键告警 / 高版本 schema 整表拒读 / 坏文件回退默认不崩、不写 user://",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -603,6 +616,10 @@ func _dispatch(id: String) -> void:
 			await _case_probe_loop()
 		"s0_5_doc_conventions":
 			await _case_doc_conventions()
+		"s1_1_canon":
+			await _case_canon()
+		"s1_1_params":
+			await _case_gen_params()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -4053,13 +4070,14 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 12 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 14 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
 		"CameraRig": "res://scripts/core/camera_rig.gd",
 		"InputSetup": "res://scripts/core/input_setup.gd",
 		"MeshUtil": "res://scripts/core/mesh_util.gd",
+		"Canon": "res://scripts/core/canon.gd",
 		"UiKit": "res://scripts/ui/ui_kit.gd",
 		"UiPanel": "res://scripts/ui/ui_panel.gd",
 		"BrutalSlider": "res://scripts/ui/ui_slider.gd",
@@ -4068,6 +4086,7 @@ func _case_doc_conventions() -> void:
 		"Scatter": "res://scripts/world/scatter.gd",
 		"Terrain": "res://scripts/world/terrain.gd",
 		"WaterSurface": "res://scripts/world/water.gd",
+		"GenParams": "res://scripts/world/gen_params.gd",
 	}
 	for cls in classes.keys():
 		var path := String(classes[cls])
@@ -4087,11 +4106,23 @@ func _case_doc_conventions() -> void:
 	var style_src := _read_text_file("res://scripts/core/style.gd")
 	contains(style_src, "signal style_changed", "`*_changed` 实例：style.gd 的 style_changed")
 
-	section("§9 Canon：文档必须如实标注『未实现』，且代码里确实还没有")
-	contains(eng, "`Canon` 未实现", "ENGINEERING.md §9 明确标注 Canon 未实现")
-	ok(not FileAccess.file_exists("res://scripts/core/canon.gd"),
-			"scripts/core/canon.gd 确实不存在（文档没有撒谎）")
-	contains(road, "⏳ 未实现", "ROADMAP 附录 A 也标了 Canon 未实现")
+	section("§9 Canon：文档声明『已落地』、代码里三个入口都在，且旧的『未实现』标记已清空")
+	contains(eng, "`Canon` 已落地", "ENGINEERING.md §9 标注 Canon 已落地（S1.1a）")
+	ok(FileAccess.file_exists("res://scripts/core/canon.gd"),
+			"scripts/core/canon.gd 确实存在（文档没有虚报）")
+	var canon_src := _read_text_file("res://scripts/core/canon.gd")
+	contains(canon_src, "class_name Canon", "canon.gd 声明了 `class_name Canon`")
+	for fn in ["to_text", "from_text", "write_file"]:
+		contains(canon_src, "static func %s(" % fn, "canon.gd 提供入口 `%s()`（文档承诺的三个之一）" % fn)
+	not_contains(eng, "`Canon` 未实现", "ENGINEERING.md §9 不再残留『未实现』标记")
+	# 附录 A 里 canon.gd 的那一行：必须已标落地、且不再写『未实现』（只认这一行，
+	# 不扫全篇 —— §16 的变更日志里可能引用旧标记作为历史记录）。
+	var canon_row := ""
+	for line in road.split("\n"):
+		if line.contains("canon.gd") and line.contains("（新增"):
+			canon_row = line
+	contains(canon_row, "✅ 已落地", "ROADMAP 附录 A 的 canon.gd 行标为『已落地』")
+	not_contains(canon_row, "未实现", "该行不再写『未实现』")
 	contains(eng, "S1.1", "ENGINEERING.md §9 写明落地步骤是 S1.1")
 
 	section("§10 autoload：文档写 9，project.godot 就是 9，且顺序约束与实现一致")
@@ -4231,7 +4262,7 @@ func _case_doc_conventions() -> void:
 
 	section("反向对照：编造的锚点在文档里找不到（证明上面的断言不是假绿）")
 	# 这三条**必须失败**的查找，用来证明 contains() 真的在做事。
-	not_contains(eng, "`Canon` 已实现并投入使用", "编造锚点 ①：文档里没有『Canon 已实现』")
+	not_contains(eng, "`Canon` 支持 `Vector3` 直写", "编造锚点 ①：文档里没有『Canon 支持 Vector3 直写』")
 	not_contains(eng, "`on_xxx`（按钮）", "编造锚点 ②：文档里没有过期的 on_xxx 规则")
 	not_contains(art, "07_ok_nothing", "编造锚点 ③：文档里没有不存在的第 7 张图")
 	ok(eng.length() > 0 and not eng.contains("__s0_5_fabricated_anchor__"),
@@ -4656,6 +4687,339 @@ func _strip_from(line: String, mark: String) -> String:
 			return line.substr(0, i)
 		i += 1
 	return line
+
+
+## =============================================================================
+##  S1.1a 数据层：Canon 规范化序列化 + gen_params.json 参数表
+## =============================================================================
+## 这两条用例守的是**字节级**契约，所以断言尽量做成"逐字节等于手写的期望文本"，
+## 而不是"包含某个子串"——后者对缩进、顺序、末尾换行的变化是瞎的。
+
+## 把 {schema:1, "v": value} 序列化后取整段文本，供数字格式断言复用。
+func _canon_num(value: Variant) -> String:
+	var r := Canon.to_text({"schema": 1, "v": value})
+	return String(r["text"])
+
+
+func _case_canon() -> void:
+	await process_frame
+
+	# --- 1. 键序与结构 --------------------------------------------------------
+	section("键序：按 Unicode 码点升序，递归生效（插入顺序无关）")
+	var sample := {"zeta": 1, "alpha": {"b": true, "a": null}, "mid": [3, 1, 2], "schema": 1}
+	var built := Canon.to_text(sample)
+	ok(bool(built["ok"]), "序列化成功", String(built.get("reason", "")))
+	var text := String(built["text"])
+	var want := "\n".join(PackedStringArray([
+		"{",
+		"  \"alpha\": {",
+		"    \"a\": null,",
+		"    \"b\": true",
+		"  },",
+		"  \"mid\": [",
+		"    3,",
+		"    1,",
+		"    2",
+		"  ],",
+		"  \"schema\": 1,",
+		"  \"zeta\": 1",
+		"}",
+		"",
+	]))
+	ok(text == want, "整棵树逐字节等于手写期望（键序 / 2 空格缩进 / 分隔符）",
+			"实际：\n%s" % text)
+
+	# 同一个字典换个插入顺序，输出必须一模一样——这才是"排序真的在做事"。
+	var shuffled := {"schema": 1}
+	shuffled["mid"] = [3, 1, 2]
+	shuffled["zeta"] = 1
+	shuffled["alpha"] = {"a": null, "b": true}
+	eq(String(Canon.to_text(shuffled)["text"]), text, "乱序插入的同一个值序列化结果逐字节相同")
+
+	contains(text, "[\n    3,\n    1,\n    2\n  ]", "数组保持给定顺序（3,1,2 没有被排序）")
+	contains(String(Canon.to_text({"schema": 1, "e": {}, "l": []})["text"]),
+			"\"e\": {},\n  \"l\": []", "空对象 / 空数组写成 {} 与 []")
+
+	# --- 2. 数字 --------------------------------------------------------------
+	section("数字：整数写整数、非整数 %.6f（含 JSON 解析导致整数无法区分的后果）")
+	contains(_canon_num(2400.0), "\"v\": 2400\n", "整数值的 float 写成整数 2400（不是 2400.000000）")
+	contains(_canon_num(12), "\"v\": 12\n", "int 12 写成 12")
+	contains(_canon_num(2.5), "\"v\": 2.500000\n", "2.5 写成 2.500000（定点 6 位）")
+	contains(_canon_num(1.0 / 3.0), "\"v\": 0.333333\n", "1/3 写成 0.333333")
+	contains(_canon_num(-0.0), "\"v\": 0\n", "负零归一为 0")
+	contains(_canon_num(1e-09), "\"v\": 0.000000\n", "1e-9 写成 0.000000")
+	contains(_canon_num(-1e-09), "\"v\": 0.000000\n", "-1e-9 不产生 -0.000000（符号被归一）")
+	contains(_canon_num(1e20), "\"v\": 100000000000000000000\n", "1e20 写成整数位串（不用科学计数法）")
+	contains(String(Canon.to_text({"schema": 5.0})["text"]), "\"schema\": 5\n",
+			"schema 写成 float 5.0 时仍按整数写（读回再写才可能幂等）")
+
+	var nan_r := Canon.to_text({"schema": 1, "v": NAN})
+	ok(not bool(nan_r["ok"]), "NaN 被拒绝（不写成 nan）")
+	contains(String(nan_r["reason"]), "$.v", "NaN 的报错指出键路径 $.v")
+	var inf_r := Canon.to_text({"schema": 1, "v": INF})
+	ok(not bool(inf_r["ok"]), "Inf 被拒绝（不写成 inf）")
+
+	# --- 3. 定界符与编码 ------------------------------------------------------
+	section("定界与编码：LF、恰好一个结尾换行、无 CR、无 BOM")
+	ok(text.ends_with("\n"), "以换行结尾")
+	ok(not text.ends_with("\n\n"), "结尾恰好一个换行（不是两个）")
+	ok(not text.contains("\r"), "不含 CR（纯 LF）")
+	eq(text.unicode_at(0), 0x7B, "首字符是 {（没有 UTF-8 BOM）")
+
+	# --- 4. 字符串转义 --------------------------------------------------------
+	section("字符串：转义后能被 JSON 解析回原值，中文不转成 \\uXXXX")
+	var tricky := "引号\" 反斜杠\\ 换行\n 制表\t 中文"
+	var esc := Canon.to_text({"schema": 1, "s": tricky})
+	var back := Canon.from_text(String(esc["text"]))
+	ok(bool(back["ok"]), "含转义的输出仍是合法 JSON")
+	var decoded: Dictionary = back["value"]
+	eq(String(decoded["s"]), tricky, "字符串往返逐字符相同")
+	contains(String(esc["text"]), "中文", "中文按 UTF-8 原样写出（不转 \\uXXXX）")
+
+	# --- 5. fail-fast：不支持的值必须报错并指出路径 ---------------------------
+	section("fail-fast：不支持的值 / 非字符串键 / 缺 schema / 自引用")
+	var bad_color := Canon.to_text({"schema": 1, "a": {"b": [1, Color.RED]}})
+	ok(not bool(bad_color["ok"]), "Color 被拒绝（不会退化成 str()）")
+	contains(String(bad_color["reason"]), "$.a.b[1]", "报错精确到 $.a.b[1]")
+	contains(String(bad_color["reason"]), "Color", "报错说明是哪种类型")
+
+	var bad_vec := Canon.to_text({"schema": 1, "v": Vector3(1, 2, 3)})
+	ok(not bool(bad_vec["ok"]), "Vector3 被拒绝")
+	contains(String(bad_vec["reason"]), "$.v", "Vector3 的报错指出 $.v")
+
+	var bad_key := Canon.to_text({1: "x", "schema": 1})
+	ok(not bool(bad_key["ok"]), "非字符串键被拒绝")
+	contains(String(bad_key["reason"]), "键必须是 String", "报错说明键类型问题")
+
+	var no_schema := Canon.to_text({"a": 1})
+	ok(not bool(no_schema["ok"]), "顶层缺少 schema 被拒绝")
+	contains(String(no_schema["reason"]), "schema", "报错提到 schema")
+
+	var bad_schema := Canon.to_text({"schema": 1.5})
+	ok(not bool(bad_schema["ok"]), "非整数 schema 被拒绝")
+	contains(String(bad_schema["reason"]), "必须是整数", "报错说明 schema 必须整数")
+
+	var cyclic := {"schema": 1}
+	cyclic["self"] = cyclic
+	var cyc_r := Canon.to_text(cyclic)
+	ok(not bool(cyc_r["ok"]), "自引用结构被深度上限拦住（不爆栈）")
+	contains(String(cyc_r["reason"]), "嵌套超过", "报错说明触发了嵌套上限")
+
+	# --- 6. 幂等 + 反向对照 ---------------------------------------------------
+	section("幂等：读回再写仍逐字节相同；反向对照：手写非规范 JSON 不会等于 Canon 输出")
+	var first := String(Canon.to_text(sample)["text"])
+	var once := Canon.from_text(first)
+	ok(bool(once["ok"]), "Canon 的输出能被自己解析（往返前提）")
+	var second := String(Canon.to_text(once["value"])["text"])
+	eq(second, first, "同一份文本读回再序列化逐字节相同（幂等）")
+	var third := String(Canon.to_text(Canon.from_text(second)["value"])["text"])
+	eq(third, second, "再来一轮仍相同（不是靠一次巧合）")
+
+	var hand_written := "{\n  \"schema\": 1,\n  \"b\": 1,\n  \"a\": 2\n}\n"
+	ne(String(Canon.to_text(Canon.from_text(hand_written)["value"])["text"]), hand_written,
+			"手写未排序的 JSON 与 Canon 输出不相等（证明排序不是空转）")
+	eq(String(Canon.to_text(Canon.from_text(hand_written)["value"])["text"]),
+			"{\n  \"a\": 2,\n  \"b\": 1,\n  \"schema\": 1\n}\n",
+			"规范化后的键序是 a, b, schema")
+
+	# --- 7. write_file -------------------------------------------------------
+	section("write_file：两次写同值字节与 sha256 相同、回读可解析、失败不落盘")
+	var path := "res://.verify/s1_1_canon_probe.json"
+	var bad_path := "res://.verify/s1_1_canon_bad.json"
+	var w1 := Canon.write_file(path, sample)
+	var w2 := Canon.write_file(path, sample)
+	ok(bool(w1["ok"]), "第一次写成功", String(w1.get("reason", "")))
+	ok(bool(w2["ok"]), "第二次写成功", String(w2.get("reason", "")))
+	eq(String(w1["sha256"]), String(w2["sha256"]), "两次写入 sha256 逐位相同")
+	eq(int(w1["bytes"]), int(w2["bytes"]), "两次写入字节数相同")
+	eq(FileAccess.get_file_as_string(path), first, "落盘内容与 to_text 输出逐字节相同")
+	eq(FileAccess.get_sha256(path), String(w1["sha256"]), "报告的 sha256 就是磁盘上那份文件的 sha256")
+	ok(bool(Canon.from_text(FileAccess.get_file_as_string(path))["ok"]), "落盘文件可被 JSON 解析")
+
+	var wbad := Canon.write_file(bad_path, {"schema": 1, "v": Color.RED})
+	ok(not bool(wbad["ok"]), "含不支持的值时 write_file 失败")
+	eq(int(wbad["bytes"]), 0, "失败时报告 0 字节")
+	ok(not FileAccess.file_exists(bad_path), "失败时根本没有落盘（不留半截文件）")
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	ok(not FileAccess.file_exists(path), "清理探针文件")
+
+
+func _case_gen_params() -> void:
+	await process_frame
+
+	var table_path := "res://data/world/gen_params.json"
+	var table_text := _read_text_file(table_path)
+
+	# --- 1. 表文件本身 --------------------------------------------------------
+	section("表文件：存在、是合法 JSON、且本身就是 Canon 规范形式")
+	ok(FileAccess.file_exists(table_path), "data/world/gen_params.json 存在")
+	ok(table_text.length() > 0, "表文件非空")
+	var canon := Canon.canonicalize(table_text)
+	ok(bool(canon["ok"]), "表文件可被 Canon 解析", String(canon.get("reason", "")))
+	ok(String(canon["text"]) == table_text,
+			"表文件逐字节等于它自己的规范化结果（手改破坏格式会被逮住）",
+			"规范化后：\n%s" % String(canon["text"]))
+
+	var parsed: Dictionary = _parse_json_silent(table_text)
+	eq(int(parsed.get("schema", -1)), GenParams.SCHEMA, "表里 schema = 当前版本")
+
+	# --- 2. 默认值 = ROADMAP 初值，且在安全区间内 -----------------------------
+	section("默认值：等于 ROADMAP §6 S1.1 的初值，且全部落在安全区间内")
+	var expected := {
+		"map_size": 2400,
+		"regions_min": 6,
+		"regions_max": 9,
+		"villages": 12,
+		"towns": 4,
+		"fortresses": 4,
+		"factions": 3,
+		"ai_parties": 24,
+	}
+	for key in expected.keys():
+		var field := String(key)
+		var want := int(expected[key])
+		eq(int(GenParams.DEFAULTS[field]), want, "内置默认 `%s` = %d" % [field, want])
+		eq(int(parsed.get(field, -1)), want, "表文件里的 `%s` = %d（表与代码默认值不漂移）" % [field, want])
+		var bounds: Array = GenParams.RANGES[field]
+		ge(float(GenParams.DEFAULTS[field]), float(bounds[0]), "`%s` 不低于安全下限 %d" % [field, int(bounds[0])])
+		le(float(GenParams.DEFAULTS[field]), float(bounds[1]), "`%s` 不高于安全上限 %d" % [field, int(bounds[1])])
+	var base := GenParams.defaults()
+	var base_total := int(base["villages"]) + int(base["towns"]) + int(base["fortresses"])
+	ge(float(base_total), float(GenParams.SETTLEMENTS_RANGE[0]), "默认聚落总数 %d 不低于下限" % base_total)
+	le(float(base_total), float(GenParams.SETTLEMENTS_RANGE[1]), "默认聚落总数 %d 不高于上限" % base_total)
+
+	# --- 3. 真表加载 ----------------------------------------------------------
+	section("load_from：真表零告警、字段与默认值一致")
+	var loaded := GenParams.load_from()
+	ok(bool(loaded["ok"]), "真表可用", String(loaded.get("reason", "")))
+	eq(bool(loaded["used_defaults"]), false, "没有回退内置默认值")
+	var loaded_warns := PackedStringArray(loaded["warnings"])
+	eq(loaded_warns.size(), 0, "真表不产生任何告警")
+	var loaded_params := Dictionary(loaded["params"])
+	for key in expected.keys():
+		var field := String(key)
+		eq(int(loaded_params[field]), int(expected[key]), "加载后 `%s` = %d" % [field, int(expected[key])])
+
+	# --- 4. 越界只钳制 + 告警 -------------------------------------------------
+	section("越界：clamp 到安全区间并逐条告警（不崩、不静默）")
+	var clamp_cases := [
+		{"field": "map_size", "value": 100, "want": 600},
+		{"field": "map_size", "value": 99999, "want": 4000},
+		{"field": "factions", "value": 1, "want": 2},
+		{"field": "factions", "value": 9, "want": 5},
+		{"field": "ai_parties", "value": 100, "want": 40},
+	]
+	for c in clamp_cases:
+		var field := String(c["field"])
+		var out := GenParams.validate(_with(c["field"], c["value"]))
+		var params := Dictionary(out["params"])
+		var warns := PackedStringArray(out["warnings"])
+		eq(int(params[field]), int(c["want"]),
+				"`%s` = %d 钳制为 %d" % [field, int(c["value"]), int(c["want"])])
+		eq(warns.size(), 1, "`%s` = %d 恰好产生 1 条告警（没有额外噪声）" % [field, int(c["value"])])
+		contains(String(warns[0]), field, "告警点名了字段 `%s`" % field)
+		eq(bool(out["used_defaults"]), false, "钳制不算整体回退")
+
+	# --- 5. 类型错误 / 未知键 / 缺键 ------------------------------------------
+	section("类型错误、未知键、缺键：逐项告警且只影响该字段")
+	var bt := GenParams.validate(_with("map_size", "big"))
+	eq(int(Dictionary(bt["params"])["map_size"]), 2400, "字符串类型的 map_size 回退默认 2400")
+	contains(String(PackedStringArray(bt["warnings"])[0]), "类型错误", "告警说明是类型错误")
+
+	var bb := GenParams.validate(_with("factions", true))
+	eq(int(Dictionary(bb["params"])["factions"]), 3, "bool 类型回退默认 3")
+
+	var un := GenParams.validate(_with("map_sizee", 2))
+	eq(int(Dictionary(un["params"])["map_size"]), 2400, "未知键不影响实际字段")
+	contains(String(PackedStringArray(un["warnings"])[0]), "map_sizee", "告警点名了拼错的键")
+
+	var missing := GenParams.defaults()
+	missing["schema"] = GenParams.SCHEMA
+	missing.erase("factions")
+	var mi := GenParams.validate(missing)
+	eq(int(Dictionary(mi["params"])["factions"]), 3, "缺字段取默认值 3")
+	contains(String(PackedStringArray(mi["warnings"])[0]), "缺少字段", "告警说明字段缺失")
+
+	var fr := GenParams.validate(_with("towns", 3.7))
+	eq(int(Dictionary(fr["params"])["towns"]), 4, "3.7 四舍五入为 4")
+	contains(String(PackedStringArray(fr["warnings"])[0]), "四舍五入", "告警说明做了取整")
+
+	# --- 6. regions 顺序与聚落总数 -------------------------------------------
+	section("跨字段约束：regions_min ≤ regions_max、聚落总数落在 [8, 40]")
+	var regions := GenParams.defaults()
+	regions["schema"] = GenParams.SCHEMA
+	regions["regions_min"] = 9
+	regions["regions_max"] = 6
+	var rg := GenParams.validate(regions)
+	var rg_params := Dictionary(rg["params"])
+	le(float(rg_params["regions_min"]), float(rg_params["regions_max"]),
+			"修正后 regions_min ≤ regions_max")
+	contains(String(PackedStringArray(rg["warnings"])[0]), "regions_min", "告警点名 regions_min/regions_max")
+
+	var cw := GenParams.validate(_with("villages", 40))
+	var cw_params := Dictionary(cw["params"])
+	var cw_total := int(cw_params["villages"]) + int(cw_params["towns"]) + int(cw_params["fortresses"])
+	eq(cw_total, 40, "48 个聚落被裁到上限 40")
+	eq(int(cw_params["villages"]), 32, "裁掉的是 villages（32），城镇与要塞不动")
+	contains(String(PackedStringArray(cw["warnings"])[0]), "聚落总数", "告警说明聚落总数越界")
+
+	var zero := GenParams.defaults()
+	zero["schema"] = GenParams.SCHEMA
+	zero["villages"] = 0
+	zero["towns"] = 0
+	zero["fortresses"] = 0
+	var em := GenParams.validate(zero)
+	var em_params := Dictionary(em["params"])
+	eq(int(em_params["villages"]) + int(em_params["towns"]) + int(em_params["fortresses"]),
+			8, "0 个聚落被补到下限 8")
+
+	# --- 7. schema 版本 -------------------------------------------------------
+	section("schema：缺失只告警、低版本只告警、高版本整表拒读")
+	var no_schema := GenParams.defaults()
+	no_schema.erase("schema")
+	var ns := GenParams.validate(no_schema)
+	ok(bool(ns["ok"]), "缺 schema 仍按当前版本读取")
+	contains(String(PackedStringArray(ns["warnings"])[0]), "schema", "告警点名 schema 缺失")
+
+	var future := GenParams.defaults()
+	future["schema"] = 99
+	var fu := GenParams.validate(future)
+	ok(not bool(fu["ok"]), "schema 99 判定为不可用")
+	eq(bool(fu["used_defaults"]), true, "高版本整表回退默认值")
+	contains(String(fu["reason"]), "99", "理由里点名了实际版本 99")
+
+	var array_root := GenParams.validate([1, 2, 3])
+	ok(not bool(array_root["ok"]), "数组根判定为不可用")
+	eq(int(Dictionary(array_root["params"])["map_size"]), 2400, "数组根回退默认值")
+
+	# --- 8. 坏文件 -----------------------------------------------------------
+	section("坏文件：不存在 / 非 JSON 一律回退默认值且不崩")
+	var absent := GenParams.load_from("res://data/world/__absent__.json")
+	ok(not bool(absent["ok"]), "不存在的表判定为不可用")
+	contains(String(absent["reason"]), "不存在", "理由说明文件不存在")
+	eq(int(Dictionary(absent["params"])["factions"]), 3, "回退后字段取默认值")
+
+	var broken_path := "res://.verify/s1_1_broken_params.json"
+	var fh := FileAccess.open(broken_path, FileAccess.WRITE)
+	ok(fh != null, "创建坏表探针文件")
+	if fh != null:
+		fh.store_string("{ this is not json")
+		fh.close()
+	var broken := GenParams.load_from(broken_path)
+	ok(not bool(broken["ok"]), "非 JSON 表判定为不可用")
+	contains(String(broken["reason"]), "不是合法 JSON", "理由说明解析失败")
+	eq(PackedStringArray(broken["warnings"]).size(), 1, "坏文件只给 1 条告警")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(broken_path))
+	ok(not FileAccess.file_exists(broken_path), "清理坏表探针文件")
+
+
+## 造一份「默认值 + schema + 一个改动字段」的表，供上面的参数校验用。
+func _with(field: Variant, value: Variant) -> Dictionary:
+	var raw := GenParams.defaults()
+	raw["schema"] = GenParams.SCHEMA
+	raw[field] = value
+	return raw
 
 
 ## =============================================================================

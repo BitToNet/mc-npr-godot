@@ -1,7 +1,7 @@
 # Pocket Sandbox 玩法扩展规划（ROADMAP）
 
-> **文档版本**：v2.2 · 2026-10-20（版本变更一律登记在 §16）
-> **状态**：执行中 · M0 全部闭环（S0.1–S0.6 已验收）；**M1 进行中**（**S1.0 已完工**：S1.0a/b/c/d 全部 ✅，下一步 S1.1 世界数据模型与程序化生成）
+> **文档版本**：v2.3 · 2026-10-20（版本变更一律登记在 §16）
+> **状态**：执行中 · M0 全部闭环（S0.1–S0.6 已验收）；**M1 进行中**（**S1.0 已完工**：S1.0a/b/c/d 全部 ✅；**S1.1 进行中**：批 1 `Canon` + 参数表已落地待验收）
 > **性质**：本文是本项目玩法扩展的**唯一计划来源与验收台账**（single source of truth）。
 > 实现过程中的任何偏差、新增、删减，必须先回到本文更新，再动代码。
 > **目标定位**：中型商用游戏项目（Windows 桌面）。
@@ -925,8 +925,9 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
   - 聚落落点：拒绝水面与 `slope > 0.35`；同类聚落有最小间距；落不下则重试**有上限**，上限内失败换噪声偏移（不是死循环）。
   - 道路图：最近邻骨架 + 对孤立分量补边直到连通（这就是下方"拓扑连通"断言的实现方式）。
   - 一切随机走 `Rng` 具名子流 `world_gen`，**禁止**全局 `randf()`（守卫会红）。
-  - 序列化统一走 `Canon`（`scripts/core/canon.gd`，键字典序 + 浮点 `%.6f` + `\n`）——
-    否则"两次序列化字节一致"无法成立。
+  - 序列化统一走 `Canon`（`scripts/core/canon.gd`，**S1.1a 已落地**：键按码点升序 + 整数值写整数、
+    非整数 `%.6f` + LF + 顶层 `schema`）—— 否则"两次序列化字节一致"无法成立。
+    格式与两处实测更正见 `docs/ENGINEERING.md` §9。
 - 集中参数表（**2026-10-19 定为可改默认值**，落在 `data/world/gen_params.json`）：地图 2400×2400 单位、region 6–9 个、聚落 12 村庄 + 4 城镇 + 4 要塞、势力 3 个、同时活动 AI 队伍 24 支。
   - **这些数不是定案**：它们是 `gen_params.json` 的初值，安全区间为 地图 600–4000 / region 4–12 / 聚落 8–40 / 势力 2–5 / 队伍 4–40。
   - 改任一值必须重跑 `s1_1_gen`、`s1_1_variety`、`s1_10_soak`，并在 §16 登记（因为 S1.10 的 FPS 与内存判据是按 20 聚落 / 24 队伍标的）。
@@ -942,7 +943,33 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 - `B-` 输出 3 张不同 seed 的俯视全局图，聚落/道路/势力色可辨识。
 
 **依赖与风险**：M0 全部。风险：纯程序化的"设计感缺失" → 锚点表 + 后续人工复核。
-**状态**：⏳ 未开始
+
+**批次拆分（2026-10-20 对齐定稿）**
+
+一次做完会把五类红混在一起（序列化 / 生成器 / 拓扑 / 性能 / 像素），所以按依赖切 4 批：
+
+| 批 | 范围 | 交付物 | 覆盖的验收项 | 状态 |
+|---|---|---|---|---|
+| 1（S1.1a） | 序列化地基 + 参数表 | `scripts/core/canon.gd`、`scripts/world/gen_params.gd`、`data/world/gen_params.json`、用例 `s1_1_canon` / `s1_1_params` | 为 `A-` 的"同 seed 字节一致"提供唯一出口；参数表初值 + 安全区间落地 | 🧪 待验收 |
+| 2（S1.1b） | 战略高度场与 region 划分 | `scripts/world/height_field.gd`（新建；从 `terrain.gd` **复制**而非继承） | `A-` region 面积分布 | ⏳ 未开始 |
+| 3（S1.1c） | 聚落 / 道路 / 势力 / 队伍 + 手工锚点 | `scripts/world/world_data.gd`、`data/world/anchors.json` | `A-` 拓扑连通 / 不落水面 / 锚点 100% 生效 | ⏳ 未开始 |
+| 4（S1.1d） | 序列化 + 宏观指标 + 耗时 | `s1_1_gen` / `s1_1_variety` | `A-` 同 seed 字节一致 / 换 seed 三项指标变化 / `C-` < 800ms | ⏳ 未开始 |
+| — | 三张俯视全局图 | `B-` | ⚠️ **阻塞**：俯视图要有战略相机与地形渲染才能拍，二者都在 S1.2。三选一（并入 S1.2 交付 / 建临时预览场景 / S1.2 完成后补拍）需在批 4 前裁定，本规划**不预判** | ⚠️ 待裁定 |
+
+**S1.1a 落地与验收记录（2026-10-20）**
+
+| 项 | 结果 |
+|---|---|
+| 改动 | 新增 `scripts/core/canon.gd`（`class_name Canon`，纯静态四入口 `to_text` / `from_text` / `canonicalize` / `write_file`，**不占 autoload**）；新增 `data/world/gen_params.json`（`schema: 1` + 8 个字段）与 `scripts/world/gen_params.gd`（`class_name GenParams`：`DEFAULTS` / `RANGES` / `SETTLEMENTS_RANGE` / `load_from()` / `validate()`，纯函数无日志）；新增用例 `s1_1_canon` **53 断言**、`s1_1_params` **100 断言**；`s0_5_doc_conventions` 90 → **102 断言**（`class_name` 12 → 14、`Canon` 从"未实现"改为"已落地"并断言三个入口都在、编造锚点 ① 换成 `Canon` 支持 `Vector3` 直写）；文档同批更新 `ENGINEERING.md` §1 / §7.2 / §9 / §5 陷阱 23 |
+| 契约两处实测更正 | ① `String.unicode_compare` 在 Godot 4 **不存在**（照文档写会编译失败）⇒ 键序改用 `Array.sort()`（码点序）；② `JSON.parse` 把**每个**数字都变 float（`12` → `12.0`、`-0` → `0.0`）⇒ 纯 `%.6f` 永远无法"读回再写"一致，改为**整数值写整数、非整数 `%.6f`**。两处都写进 `ENGINEERING.md` §9.5 与 §5 陷阱 23 |
+| `A-` 序列化确定性 | `s1_1_canon` 53/53：两次序列化逐字节相同、读回再写幂等（连续两轮）、乱序插入输出相同、数组保序；`2400.0` → `2400`、`2.5` → `2.500000`、`-0` → `0`、`-1e-9` → `0.000000`、`1e20` 不用科学计数法；末尾**恰好一个** LF、无 CR、无 BOM、中文不转 `\uXXXX`；**fail-fast**：`Color` / `Vector3` / 非字符串键 / `NAN` / 缺 `schema` / `schema: 1.5` / 自引用结构各自失败并给出键路径（`$.a.b[1]`）；**反向对照**：手写未排序 JSON ≠ Canon 输出，规范化后键序确为 `a, b, schema` |
+| `A-` 参数表 | `s1_1_params` 100/100：表文件逐字节等于自己的 `canonicalize()` 结果；8 个初值 = 本节数值且全在安全区间；`load_from()` 真表**零告警**；越界 5 例 clamp + **恰好 1 条**告警；类型错 / 未知键 / 缺键 / 非整数逐项告警且只影响该字段；`regions_min > regions_max` 自动修正；聚落总数 48 → 40（裁 `villages` 到 32）、0 → 8（补 `villages`）；`schema: 99` 整表拒读、数组根拒读、缺文件 / 非 JSON 回退默认且不崩 |
+| `A-` 全量回归 | 窗口 `--all` **25 用例 / 0 失败 / 0 跳过 / 1119 断言 / 134.7s**、退出码 0；headless **25 / 0 失败 / 6 跳过 / 865 断言 / 31.0s**、退出码 0；启动门禁 0 条 `ERROR` / `WARNING` / `SCRIPT ERROR` |
+| `B-` 6 机位（"没碰渲染"的硬证据） | diorama 专用批次两条独立进程（`.shots/s11a_cam_a` / `s11a_cam_b`）：**6/6 sha256 与 `ENGINEERING.md` §4 基线逐位相等**、两轮互等 —— 本步只加数据层，像素零变化 |
+| 明确未动 | `save_system.gd` 的写出路径**未改**（改了会让 9 槽位 / 原子写用例的字节断言全变；切 `Canon` 留 **S1.9**，见 `ENGINEERING.md` §9.3）；`terrain.gd`、任何场景、autoload 数量（仍 **9 / 10**）零改动 |
+| 坑 | ① 新增 `class_name` 后必须 `--headless --import` 重建 `.godot/global_script_class_cache.cfg`，否则 `--script` 直接 `Identifier "Canon" not declared`（`ENGINEERING.md` §5 陷阱 1 的同类）；② 测试写法坑：`{1: "x"}` 这种"根缺 schema"的字典会**先**被 schema 检查拦下，想验"非字符串键"必须同时给出合法 `schema`；③ 见 §5 陷阱 23 |
+
+**状态**：🚧 进行中（批 1 / S1.1a ✅ 已验收 2026-10-20；批 2–4 ⏳ 未开始；`B-` 俯视图 ⚠️ 待裁定）
 
 ### S1.2 战略地图场景与镜头
 
@@ -1895,7 +1922,7 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 步骤 | 名称 | 依赖 | 状态 | 验收证据 |
 |---|---|---|---|---|
 | S1.0 | 场景与路由迁移 | M0 | ✅ 已完成 | **S1.0a ✅ 2026-10-19**（提交 `419785f`）：`scenes/main.tscn` → `scenes/dev/diorama.tscn`（git 判定 **100% 相似度重命名**，内容零改动）；`run/main_scene` / `SceneRouter.SCENES[world]` / `baseline.gd` / `verify.gd::_load_main()` 四处同行换路径，`s0_3_router` 新增「`run/main_scene` == 路由表 == 文件存在」断言（73 断言全绿）。证据：`B-` 6 机位由**两条独立进程**重采（`.shots/s10a_verify` / `.shots/s10a_verify_b`），**6/6 sha256 与 §4 基线逐位相等**且两次互等；窗口 `--all` **20 用例 / 0 失败 / 0 跳过 / 857 断言 / 109s**、退出码 0，headless 20 / 0 失败 / 5 跳过、退出码 0；headless 启动门禁 0 条 `ERROR`/`WARNING`。**S1.0b ✅ 2026-10-19**（提交 `5f03cc2`）：`capture.gd` 新增 `--scene=res://…` —— **纯修饰符**（与 `--case=`/`--out=` 同级，单独出现不触发批次也不抢退出码），`_swap_scene()` 手动换 `SceneTree.current_scene`（不碰 `change_scene_to_*`，属主仍只有 `SceneRouter`）并四条自证（新实例接管 / 路径一致 / 旧场景已释放 / 相机组 ≤1 台），任一不成立退出码 1；截图清单新增 `scene` 字段自报拍摄场景。证据：新用例 `s1_0_scene_arg` **32 断言 / 22.4s / PASS**（headed）——`--scene=diorama` 两次独立进程 × 2 图 sha256 互等**且与缺省逐位相同**（`10e29e93…` / `d56ada81…`），反向对照 `--scene=battle_stub` 2 图哈希全变（`79b0610b…`）、坏路径退出码 1、`--scene=` 独走不写清单；改完 `capture.gd` 后另跑两条独立进程，`B-` **6/6 仍与 §4 基线逐位相等**（默认路径零改动）；窗口 `--all` **21 用例 / 0 失败 / 0 跳过 / 889 断言 / 131s**、退出码 0。两个坑记在 §5：改 `run/main_scene` 对本次开机**无效**（引擎取路径早于 autoload，且自证会空洞通过）；`queue_free()` 后多等一帧会让云的增量积分前移一步 ⇒ 逐位一致立刻破产。**S1.0c ✅ 2026-10-20**（提交 `588ff28`）：路由表登记第三条 `strategic → res://scenes/world/strategic_map.tscn`（**空壳** `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，内容留 S1.2），`world` 与 `run/main_scene` **未动**；**不接线**：无 `goto_strategic()`、`goto_*` 语义不变（由 `s1_0_routes` 的"没有这个入口"反向断言守住）。证据：新用例 `s1_0_routes` **37 断言**（三路由 / 路径存在且互异 / path↔route 双向 / `MAX_DEPTH` 仍 2 / 场景可实例化且根节点解剖 / 无新入口 / 拒绝零副作用 / 收尾交还现场），`s0_3_router` 73 → **74 断言**；窗口 `--all` **22 用例 / 0 失败 / 0 跳过 / 927 断言 / 138.3s**、headless 22 / 0 失败 / 6 跳过 / 677 断言 / 33.4s，均退出码 0；启动门禁 0 条 `ERROR`/`WARNING`；`B-` 6 机位两条独立进程 **6/6 与 §4 基线逐位相等**。**S1.0d ✅ 2026-10-20**（提交 `ac512b2`）：`run/main_scene` 与路由表 `world` 同时改指 `res://scenes/world/strategic_map.tscn`，**删除** S1.0c 的临时名 `strategic`（表回到 world / battle 两条，`_route_for_path()` 不再二义）；`goto_world()` 语义**不新增分支** —— 开机由 `_sync()` 认领，此后调用照旧被拒且**不重载同一文件**（S1.0c 留下的问题用"世界实例数仍为 1"断言闭环）。证据：新用例 `s1_0_migration` **22 断言**（路由→文件→根类三环一致 / `run/main_scene` 逐字相等且 ≠ diorama / diorama 仍可加载 / 开机认领且不重载），`s1_0_routes` 37、`s0_3_router` 74 → **76**（空壳基线：指纹 `StrategicMap:Node3D:0`、`#main` 0、地形 0、seed 派生值为空），`s0_2_boot` 改为反向断言"日志不含 `[terrain]`"；窗口 `--all` **23 用例 / 0 失败 / 0 跳过 / 956 断言 / 131.1s**、headless **23 / 0 失败 / 6 跳过 / 702 断言**，均退出码 0；启动门禁 0 条 `ERROR`/`WARNING`；`B-` 6 机位走 `--scene=diorama` 专用批次（`.shots/s10d_a` / `s10d_b`）**6/6 与 §4 基线逐位相等**且两轮互等。三个坑：缺省场景已无内容 ⇒ 所有截片子进程必须显式 `--scene=diorama`；`_world_fingerprint()` 走 `#main` 会在空壳上**真空通过**，加 `root` 形参；白名单收紧回 0 后**注释里的** `res://scenes/dev/` 也算泄漏。 |
-| S1.1 | 世界数据模型与程序化生成 | S1.0 | ⏳ 未开始 | — |
+| S1.1 | 世界数据模型与程序化生成 | S1.0 | 🚧 进行中（批 1 ✅ 已验收 2026-10-20；批 2–4 ⏳ 未开始；`B-` 俯视图 ⚠️ 待裁定） | **批 1（S1.1a）落地 2026-10-20**：新增 `scripts/core/canon.gd`（`class_name Canon`，四入口，不占 autoload）、`data/world/gen_params.json`（schema=1）与 `scripts/world/gen_params.gd`（`class_name GenParams`，初值 + 安全区间 + clamp/告警 + 坏表回退）；新增用例 `s1_1_canon` **53 断言**、`s1_1_params` **100 断言**，`s0_5_doc_conventions` 90 → **102**（`class_name` 12 → 14，`Canon` 由"未实现"改"已落地"并断言三入口在）。验收：窗口 `--all` **25 用例 / 0 失败 / 0 跳过 / 1119 断言 / 134.7s**、headless **25 / 0 失败 / 6 跳过 / 865 断言 / 31.0s**，均退出码 0；启动门禁 0 条 `ERROR`/`WARNING`/`SCRIPT ERROR`；`B-` 6 机位两条独立进程（`.shots/s11a_cam_a` / `s11a_cam_b`）**6/6 sha256 与 `ENGINEERING.md` §4 基线逐位相等**且两轮互等。落地时实测更正契约两处（`String.unicode_compare` 不存在；`JSON.parse` 数字全变 float ⇒ 整数写整数），见 §5 陷阱 23。用户 2026-10-20 判定通过（§0.1 第 ④ 步），提交哈希见紧随的 `docs(roadmap)` 提交 |
 | S1.2 | 战略地图场景与镜头 | S1.1 | ⏳ 未开始 | — |
 | S1.3 | 队伍棋子与移动 | S1.2 | ⏳ 未开始 | — |
 | S1.4 | 时间与日历系统 | S1.2 | ⏳ 未开始 | — |
@@ -2025,6 +2052,8 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | 2026-10-20 | **v2.0 → v2.1：S1.0c 落地并闭环（路由表登记 `strategic`，只登记不接线）**。① 新增 `scenes/world/strategic_map.tscn` —— **空壳**（`Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机），真实内容留 S1.2；② `SceneRouter.SCENES` 追加 `strategic`，`world` 与 `run/main_scene` **一个字节都没动**（切 `world` 是 S1.0d）；③ **不新增** `goto_strategic()`、不改 `goto_*` 语义 —— 本步的验收物就是"表条目在、接线面没扩大"，`s1_0_routes` 用"没有这个入口"的反向断言把范围钉死；④ `s0_3_router` 路由名集合 2 → 3（73 → 74 断言）；⑤ 新增 `s1_0_routes` **37 断言**（三路由 / 路径存在且互异 / `run/main_scene` 未动 / `MAX_DEPTH` 仍 2 / path↔route 双向 / 场景根节点解剖 / 无新入口 / 拒绝零副作用 / 收尾交还现场）；⑥ §5 S1.0c 行置 ✅ 并补落地记录（含"用例切到 world 后不清理会让下一个用例多出一个世界"的坑，以及留给 S1.0d 的 `goto_world()` 语义问题）；⑦ §15 台账、`ENGINEERING.md` 场景表与"只有两个路由"的过期表述同步；⑧ 修掉 §16 表内 `S0.3 批次 2` / `批次 3` 之间的 1 处空行（既有格式缺陷，会把表格截断成两张；本次编辑落在同一张表，顺带修正并回读相邻行） | `A-` 窗口 `--all` **22 用例 / 0 失败 / 0 跳过 / 927 断言 / 138.3s**、headless 22 / 0 失败 / 6 跳过 / 677 断言 / 33.4s，均退出码 0；启动门禁 0 条 `ERROR`/`WARNING`/`SCRIPT ERROR`；`B-` 两条独立进程重采 6 机位，**6/6 sha256 与 §4 基线逐位相等**、两轮互等（新场景未进渲染路径） | 用户 2026-10-20 对齐三问三答，均取推荐项（真空壳 / 完整门禁后直接两提交推送 / 只登记不接线） |
 | 2026-10-20 | **v2.2：S1.0d 落地，S1.0（场景与路由迁移）闭环**。① `project.godot` 的 `run/main_scene` 与 `SceneRouter.SCENES[world]` 同时改指 `res://scenes/world/strategic_map.tscn`，**删除** S1.0c 的临时名 `strategic`（一个文件只留一个名字，`_route_for_path()` 不再二义）；② `goto_world()` **不新增分支** —— 开机由 `_sync()` 认领，此后调用照旧被拒且**不重载同一文件**，S1.0c 留的问题用"世界实例数仍为 1"断言闭环；③ 新增 `s1_0_migration`（22 断言），`s1_0_routes` 37、`s0_3_router` 76（空壳基线），`s0_2_boot` 改为反向断言"开机日志不含 `[terrain]`"；④ **所有截片子进程显式 `--scene=diorama`**（缺省场景已无内容，否则"逐位一致"会真空通过、"两图必须不同"会假红）；⑤ `_world_fingerprint()` 增加 `root` 形参（空壳没有 `#main` 组）；⑥ §5 的产品码 `scenes/dev/` 登记表收紧回 **0 条**（注释里的路径也算泄漏） | 战略图接管 `world` 是 §5 S1.0 的最后一步；不做这一步，S1.1 的数据层就只能挂在一个"演示岛兼任世界"的临时形态上 | 用户（本会话批准执行 S1.0d） |
 | 2026-10-20 | S1.0d 验收证据入账：窗口 `--all` **23 用例 / 0 失败 / 0 跳过 / 956 断言 / 131.1s**、headless **23 / 0 失败 / 6 跳过 / 702 断言**，均退出码 0；`B-` 6 机位走 `--scene=diorama` 专用批次（`.shots/s10d_a` / `s10d_b`）**6/6 与 `docs/ENGINEERING.md` §4 基线逐位相等**且两轮互等；启动门禁 0 条 `ERROR`/`WARNING`/`SCRIPT ERROR` | §0.1 闭环第 ④ 步：验收结论必须可追溯到命令与实测数值 | 用户（本会话批准执行 S1.0d） |
+| 2026-10-20 | **v2.2 → v2.3：S1.1 拆 4 批，批 1（S1.1a：序列化地基 + 参数表）落地待验收**。① §6 S1.1 增补「批次拆分」表（批 1 序列化+参数表 / 批 2 高度场+region / 批 3 聚落·道路·势力·队伍+锚点 / 批 4 `WorldData`+三个宏观指标+800ms）与「S1.1a 落地与验收记录」；② 新增 `scripts/core/canon.gd`（`class_name Canon`，`to_text` / `from_text` / `canonicalize` / `write_file` 四入口，**不占 autoload**）、`data/world/gen_params.json`（schema=1，8 字段）、`scripts/world/gen_params.gd`（`class_name GenParams`，`DEFAULTS`/`RANGES`/`SETTLEMENTS_RANGE`/`load_from`/`validate`）；③ **契约两处实测更正**：`String.unicode_compare` 在 Godot 4 不存在 ⇒ 键序改 `Array.sort()`（码点序）；`JSON.parse` 把每个数字变 float ⇒ 纯 `%.6f` 无法幂等，改为整数值写整数、非整数 `%.6f`；④ §6 S1.1 的 `Canon` 描述、附录 A 的 `canon.gd` 行（旧的"未实现"标记改写为"已落地"）与 `data/**` 行同步；⑤ `ENGINEERING.md` §1 目录职责、§7.2 `class_name` 12 → 14、§9 由"契约草案"改写为"实现说明"（含 §9.3 更正"`SaveSystem` 已经是键字典序 + `%.6f`"这处**过期且为假**的说法、§9.4 四入口、§9.5 两处实测）、§5 新增陷阱 23；⑥ 用例 `s1_1_canon` 53 / `s1_1_params` 100，`s0_5_doc_conventions` 90 → 102（编造锚点 ① 换成 `Canon` 支持 `Vector3` 直写）；⑦ §15 台账 S1.1 置 `🚧 进行中（批 1 🧪 待验收）` | 用户要求"拆分出当前最紧要的单步任务，单步计划不要规划过长"；S1.1 一次做完会把序列化 / 生成器 / 拓扑 / 性能 / 像素五类红混在一起，故按依赖切 4 批；批 1 是其余三批的唯一出口（没有 `Canon` 就没有"同 seed 字节一致"） | 用户 2026-10-20 对齐三问三答，均取推荐项：① 范围 = `Canon` + 参数表 ② 不动 `SaveSystem`、只更正文档 ③ 数字格式 = 整数值写整数 + 非整数 `%.6f` |
+| 2026-10-20 | 登记一条**待裁定的验收项冲突**：S1.1 的 `B-`（3 张不同 seed 的俯视全局图）在 S1.2（战略地形与相机）之前无法拍摄 —— 本规划不为它新建临时预览场景，也不静默降级为"贴图占位"，而是记为 ⚠️ 待裁定（并入 S1.2 交付 / 建临时预览场景 / S1.2 后补拍），须在批 4 前定 | 避免"数据层做完了但验收项拍不出来"在批 4 才暴露；`B-` 的三张图要求"聚落/道路/势力色可辨识"，这既是渲染问题也是配色问题，需要一个相机与一套战略地形 | 实测登记（S1.1a 执行过程），裁定待用户 |
 
 ## 附录 A：本规划对现有代码的改动面预估
 
@@ -2042,11 +2071,12 @@ S2.2 帧数据内核**曾考虑**提前到 M1 中期（§13 R4），**2026-10-19
 | `scripts/ui_panel.gd` | 保留为调试面板；新 UI 抽取公共控件工厂 | S0.4、S1.5 |
 | `scripts/ui/menu_page.gd`、`scripts/ui/save_grid.gd`（新增） | 游戏内菜单页与 3×3 宫格组件（§3.5）；S0.4 在其上加调试入口、S6.3 在其上加槽位管理（删除/多分辨率） | S0.3 ✅、S0.4、S6.3 |
 | `scenes/main.tscn` → **`scenes/dev/diorama.tscn`** | 挂载 `MenuLayer`（默认隐藏）；**S1.0a 换路径**，**S1.0d 起不再是主场景**（`run/main_scene` 改指战略图，它降为回归夹具）；`world_seed` 与两套时钟的收编改到战略图入口 | S0.3 ✅、**S1.0 ✅**、S1.2 |
-| **`scripts/core/canon.gd`（新增；⏳ 未实现）** | 规范化序列化（键字典序 + `%.6f` + `\n`），供世界生成与存档做字节级比对。**S0.5 只写契约不写实现**（`docs/ENGINEERING.md` §9 标注"待建"），代码落地在 S1.1；`s0_5_doc_conventions` 断言该"待建"标记确实存在 | S1.1、S1.9 |
+| **`scripts/core/canon.gd`（新增；✅ 已落地 S1.1a）** | 规范化序列化（键**码点**升序 + 整数写整数/非整数 `%.6f` + LF + 顶层 `schema`），供世界生成与存档做字节级比对。**S0.5 只写契约不写实现**（当时 `docs/ENGINEERING.md` §9 标注"待建"），**S1.1a 落地**：`class_name Canon`、四个入口（`to_text` / `from_text` / `canonicalize` / `write_file`）、不支持的值 fail-fast 报键路径。落地时实测更正了契约两处（`String.unicode_compare` 不存在、纯 `%.6f` 无法幂等），见 `ENGINEERING.md` §9.5 与 §5 陷阱 23 | **S1.1a ✅**、S1.9 |
+| **`scripts/world/gen_params.gd` + `data/world/gen_params.json`（新增；✅ 已落地 S1.1a）** | 世界生成参数表与加载器：初值（2400 / region 6–9 / 20 聚落 / 3 势力 / 24 队伍）、安全区间、越界 clamp + 告警、类型错回退默认、高版本 schema 整表拒读。表文件本身按 `Canon` 规范形式存放（`s1_1_params` 断言"文件 == 自己的规范化结果"） | **S1.1a ✅** |
 | **`scripts/world/height_field.gd`（新增）** | 战略尺度高度场，`WorldGen` 与 `strategic_terrain` 共用同一 `height_at` | S1.1、S1.2 |
 | **`scripts/world/strategic_map.gd` / `strategic_camera.gd`（新增）** | 战略图场景根与三档缩放相机（不扩 `camera_rig.gd`） | S1.2 |
 | **`scripts/world/ai_director.gd`（新增，纯静态）** | AI 行为与遭遇判定；必须能在 `--script` headless 下跑 10 日 soak | S1.6 |
-| **`data/**`（新增目录）** | `world/` `economy/` `quests/` `i18n/`；所有玩法数值外置，代码只留结构常量 | S1.1 起 |
+| **`data/**`（新增目录）** | `world/` `economy/` `quests/` `i18n/`；所有玩法数值外置，代码只留结构常量 | S1.1a ✅（`world/gen_params.json`）、S1.1 起 |
 | `scripts/scatter.gd` | 保留；其 MultiMesh 模式被 S4.3 复用为性能范本 | S4.3 |
 
 ## 附录 B：与既有美术规范的一致性自检
