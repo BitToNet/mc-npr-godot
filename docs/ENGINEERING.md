@@ -18,7 +18,7 @@
 |---|---|---|
 | `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；战略图**空壳** —— `Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，真内容在 S1.2）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`canon.gd`（**规范化序列化**，`class_name Canon`，S1.1a；见 §9）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
-| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`） |
+| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b） |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
@@ -192,6 +192,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 21 | **"发布构建完全禁用"的闸门不能只做在 `_input` 里** | `_input` 只挡按键，挡不住"有人直接调 `quick_save()`"（未来的新 UI 入口、测试代码、任何脚本调用都能绕过），于是"完全禁用"名不副实 | 闸门做进**函数内部**：`quick_save()` / `quick_load()` 开头检查 `_quick_enabled()`（= 对应 action 在不在，与 `F1`/`F3` 同一个事实来源）。**不要**为此再写一次 `OS.is_debug_build()` —— `s0_4_overlay` 守着"全项目只有 `input_setup.gd` 一处判断构建类型"，本步第一版就是因为在调试页多写了一行而把该断言变红 |
 | 22 | **`var x := <返回 Variant 的调用>` 会编译失败，而不是警告** | 本步给 `capture.gd` 加 `--at=` 时写 `var p := _parse_point(...)`（该函数返回 `Variant`，成功给 `Vector3`、失败给 `null`）。工程开了"警告即错误"，于是 `Parse Error: The variable type is being inferred from a Variant value` ⇒ **整个 `capture.gd` 加载失败** ⇒ 9 个 autoload 里 `Capture` 挂了，引擎报 `Failed to instantiate an autoload` | 显式标注 `var p: Variant = _parse_point(...)`。**更值得记住的是排查路径**：窗口模式（`Godot_v4.7-stable_win64.exe`）跑截图时**静默挂死、一行输出都没有、进程还退干净了**；改用 `*_console.exe --headless --quit-after N` 跑同一场景，编译错误立刻打出来。**症状是"卡住/无输出"，病因往往在编译期，`*_console.exe` 是唯一的眼睛** |
 | 23 | **Godot 的 JSON 只有 float 一种数字，且 `String.unicode_compare` 不存在** | 写 `Canon` 时两处实测：① `JSON.parse` 把 `12` 解成 `12.0`、`-0` 解成 `0.0` ⇒ 纯 `%.6f` 的"读回再写"永远不可能与原文相等；② 照文档写的 `String.unicode_compare` 直接编译失败（`Cannot find member "unicode_compare" in base "String"`） | ① 数字规则改为"整数值写整数、非整数 `%.6f`"（理由与边角见 §9.5）；② 键序用 `keys.sort()`（`Array.sort()` 对 String 就是码点序，实测 `["1","A","Z","_x","a","b","中文"]`）。**教训**：格式契约里每条"看起来该有"的 API 都要先跑一次探针再写进文档 —— 这条坑正是"文档先写、代码后写、没人验中间那句"的产物 |
+| 24 | **参数表里 int 与 float 无从区分 ⇒ 米制字段会被"整数闸门"悄悄抹平** | S1.1a 的 `GenParams.validate()` 对所有字段一律 `int(roundf(v))`（计数类字段的正确做法）。S1.1b 加 `hill_amplitude` 等 4 个**米制浮点**字段后发现：`120.4` 会被四舍五入成 `120` 并附一条"不是整数"告警 —— 告警在 `warnings` 里，而**地形高度已经按 120 算了**，这种偏差在截图上看不出来，只会让"参数表里写的数"与"实际地形"永久对不上。另外 `Canon` 把整数值的 float 写成 `120`（JSON 无 int/float 之分），所以表文件里这些字段**看起来是整数**，更容易被误改成计数处理 | 显式维护 `GenParams.FLOAT_FIELDS`（当前 4 个）并在 `validate()` 里**先分支**：浮点字段只 clamp、不取整、int 输入自动升为 float；整数字段保留"四舍五入 + 告警"。用例把两侧都钉住：`137.5` 原样保留且**零告警**（`s1_1_params`），`3.7` → `4` 且**恰好一条**告警。**教训**：`JSON` 没有数字类型，"读到的 `8` 是计数还是 8 米"只能由**代码里的字段清单**回答；新增数值字段时必须同时决定它属于哪一侧 |
 
 ---
 
@@ -357,7 +358,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ### 7.2 `class_name`（全局类）
 
-**14 个**（S0.5 实测 12 个，S1.1a 新增 2 个；
+**16 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`；
 `grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
@@ -375,6 +376,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | `Scatter` | `scripts/world/scatter.gd` | 植被散布 |
 | `Terrain` | `scripts/world/terrain.gd` | 地形生成（演示岛尺度） |
 | `WaterSurface` | `scripts/world/water.gd` | 水面 |
+| `HeightField` | `scripts/world/height_field.gd` | 战略尺度高度/生物群系场（S1.1b，§9.6） |
+| `WorldRegions` | `scripts/world/regions.gd` | Voronoi region 划分（S1.1b） |
 | `GenParams` | `scripts/world/gen_params.gd` | 世界生成参数表加载与钳制（S1.1a） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
@@ -518,6 +521,78 @@ Canon.write_file(path, value) # → {ok, path, bytes, sha256, reason}（写后�
 ② **`%.6f` 的两个边角**：`"%.6f" % 1e-9` → `0.000000`（很小但非零的数会被写没，属可接受的定点损失）；
 `"%.6f" % -1e-9` → `-0.000000`（负零噪声，已归一到 `0.000000`）。
 `is_finite(NAN) == false`，所以非有限数走失败分支而不是写成 `nan`。
+
+### 9.6 战略尺度高度场与 region 划分（S1.1b）
+
+> ✅ **已落地**：`scripts/world/height_field.gd`（`class_name HeightField`）、
+> `scripts/world/regions.gd`（`class_name WorldRegions`）。两者都是 `RefCounted` 实例类，
+> **不占 autoload**（仍 9 / 10）。用例 `s1_1_height`（41 断言）/ `s1_1_regions`（37 断言）。
+
+#### 9.6.1 单位与坐标系（唯一约定，不许有第二种）
+
+| 量 | 单位 / 取值 | 说明 |
+|---|---|---|
+| `height_at(x, z)` | **世界米**，原点在地图中心 | 与渲染面同轴；海平面 = 参数 `water_level`（默认 0） |
+| `normalized_height_at(x, z)` | `0..1` | `(h − water_level) / (max_height − water_level)`，水下钳到 0 |
+| `max_height` | 米 | `base_height + hill_amplitude × 1.30 + detail_amplitude`，**由参数算出**；`RELIEF_CEILING = 1.30` 是结构常量不是玩法数值 |
+| `slope_at(x, z)` | 米/米（升跑比） | 中心差分，探距 `SLOPE_STEP = 8.0 m`；`0.3` 以上算陡坡（`ROCK_SLOPE`） |
+| `map_size` 与 `GRID` | 米 / 格 | `world_half = map_size / 2`；归属网格 `CELL = 32.0 m` ⇒ 默认 2400 米 = **75 × 75** 格 |
+| `biome_at` | 6 个字符串之一 | `water` / `beach` / `grass` / `forest` / `highland` / `snow`；陆地 5 种在 `LAND_BIOMES` |
+
+**为什么高度返回米而不是 0–1**：`strategic_terrain` 要拿它直接顶点定位、聚落要判"是否在水下"、
+镜头要算包围盒 —— 全都需要米。归一化只留给需要 0–1 的消费方（配色 ramp、坡度直方图），
+且它必须是**另一个显式函数**，否则"我拿到的是米还是比例"会靠猜。
+
+#### 9.6.2 决定论：高度场里没有随机
+
+- 5 层 `FastNoiseLite`（`_n_coast` / `_n_base` / `_n_ridge` / `_n_detail` / `_n_moisture`）的种子
+  = `world_seed + {0, 977, 4241, 7331, 1699}`，**偏移是写死的**；同 `world_seed` + 同参数 ⇒
+  逐点逐位相同（用例用 `PackedFloat32Array ==` 比对整张 75×75×3 采样表，而不是抽样近似）。
+- 噪声频率一律用**"跨地图周期数"**表达（`_cycles(c) = c / map_size`，取 3 / 4 / 7 / 60 / 5）：
+  改 `map_size` 是**缩放**地形，不是改变"地形里能放几座山"。写成"每米频率"会得到相反的行为，
+  而且要到 S1.2 接渲染时才会发现。
+- 随机只出现在 **region 中心**：`WorldRegions._init(field, stream, params)` 显式接收一个
+  `RandomNumberGenerator`。游戏侧传 `Rng.stream("world_gen")`；`verify.gd` 是 `--script` 模式
+  （没有 autoload 标识符），用 `get_root().get_node("Rng").call("stream", "world_gen")`。
+  **不读 autoload、不裸 `randf()`** —— 否则同一 seed 的重放会取决于"之前谁抽过随机"。
+
+#### 9.6.3 重放随机序列的最省事办法：`RandomNumberGenerator.state`
+
+`state` 是可读写的 `int`。用例的做法是：`saved = stream.state` → `build()` → `stream.state = saved`
+→ 再 `build()`，然后逐格比较 `owner`。这比"另建一个同 seed 的 RNG"更严格 —— 它验证的是
+**同一条序列**，而不是"另一个从同一起点出发、可能走岔的实现"。反向对照：换 `world_seed`
+后数量或归属必有一项不同（否则"重放相同"就退化成恒真）。
+
+#### 9.6.4 region 划分契约
+
+- 中心数 = `stream.randi_range(regions_min, regions_max)`（默认 6–9）；放不下时**告警并降级**
+  （`regions` 里如实给出实际数量），不崩、不静默补位。
+- 归属：每个单元格就近中心（`owner[i] = argmin`），**陆地格恰属一个 region**、水格 `owner = -1`。
+  因此"面积和 = 陆地格数 × 32²"是可以直接算出来对账的，不需要额外记账。
+- `prune()` 删掉 0 格 region 并**重编号**（`id` 保持 `0..count-1` 稠密）—— 稠密 id 让存档、
+  UI、AI 都能用数组下标，不必维护"id → 槽"的映射。
+- 返回 `{ok, count, regions, cell, grid_w, grid_h, land_cells, water_cells, warnings}`；
+  查询面只暴露 `region_at(x, z)` / `region_info(id)` / `area_total()` / `cell_count_total()` /
+  `water_cell_count()` / `biome_counts()`，**外部不直接改 `owner`**。
+
+#### 9.6.5 实测（2026-10-20，默认参数 2400 米 / seed 20250929）
+
+| 指标 | 值 |
+|---|---|
+| 陆地占比 | **0.629**（75×75 采样点中 62.9% 高于海平面） |
+| 高度区间 | 最低 **−78.17 m**、最高 **107.71 m**（理论上限 146 m） |
+| 最陡坡度 | **1.245**（深海底 0.262） |
+| biome | 900 点扫描出现 **6 / 6** 种 |
+| region | **8 个**（区间 6–9），面积守恒，中心点各自归位 |
+| 采样代价 | 5 625 点 **6.9 ms** |
+| `build()` 代价 | **10.5 ms** |
+
+#### 9.6.6 与 `terrain.gd` 的关系：复制形状，不复制数值
+
+`terrain.gd` 是 6 机位 `B-` 基线的承载者（§4），**本批一字节未动**。`HeightField` 借鉴它的
+手法（掩码 + 岛屿幂 + 噪声叠加 + 山脊），但**参数、尺度、返回值语义都另立**（63 米演示岛 ↔
+2400 米战略图）。不要为了"少写一份"去改 `terrain.gd` 的签名或常量：那会同时改动 6 张基线图
+和 S0.3 的 `spawn_point` / `height_at` 断言。
 
 ---
 

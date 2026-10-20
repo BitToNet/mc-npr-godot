@@ -34,10 +34,24 @@ const DEFAULTS := {
 	"fortresses": 4,
 	"factions": 3,
 	"ai_parties": 24,
+	"water_level": 0.0,
+	"base_height": -18.0,
+	"hill_amplitude": 120.0,
+	"detail_amplitude": 8.0,
 }
+
+## Fields measured in metres, not counts.  They are kept separate because the
+## integer gate must not round them: `hill_amplitude = 120.4` is a legitimate
+## value, and silently snapping it to 120 would make the terrain not match the
+## table.  `Canon` still writes an integral float as `120` (JSON has no int/float
+## distinction), so the table reads back as `120.0` — stable, but worth knowing
+## before you edit it by hand.
+const FLOAT_FIELDS := ["water_level", "base_height", "hill_amplitude", "detail_amplitude"]
 
 ## Safe ranges (ROADMAP §6 Q14: 600–4000 / 4–12 / 8–40 / 2–5 / 4–40).
 ## Settlement counts are also bounded *in total* by `SETTLEMENTS_RANGE`.
+## Height ranges are wide on purpose: they are art knobs, and the failure mode of a
+## too-narrow band is "clamped without anyone noticing".
 const RANGES := {
 	"map_size": [600, 4000],
 	"regions_min": [4, 12],
@@ -47,6 +61,10 @@ const RANGES := {
 	"fortresses": [0, 40],
 	"factions": [2, 5],
 	"ai_parties": [4, 40],
+	"water_level": [-60.0, 60.0],
+	"base_height": [-120.0, 40.0],
+	"hill_amplitude": [40.0, 300.0],
+	"detail_amplitude": [0.0, 30.0],
 }
 const SETTLEMENTS_RANGE := [8, 40]
 
@@ -120,10 +138,20 @@ static func validate(raw: Variant) -> Dictionary:
 			warnings.append("字段 `%s` 是非有限数（%s）：取默认值 %s"
 					% [field, str(value), str(DEFAULTS[key])])
 			continue
+		var bounds: Array = RANGES[field]
+		if FLOAT_FIELDS.has(field):
+			var flow := float(bounds[0])
+			var fhigh := float(bounds[1])
+			if number < flow or number > fhigh:
+				var fclamped := clampf(number, flow, fhigh)
+				warnings.append("字段 `%s` = %s 超出安全区间 [%s, %s]：钳制为 %s"
+						% [field, str(number), str(flow), str(fhigh), str(fclamped)])
+				number = fclamped
+			params[field] = number
+			continue
 		var rounded := int(roundf(number))
 		if absf(number - roundf(number)) > 0.0001:
 			warnings.append("字段 `%s` 不是整数（%s）：四舍五入为 %d" % [field, str(value), rounded])
-		var bounds: Array = RANGES[field]
 		var low := int(bounds[0])
 		var high := int(bounds[1])
 		if rounded < low or rounded > high:

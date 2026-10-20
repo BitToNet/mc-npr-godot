@@ -1,11 +1,15 @@
 {
   "ai_parties": 24,
+  "base_height": -18,
+  "detail_amplitude": 8,
   "factions": 3,
   "fortresses": 4,
+  "hill_amplitude": 120,
   "map_size": 2400,
   "regions_max": 9,
   "regions_min": 6,
   "schema": 1,
   "towns": 4,
-  "villages": 12
+  "villages": 12,
+  "water_level": 0
 }

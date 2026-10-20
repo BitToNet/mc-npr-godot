@@ -233,6 +233,18 @@ const CASES := {
 				+ "未知键与缺键告警 / 高版本 schema 整表拒读 / 坏文件回退默认不崩、不写 user://",
 		"kind": "pure",
 	},
+	"s1_1_height": {
+		"desc": "战略尺度高度场：同 seed 两实例 5 625 点逐位相同、换 seed 95% 以上点变 / "
+				+ "中心陆地四角是海、海岸线穿越、值域与归一化合法 / slope_at 可手算复核 / "
+				+ "biome 分层且都在合法集合内 / 改 hill_amplitude 后 400/400 点必变且 max_height 同步",
+		"kind": "pure",
+	},
+	"s1_1_regions": {
+		"desc": "region 划分：数量落在 regions_min..max、id 稠密无空洞 / 每个陆地格恰属一个 region、"
+				+ "水格 owner=-1、面积和 = 陆地格数×32² / 中心回到自己的 region / "
+				+ "重放同一 Rng 状态逐格相同、换 seed 必变 / 一次 build 的耗时",
+		"kind": "pure",
+	},
 }
 
 ## -----------------------------------------------------------------------------
@@ -620,6 +632,10 @@ func _dispatch(id: String) -> void:
 			await _case_canon()
 		"s1_1_params":
 			await _case_gen_params()
+		"s1_1_height":
+			await _case_height_field()
+		"s1_1_regions":
+			await _case_regions()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -4070,7 +4086,7 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 14 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 16 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
@@ -4086,6 +4102,8 @@ func _case_doc_conventions() -> void:
 		"Scatter": "res://scripts/world/scatter.gd",
 		"Terrain": "res://scripts/world/terrain.gd",
 		"WaterSurface": "res://scripts/world/water.gd",
+		"HeightField": "res://scripts/world/height_field.gd",
+		"WorldRegions": "res://scripts/world/regions.gd",
 		"GenParams": "res://scripts/world/gen_params.gd",
 	}
 	for cls in classes.keys():
@@ -4889,6 +4907,32 @@ func _case_gen_params() -> void:
 	ge(float(base_total), float(GenParams.SETTLEMENTS_RANGE[0]), "默认聚落总数 %d 不低于下限" % base_total)
 	le(float(base_total), float(GenParams.SETTLEMENTS_RANGE[1]), "默认聚落总数 %d 不高于上限" % base_total)
 
+	# --- 2b. 高度参数（米制浮点，S1.1b） --------------------------------------
+	section("高度参数：默认值 = 文档初值、以米计、且全程不被取整")
+	var expected_float := {
+		"water_level": 0.0,
+		"base_height": -18.0,
+		"hill_amplitude": 120.0,
+		"detail_amplitude": 8.0,
+	}
+	for key in expected_float.keys():
+		var field := String(key)
+		var want := float(expected_float[key])
+		near(float(GenParams.DEFAULTS[field]), want, 0.000001, "内置默认 `%s` = %s" % [field, str(want)])
+		near(float(parsed.get(field, 0.0)), want, 0.000001,
+				"表文件里的 `%s` = %s（表与代码默认值不漂移）" % [field, str(want)])
+		var bounds: Array = GenParams.RANGES[field]
+		ge(float(GenParams.DEFAULTS[field]), float(bounds[0]), "`%s` 不低于安全下限 %s"
+				% [field, str(float(bounds[0]))])
+		le(float(GenParams.DEFAULTS[field]), float(bounds[1]), "`%s` 不高于安全上限 %s"
+				% [field, str(float(bounds[1]))])
+		ok(GenParams.FLOAT_FIELDS.has(field), "`%s` 登记为浮点字段（不会被四舍五入）" % field)
+	var float_names := PackedStringArray(GenParams.FLOAT_FIELDS)
+	eq(float_names.size(), 4, "浮点字段恰好 4 个（与 ENGINEERING §9.6 一致）")
+	for field in float_names:
+		ok(GenParams.DEFAULTS.has(field), "浮点字段 `%s` 在 DEFAULTS 里" % field)
+		ok(GenParams.RANGES.has(field), "浮点字段 `%s` 在 RANGES 里" % field)
+
 	# --- 3. 真表加载 ----------------------------------------------------------
 	section("load_from：真表零告警、字段与默认值一致")
 	var loaded := GenParams.load_from()
@@ -4921,6 +4965,23 @@ func _case_gen_params() -> void:
 		contains(String(warns[0]), field, "告警点名了字段 `%s`" % field)
 		eq(bool(out["used_defaults"]), false, "钳制不算整体回退")
 
+	# 浮点字段走同一条越界闸门，但钳到浮点边界而不是取整
+	var float_clamps := [
+		{"field": "hill_amplitude", "value": 5.0, "want": 40.0},
+		{"field": "hill_amplitude", "value": 9999.0, "want": 300.0},
+		{"field": "water_level", "value": -999.0, "want": -60.0},
+		{"field": "detail_amplitude", "value": 40.0, "want": 30.0},
+	]
+	for c in float_clamps:
+		var ffield := String(c["field"])
+		var fout := GenParams.validate(_with(c["field"], c["value"]))
+		var fparams := Dictionary(fout["params"])
+		var fwarns := PackedStringArray(fout["warnings"])
+		near(float(fparams[ffield]), float(c["want"]), 0.000001,
+				"`%s` = %s 钳制为 %s" % [ffield, str(c["value"]), str(c["want"])])
+		eq(fwarns.size(), 1, "`%s` = %s 恰好 1 条告警" % [ffield, str(c["value"])])
+		contains(String(fwarns[0]), ffield, "告警点名了 `%s`" % ffield)
+
 	# --- 5. 类型错误 / 未知键 / 缺键 ------------------------------------------
 	section("类型错误、未知键、缺键：逐项告警且只影响该字段")
 	var bt := GenParams.validate(_with("map_size", "big"))
@@ -4944,6 +5005,17 @@ func _case_gen_params() -> void:
 	var fr := GenParams.validate(_with("towns", 3.7))
 	eq(int(Dictionary(fr["params"])["towns"]), 4, "3.7 四舍五入为 4")
 	contains(String(PackedStringArray(fr["warnings"])[0]), "四舍五入", "告警说明做了取整")
+
+	# 浮点字段不吃这一套：区间内的非整数值必须原样保留（否则山坡高度会被悄悄抹平）
+	var frac := GenParams.validate(_with("hill_amplitude", 137.5))
+	near(float(Dictionary(frac["params"])["hill_amplitude"]), 137.5, 0.000001,
+			"137.5 原样保留（浮点字段不取整）")
+	eq(PackedStringArray(frac["warnings"]).size(), 0, "区间内的非整数值不产生告警")
+	var ftyped := GenParams.validate(_with("water_level", "high"))
+	near(float(Dictionary(ftyped["params"])["water_level"]), 0.0, 0.000001,
+			"字符串类型的 water_level 回退默认 0.0")
+	contains(String(PackedStringArray(ftyped["warnings"])[0]), "类型错误",
+			"浮点字段的类型错误也走同一闸门")
 
 	# --- 6. regions 顺序与聚落总数 -------------------------------------------
 	section("跨字段约束：regions_min ≤ regions_max、聚落总数落在 [8, 40]")
@@ -5012,6 +5084,278 @@ func _case_gen_params() -> void:
 	eq(PackedStringArray(broken["warnings"]).size(), 1, "坏文件只给 1 条告警")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(broken_path))
 	ok(not FileAccess.file_exists(broken_path), "清理坏表探针文件")
+
+
+## =============================================================================
+##  S1.1b 战略尺度：高度场 + region 划分
+## =============================================================================
+## 高度场（`scripts/world/height_field.gd`）。四组断言：
+##   ① 决定论：同 seed 两个**独立实例** 5 625 点逐位相同（不是"看起来差不多"）；
+##      换 seed 后 95% 以上的点变（反向对照：证明它不是常量场）；
+##   ② 形状：中心是陆、四角是海、海陆都占相当比例、海岸线真的穿越地图、
+##      值域被参数夹住、归一化公式可手算复核；
+##   ③ 参数真的参与：`hill_amplitude` 减半后 400/400 个采样点必变，
+##      `max_height` 随之同步 —— 这条防的是"参数读进来了但没人用"；
+##   ④ 代价：75×75 采样的耗时（它是 S1.1 的 800 ms 预算里最贵的一块）。
+func _case_height_field() -> void:
+	await process_frame
+
+	var loaded := GenParams.load_from()
+	ok(bool(loaded["ok"]), "参数表可用（高度场只接受已校验的表）", String(loaded.get("reason", "")))
+	var params := Dictionary(loaded["params"])
+	var seed_a := 20250929
+	var field := HeightField.new(seed_a, params)
+	var step := 32.0
+	var n := field.sample_count(step)
+	var half := field.half_size
+
+	section("决定论：同 seed 同参数，两个独立实例逐点逐位相同")
+	eq(n, 75, "2400 / 32 → 每边 75 个采样点")
+	var samples := field.sample_heights(step)
+	eq(samples.size(), n * n * 3, "采样是 (x, z, h) 三元组，长度 = 75×75×3")
+	var twin := HeightField.new(seed_a, params)
+	ok(twin.sample_heights(step) == samples, "第二个实例的整张采样表与第一个逐位相同")
+	eq(field.sample_count(0.0), 0, "步长 0 返回 0 个采样点（不除零、不崩）")
+	eq(field.sample_heights(0.0).size(), 0, "步长 0 的采样表为空")
+
+	section("反向对照：换 seed 后 95% 以上的采样点高度不同")
+	var other := HeightField.new(987654, params)
+	var other_samples := other.sample_heights(step)
+	var differing := 0
+	for i in range(2, samples.size(), 3):
+		if samples[i] != other_samples[i]:
+			differing += 1
+	ge(float(differing), float(n * n) * 0.95, "75×75 中 %d 个点高度不同" % differing)
+	ne(samples[2], other_samples[2], "第 1 个采样点的绝对值也不同（不只是整体偏移）")
+	ne(field.height_at(123.0, -456.0), other.height_at(123.0, -456.0), "单点高度随 seed 改变")
+
+	section("形状：中心是陆地、四角是海、海陆都占相当比例")
+	ok(not field.is_water(0.0, 0.0), "地图中心 (0, 0) 是陆地")
+	var corners := [
+		Vector2(-half + 1.0, -half + 1.0), Vector2(half - 1.0, -half + 1.0),
+		Vector2(-half + 1.0, half - 1.0), Vector2(half - 1.0, half - 1.0),
+	]
+	for c in corners:
+		ok(field.is_water(c.x, c.y), "角落 (%s, %s) 是海" % [str(c.x), str(c.y)])
+	var land := 0
+	for i in range(2, samples.size(), 3):
+		if samples[i] > field.water_level:
+			land += 1
+	var ratio := float(land) / float(n * n)
+	ge(ratio, 0.25, "陆地占比 %s 不低于 25%%（不是一颗小石子）" % str(snappedf(ratio, 0.001)))
+	le(ratio, 0.85, "陆地占比 %s 不高于 85%%（也不是一片没有海的沙盘）" % str(snappedf(ratio, 0.001)))
+
+	section("海岸线：沿 z=0 的水陆切换次数 ≥ 2")
+	var crossings := 0
+	var prev_water := field.is_water(-half + 1.0, 0.0)
+	var x := -half + 1.0
+	while x < half - 1.0:
+		x += 10.0
+		var w := field.is_water(x, 0.0)
+		if w != prev_water:
+			crossings += 1
+			prev_water = w
+	ge(float(crossings), 2.0, "扫过 %d 次水陆切换（海岸线真的穿过地图）" % crossings)
+
+	section("值域：无 NaN/INF、上下界由参数决定、归一化在 0..1")
+	var bad := 0
+	var lo := INF
+	var hi := -INF
+	for i in range(2, samples.size(), 3):
+		var h := samples[i]
+		if not is_finite(h):
+			bad += 1
+			continue
+		lo = minf(lo, h)
+		hi = maxf(hi, h)
+	eq(bad, 0, "5 625 个采样点里没有 NaN / INF")
+	var floor_h := field.base_height - field.hill_amplitude * HeightField.SHELF_DROP - field.detail_amplitude
+	near(field.max_height, field.base_height + field.hill_amplitude * HeightField.RELIEF_CEILING
+			+ field.detail_amplitude, 0.000001, "max_height = base + hill×RELIEF_CEILING + detail")
+	ge(lo, floor_h - 1.0, "最低点 %s 不低于理论下界 %s"
+			% [str(snappedf(lo, 0.01)), str(snappedf(floor_h, 0.01))])
+	le(hi, field.max_height + 1.0, "最高点 %s 不高于理论上限 %s"
+			% [str(snappedf(hi, 0.01)), str(snappedf(field.max_height, 0.01))])
+	ge(hi, field.water_level + 40.0, "确实存在 40 m 以上的山地（不是一块平板）")
+	near(field.normalized_height_at(0.0, 0.0),
+			clampf((field.height_at(0.0, 0.0) - field.water_level)
+			/ (field.max_height - field.water_level), 0.0, 1.0),
+			0.000001, "归一化高度 = (h − water_level) / (max_height − water_level)")
+	near(field.normalized_height_at(-half + 1.0, -half + 1.0), 0.0, 0.000001, "海面归一化为 0")
+
+	section("坡度：slope_at 可手算复核、最陡处明显陡于海底")
+	var e := HeightField.SLOPE_STEP
+	var manual := sqrt(pow((field.height_at(e, 0.0) - field.height_at(-e, 0.0)) / (2.0 * e), 2.0)
+			+ pow((field.height_at(0.0, e) - field.height_at(0.0, -e)) / (2.0 * e), 2.0))
+	near(field.slope_at(0.0, 0.0), manual, 0.000001, "slope_at(0,0) 与手算中心差分一致")
+	ge(field.slope_at(0.0, 0.0), 0.0, "坡度非负")
+	var max_slope := 0.0
+	for i in 400:
+		var px := lerpf(-half, half, float(i % 20) / 19.0)
+		var pz := lerpf(-half, half, float(i / 20) / 19.0)
+		max_slope = maxf(max_slope, field.slope_at(px, pz))
+	var shelf_slope := field.slope_at(-half + 1.0, -half + 1.0)
+	ge(max_slope, 0.12, "陆地上存在 %s 的坡度（不是一块平板）" % str(snappedf(max_slope, 0.001)))
+	ge(max_slope, shelf_slope, "最陡处 %s 不陡于深海底 %s 的反面（地形有高低差）"
+			% [str(snappedf(max_slope, 0.001)), str(snappedf(shelf_slope, 0.001))])
+
+	section("生物群系：水是 water、其余落在合法集合、且真的分层")
+	eq(field.biome_at(-half + 1.0, -half + 1.0), HeightField.BIOME_WATER, "海面 biome = water")
+	ok(field.biome_at(0.0, 0.0) != HeightField.BIOME_WATER, "地图中心 biome ≠ water")
+	var unknown_biome := 0
+	var seen := {}
+	for i in 900:
+		var px := lerpf(-half + 20.0, half - 20.0, float(i % 30) / 29.0)
+		var pz := lerpf(-half + 20.0, half - 20.0, float(i / 30) / 29.0)
+		var b := field.biome_at(px, pz)
+		seen[b] = true
+		if not HeightField.BIOMES.has(b):
+			unknown_biome += 1
+	eq(unknown_biome, 0, "900 个采样点的 biome 全在合法集合内")
+	ge(float(seen.size()), 4.0, "一次扫描出现 %d 种 biome（水/滩/草/高地确实分层）" % seen.size())
+	ok(seen.has(HeightField.BIOME_WATER), "扫描包含 water")
+	ok(seen.has(HeightField.BIOME_GRASS), "扫描包含 grass")
+	ok(HeightField.LAND_BIOMES.size() == 5, "陆地群系恰好 5 种（beach/grass/forest/highland/snow）")
+
+	section("参数真的参与：hill_amplitude 减半后 400/400 个采样点必变")
+	var raised := Dictionary(params.duplicate())
+	raised["hill_amplitude"] = float(params["hill_amplitude"]) * 0.5
+	var halved := HeightField.new(seed_a, raised)
+	var moved := 0
+	for i in 400:
+		var px := lerpf(-half, half, float(i % 20) / 19.0)
+		var pz := lerpf(-half, half, float(i / 20) / 19.0)
+		if halved.height_at(px, pz) != field.height_at(px, pz):
+			moved += 1
+	eq(moved, 400, "400 / 400 个采样点高度都变了（参数不是摆设）")
+	near(halved.max_height, halved.base_height + halved.hill_amplitude * HeightField.RELIEF_CEILING
+			+ halved.detail_amplitude, 0.000001, "max_height 随参数同步（不是硬编码常量）")
+	near(halved.hill_amplitude, float(params["hill_amplitude"]) * 0.5, 0.000001,
+			"实例读到的 hill_amplitude 就是表里的一半")
+	var again := HeightField.new(seed_a, Dictionary(params.duplicate()))
+	near(again.height_at(123.0, -456.0), field.height_at(123.0, -456.0), 0.000001,
+			"同参数重新构造后同一点复原（减法没有副作用）")
+
+	section("代价：75×75 采样耗时（S1.1 的 800 ms 预算里最贵的一块）")
+	var t0 := Time.get_ticks_usec()
+	var fresh := field.sample_heights(step)
+	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
+	eq(fresh.size(), samples.size(), "重采样长度一致")
+	le(dt, 400.0, "5 625 点耗时 %s ms < 400 ms" % str(snappedf(dt, 0.1)))
+
+
+## region 划分（`scripts/world/regions.gd`）。四组断言：
+##   ① 数量与 id：落在 `regions_min..max`、无告警、id 稠密（删空后重编号）；
+##   ② 面积守恒：每个陆地格恰属一个 region，水格 owner = -1，
+##      面积和 = 陆地格数 × 32²（这条是"没有空洞"的可计算版本）；
+##   ③ 点查询：每个中心点回到自己的 region、水点与地图外返回 -1；
+##   ④ 决定论：重放同一 `Rng` 状态逐格相同，换 seed 必变（反向对照）。
+func _case_regions() -> void:
+	await process_frame
+
+	var loaded := GenParams.load_from()
+	ok(bool(loaded["ok"]), "参数表可用", String(loaded.get("reason", "")))
+	var params := Dictionary(loaded["params"])
+	var rng_node := get_root().get_node_or_null("Rng")
+	ok(rng_node != null, "autoload Rng 可用（region 中心只用具名子流）")
+	if rng_node == null or not bool(loaded["ok"]):
+		return
+	var stream: RandomNumberGenerator = rng_node.call("stream", "world_gen")
+	ok(stream is RandomNumberGenerator, "world_gen 子流是 RandomNumberGenerator")
+	var field := HeightField.new(20250929, params)
+	var saved: int = stream.state
+
+	var regs := WorldRegions.new(field, stream, params)
+	var summary := regs.build()
+	ok(bool(summary["ok"]), "build 成功")
+	var warns := PackedStringArray(summary["warnings"])
+	eq(warns.size(), 0, "真表 + 默认 seed 下没有告警（实际：%s）" % str(warns))
+	var count := int(summary["count"])
+	ge(float(count), float(params["regions_min"]), "region 数 %d 不低于 regions_min %d"
+			% [count, int(params["regions_min"])])
+	le(float(count), float(params["regions_max"]), "region 数 %d 不高于 regions_max %d"
+			% [count, int(params["regions_max"])])
+
+	section("id 稠密：0..count-1，没有因为删空 region 留下空洞")
+	var ids_ok := true
+	for i in count:
+		if int(regs.regions[i]["id"]) != i:
+			ids_ok = false
+	ok(ids_ok, "%d 个 region 的 id 恰好是 0..%d" % [count, count - 1])
+	eq(regs.region_info(count).size(), 0, "越界 id 的 region_info 返回空字典")
+	eq(regs.region_info(-1).size(), 0, "负 id 的 region_info 返回空字典")
+
+	section("面积守恒：陆地格恰属一个 region，水格无主，面积和 = 陆地面积")
+	var total_cells := regs.grid_w * regs.grid_h
+	eq(regs.grid_w, 75, "2400 / 32 → 每边 75 个归属格")
+	eq(total_cells, 75 * 75, "75×75 = 5 625 个 32 m 格子")
+	eq(regs.cell_count_total(), int(summary["land_cells"]), "各 region 格数之和 = 陆地格数")
+	eq(regs.water_cell_count(), total_cells - int(summary["land_cells"]), "水格数 = 总格数 − 陆地格数")
+	near(regs.area_total(), float(summary["land_cells"]) * regs.cell * regs.cell, 0.5,
+			"面积和 = 陆地格数 × 32²")
+	ok(regs.water_cell_count() > 0, "确实存在水格（否则『全覆盖』是真空通过）")
+	var empty := 0
+	for r in regs.regions:
+		if int(r["cells"]) <= 0:
+			empty += 1
+	eq(empty, 0, "没有 0 格的空 region")
+
+	section("全网格核对：水格 owner = -1、陆格 owner 合法（0 处矛盾）")
+	var mismatched := 0
+	var water_seen := 0
+	var land_seen := 0
+	for j in regs.grid_h:
+		for i in regs.grid_w:
+			var px := -regs.half_size + (float(i) + 0.5) * regs.cell
+			var pz := -regs.half_size + (float(j) + 0.5) * regs.cell
+			var who := regs.owner[j * regs.grid_w + i]
+			if field.is_water(px, pz):
+				water_seen += 1
+				if who != -1:
+					mismatched += 1
+			else:
+				land_seen += 1
+				if who < 0 or who >= count:
+					mismatched += 1
+	eq(mismatched, 0, "5 625 格逐格核对无矛盾")
+	eq(water_seen, regs.water_cell_count(), "逐格统计的水格数 = water_cell_count()")
+	eq(land_seen, int(summary["land_cells"]), "逐格统计的陆格数 = land_cells")
+
+	section("点查询：中心点回到自己的 region、水点与地图外返回 -1")
+	for i in count:
+		var c := regs.region_info(i)
+		eq(regs.region_at(float(c["x"]), float(c["z"])), i,
+				"区域 %d 的中心点落在自己区域内" % i)
+	eq(regs.region_at(-regs.half_size - 10.0, 0.0), -1, "地图外的点返回 -1")
+	eq(regs.region_at(0.0, regs.half_size + 10.0), -1, "地图外的点（另一侧）返回 -1")
+	var water_centres := 0
+	for r in regs.regions:
+		if not HeightField.LAND_BIOMES.has(String(r["biome"])):
+			water_centres += 1
+	eq(water_centres, 0, "所有 region 中心都不是 water（中心只放在陆地上）")
+	ge(float(regs.biome_counts().size()), 1.0, "biome_counts 非空")
+
+	section("决定论：重放同一 Rng 状态逐格相同；换 seed 后必变（反向对照）")
+	stream.state = saved
+	var replay := WorldRegions.new(field, stream, params)
+	var replayed := replay.build()
+	eq(int(replayed["count"]), count, "重放后 region 数相同")
+	ok(replay.owner == regs.owner, "重放后 5 625 格归属逐格相同")
+	var alt_field := HeightField.new(20250930, params)
+	stream.state = saved
+	var altered := WorldRegions.new(alt_field, stream, params)
+	altered.build()
+	var identical := (int(altered.regions.size()) == count) and (altered.owner == regs.owner)
+	ok(not identical, "换 seed 后数量或归属至少一项不同")
+
+	section("代价：一次 build 的耗时")
+	stream.state = saved
+	var t0 := Time.get_ticks_usec()
+	var perf := WorldRegions.new(field, stream, params)
+	perf.build()
+	var dt := float(Time.get_ticks_usec() - t0) / 1000.0
+	le(dt, 500.0, "一次 build 耗时 %s ms < 500 ms" % str(snappedf(dt, 0.1)))
+	eq(perf.grid_w, 75, "重复 build 不改变网格尺寸")
 
 
 ## 造一份「默认值 + schema + 一个改动字段」的表，供上面的参数校验用。
