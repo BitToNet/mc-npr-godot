@@ -23,11 +23,25 @@ extends Node
 ##   * the world seed is still whatever `scenes/dev/diorama.tscn` exports; agreeing it with
 ##     `GameState.world_seed` is S1.2's job (see the note in the `s0_3_router` case).
 ##
-## Depth is capped at 2 on purpose: world → battle is the only route this game has until
+## Depth is capped at 2 on purpose: world → battle is the only *stack* this game has until
 ## M1 adds the settlement screen.  Deeper stacks now would be unused speculation.
+##
+## THREE ROUTES, ONE LADDER (S1.0c).  `strategic` is registered because `scenes/world/
+## strategic_map.tscn` now exists and S1.0d will repoint `world` at it — but this step
+## deliberately stops at registration:
+##   * no `goto_strategic()` and no change to `goto_world()` / `goto_battle()` semantics;
+##   * nothing in the shipped game can reach `strategic` yet, so the stack is still only
+##     world → battle.  `s1_0_routes` asserts both halves of that sentence (entry present,
+##     public navigation surface unchanged), so a half-wired API is caught rather than
+##     silently accepted.
+## FOLLOW-UP for S1.0d: `goto_world()` currently only refuses when already on `world` or on
+## `battle`.  Once `world` IS `strategic`, boot lands on `strategic` and `goto_world()` would
+## reload that same file — that semantic must be decided in S1.0d, not papered over here.
 
 const WORLD := "world"
 const BATTLE := "battle"
+## Not reachable yet (see the header).  S1.0d repoints `world` here; S1.2 fills the scene.
+const STRATEGIC := "strategic"
 
 ## Route name → scene file.  Key order is `route_names()` order.
 ##
@@ -38,6 +52,9 @@ const BATTLE := "battle"
 const SCENES := {
 	WORLD: "res://scenes/dev/diorama.tscn",
 	BATTLE: "res://scenes/battle/battle_stub.tscn",
+	# S1.0c: registered but not navigable.  The scene is an empty `Node3D` on purpose —
+	# S1.2 builds the real strategic layer, and an art placeholder here would be thrown away.
+	STRATEGIC: "res://scenes/world/strategic_map.tscn",
 }
 
 ## Hard cap on stack depth (see the header).

@@ -48,6 +48,10 @@ const REPORT_DIR := "res://.verify"
 ## 真正不依赖字面量的交叉校验是 `_case_router` 里的 `run/main_scene` 断言。
 const MAIN_SCENE := "res://scenes/dev/diorama.tscn"
 
+## S1.0c 新增的第三条路由目标（空壳场景）。与 `MAIN_SCENE` 同理：这里留字面量，
+## 才能独立发现"路由表改了、用例没改"与"用例改了、路由表没改"两种漂移。
+const STRATEGIC_SCENE := "res://scenes/world/strategic_map.tscn"
+
 ## 自旋固定微秒数，返回实际耗时（毫秒）。用于给"量法分辨率"做标尺。
 func _spin_us(usec: int) -> float:
 	var t0 := Time.get_ticks_usec()
@@ -128,6 +132,13 @@ const CASES := {
 				+ "完全相同；反向对照（换 battle_stub）哈希必变；清单自报 scene；坏路径退出码 1；"
 				+ "只带 --scene= 不触发批次也不抢退出码；守卫属主清单没有放宽",
 		"kind": "headed",
+	},
+	"s1_0_routes": {
+		"desc": "S1.0c 路由登记：三条路由（含 strategic）且路径真实存在、path↔route 双向映射、"
+				+ "strategic_map.tscn 是可实例化的空壳（Node3D / 零子节点 / 无脚本）、"
+				+ "world 与 run/main_scene 仍指 diorama、MAX_DEPTH 仍为 2、"
+				+ "没有 goto_strategic()，且『已在 world 再 goto_world()』被拒后路由栈/屏幕/表条目零变化",
+		"kind": "pure",
 	},
 	"s0_4_overlay": {
 		"desc": "调试观测层契约：叠加层默认隐藏、F3/F1 只改观测不改世界（结构指纹+Rng 状态逐项不变）、"
@@ -552,6 +563,8 @@ func _dispatch(id: String) -> void:
 			await _case_repro()
 		"s1_0_scene_arg":
 			await _case_scene_arg()
+		"s1_0_routes":
+			await _case_routes()
 		"s0_4_overlay":
 			await _case_overlay()
 		"s0_4_cost":
@@ -1329,6 +1342,117 @@ func _case_scene_arg() -> void:
 	eq(SCENE_CHANGE_OWNERS.size(), 1, "SCENE_CHANGE_OWNERS 仍只有 1 个属主")
 	ok(not SCENE_CHANGE_OWNERS.has("res://scripts/core/capture.gd"),
 			"capture.gd 没有靠扩属主清单拿到切场景权限")
+
+
+## --- s1_0_routes --------------------------------------------------------------
+## S1.0c：路由表登记 `strategic`，但**不接线**（ROADMAP §6 S1.0c）。
+##
+## 这一步最容易退化成"表里多了一个键"的形式主义，所以每条判据都配一个反向形状：
+##   ① **双向映射**：名字 → 路径（`scene_path_for`）与路径 → 名字（`_route_for_path`，
+##      场景落地后 `_sync()` 靠它认领路由）必须同时成立。只测一个方向时，路径写错仍能
+##      全绿，直到真有人切进去才炸。
+##   ② **场景真的能被读**：load + instantiate，逐项检查根节点类型/名字/子节点数/脚本。
+##      空壳是**本步的验收物**，不是"还没做完"：S1.2 才填内容，提前放美术占位反而要拆。
+##   ③ **world 没被顺手切走**：`world` 与 `run/main_scene` 仍指 diorama。若本步切了 world，
+##      S1.0d 就无事可做，6 机位也会在无人注意时换了夹具。
+##   ④ **接线面没被扩大**：没有 `goto_strategic()`；`goto_world()` 在已处于 world 时被拒，
+##      且拒绝后路由栈 / 当前路由 / 屏幕 / "在飞行中"标记一个都没变。
+##   ⑤ **栈深没变**：`MAX_DEPTH` 仍为 2 —— 新增的是"路径表条目"，不是阶梯上的一层。
+func _case_routes() -> void:
+	await process_frame
+	var router := get_root().get_node_or_null("SceneRouter")
+	if not ok(router != null, "autoload SceneRouter 节点存在于 root"):
+		return
+	var consts: Dictionary = router.get_script().get_script_constant_map()
+
+	section("表条目：三条路由、路径真实存在、world 仍指 diorama")
+	var names: Array = []
+	for n in router.call("route_names"):
+		names.append(String(n))
+	names.sort()
+	eq(names, ["battle", "strategic", "world"], "登记的路由恰好三条（本步新增 strategic）")
+	var scenes: Dictionary = consts.get("SCENES", {})
+	eq(scenes.size(), 3, "SCENES 表恰好三条（与 route_names() 同源，不是两条表 + 一条侧门）")
+	eq(String(consts.get("STRATEGIC", "")), "strategic", "常量 STRATEGIC 与表键同字（不抄第二次字面量）")
+	var seen := {}
+	for r in names:
+		var p := String(router.call("scene_path_for", r))
+		ok(p != "" and ResourceLoader.exists(p), "%s → 文件真实存在" % r, p)
+		seen[p] = true
+	eq(seen.size(), 3, "三条路由指向三个不同文件（没有复制粘贴成同一路径）")
+	eq(String(router.call("scene_path_for", "strategic")), STRATEGIC_SCENE,
+			"strategic → scenes/world/strategic_map.tscn")
+	eq(String(router.call("scene_path_for", "world")), MAIN_SCENE,
+			"world 仍指 diorama（切 world 是 S1.0d 的事）")
+	eq(String(ProjectSettings.get_setting("application/run/main_scene", "")), MAIN_SCENE,
+			"run/main_scene 未动（本步不碰 project.godot）")
+
+	section("反向映射：_sync() 靠 path → route 认领路由")
+	eq(String(router.call("_route_for_path", STRATEGIC_SCENE)), "strategic",
+			"strategic_map.tscn 的路径回指 strategic")
+	eq(String(router.call("_route_for_path", MAIN_SCENE)), "world", "diorama 的路径回指 world")
+	eq(String(router.call("_route_for_path", "res://scenes/dev/art_samples.tscn")), "",
+			"未登记场景不映射成任意路由（取景夹具不会被误认成世界）")
+
+	section("场景解剖：空壳是验收物，不是缺内容")
+	var ps := load(STRATEGIC_SCENE) as PackedScene
+	if ok(ps != null, "strategic_map.tscn 可加载为 PackedScene", STRATEGIC_SCENE):
+		var inst: Node = ps.instantiate()
+		if ok(inst != null, "可实例化"):
+			eq(inst.get_class(), "Node3D", "根节点是 Node3D")
+			eq(String(inst.name), "StrategicMap",
+					"根名 = StrategicMap（S1.0d 的『路由→文件→根』第三段）")
+			eq(inst.get_child_count(), 0, "零子节点：S1.2 之前不含任何内容")
+			eq(inst.get_script(), null,
+					"根节点无脚本：不提前造一个什么都不做的 strategic_map.gd")
+			inst.free()
+
+	section("接线面没有被顺手扩大（S1.0c 只登记）")
+	ok(not _has_callable(router, "goto_strategic"),
+			"没有 goto_strategic()：入口留给 S1.0d")
+	for sym in ["goto_world", "goto_battle", "return_to_world"]:
+		ok(_has_callable(router, sym), "既有导航 API 仍在：%s" % sym)
+	eq(int(consts.get("MAX_DEPTH", -1)), 2,
+			"MAX_DEPTH 仍是 2：新增的是路径表条目，不是一层阶梯")
+
+	section("拒绝不改状态：已在 world 时 goto_world() 必须被拒且零副作用")
+	if String(router.call("current_route")) != "world":
+		ok(bool(router.call("goto_world")), "前置：先站到 world 上", String(router.get("last_error")))
+		ok(await _await_route("world"), "前置：world 已落地")
+	eq(String(router.call("current_route")), "world", "起点是 world")
+	var stack0 := _router_stack(router)
+	var depth0 := int(router.call("route_depth"))
+	var scene0 := ""
+	if current_scene != null:
+		scene0 = current_scene.scene_file_path
+	var names0: Array = []
+	for n in router.call("route_names"):
+		names0.append(String(n))
+	ok(not bool(router.call("goto_world")), "已在 world 时 goto_world() 返回 false")
+	ok(String(router.get("last_error")).contains("world"), "拒绝理由指名 world",
+			String(router.get("last_error")))
+	eq(_router_stack(router), stack0, "拒绝后路由栈逐项不变")
+	eq(int(router.call("route_depth")), depth0, "拒绝后栈深不变")
+	eq(String(router.call("current_route")), "world", "拒绝后当前路由仍是 world")
+	var scene1 := ""
+	if current_scene != null:
+		scene1 = current_scene.scene_file_path
+	eq(scene1, scene0, "拒绝后屏幕没换（current_scene 路径逐字相同）")
+	eq(bool(router.call("is_transitioning")), false, "拒绝没有留下『切换在飞行中』标记")
+	var names1: Array = []
+	for n in router.call("route_names"):
+		names1.append(String(n))
+	eq(names1, names0, "拒绝后表条目一条没少、没多")
+
+	# 本用例为了验"已在 world 被拒"真的切到了 world；不清理会让下一个用例的
+	# `_load_main()` 变成**第二个**世界（两个 #main / 两台相机），与 s0_3_router 同口径收尾。
+	var live: Node = current_scene
+	if live != null:
+		live.queue_free()
+		await process_frame
+		await process_frame
+	_restore_defaults()
+	eq(String(router.call("current_route")), "", "收尾：场景释放后路由归空，现场交还后续用例")
 
 
 ## --- s0_4_overlay -------------------------------------------------------------
@@ -2722,10 +2846,13 @@ func _case_router() -> void:
 	for n in router.call("route_names"):
 		names.append(String(n))
 	names.sort()
-	eq(names, ["battle", "world"], "登记的路由恰好是 world / battle 两个")
+	eq(names, ["battle", "strategic", "world"],
+			"登记的路由恰好是 world / battle / strategic 三个")
 	eq(String(router.call("scene_path_for", "world")), MAIN_SCENE, "world → diorama.tscn")
 	eq(String(router.call("scene_path_for", "battle")), "res://scenes/battle/battle_stub.tscn",
 			"battle → battle_stub.tscn")
+	eq(String(router.call("scene_path_for", "strategic")), STRATEGIC_SCENE,
+			"strategic → strategic_map.tscn（S1.0c 只登记，world 仍是 diorama）")
 	eq(String(router.call("scene_path_for", "nowhere")), "", "未登记路由返回空路径")
 
 	# S1.0a：路径是**三处**事实（路由表 / project.godot / 主场景文件本身），

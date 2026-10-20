@@ -16,7 +16,7 @@
 
 | 目录 | 职责 | 当前内容（S0.1 后） |
 |---|---|---|
-| `scenes/` | 场景文件 | `dev/diorama.tscn`（**主场景**；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**，只改路径；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
+| `scenes/` | 场景文件 | `dev/diorama.tscn`（**主场景**；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**，只改路径；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`world/strategic_map.tscn`（战略图**空壳**，S1.0c：`Node3D` 根 `StrategicMap`，无脚本 / 零子节点 / 无相机，只被 `SceneRouter` 登记为 `strategic`；`world` 仍指 diorama，S1.0d 才切，S1.2 填真内容）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
 | `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd` |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
@@ -266,8 +266,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 > 1778~1782，增量即 `SceneRouter` 节点与其脚本。
 >
 > **本批最值得记住的设计结论**：浅栈 + **显式越界失败**比"能回退到任意深度"更适合当前规模。
-> 只有两个路由时，栈深上限（2）本身就隐含了"不能再进"，故把深度检查放在来源检查**之前**，
+> 梯度上只有 `world → battle` 两段时，栈深上限（2）本身就隐含了"不能再进"，故把深度检查放在来源检查**之前**，
 > 让拒绝理由说"栈已满"而不是"来源不对"——否则深度上限这条规则永远不可观测、等于没写。
+> （S1.0c 起路由**表**有 3 个名字，但可达的**梯度**仍只有这两段：`strategic` 只登记、不接线。）
 > 同理，"回到世界是不是同一片世界"若不查结构与 seed，只查节点总数，那么"重建出一片同规模的
 > 另一片地形"也会通过——**弱断言会让错误的实现在验收里活下来**。
 
