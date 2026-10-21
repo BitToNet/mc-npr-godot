@@ -9,7 +9,7 @@ extends Node3D
 ## reference product code but never the other way round — so the knobs live here,
 ## at the same layer as the scene override itself.
 ##
-## This file reads four arguments; everything else (`--shots`, `--warmup=`,
+## This file reads five arguments; everything else (`--shots`, `--warmup=`,
 ## `--frames=`, `--out=`) still belongs to `capture.gd`:
 ##   Godot --path . -- --shots --scene=res://scenes/dev/strategic_shots.tscn \
 ##         --seed=20250929 --tier=global --warmup=60 --frames=15 \
@@ -22,6 +22,14 @@ extends Node3D
 ##   Godot --path . -- --shot=party_close --scene=res://scenes/dev/strategic_shots.tscn \
 ##         --seed=20250929 --tier=local --party=1 --span=55 --warmup=60 --frames=12 \
 ##         --out=res://.shots/s13a/party_close
+##
+## `--route=1` (S1.3b) traces the longest road with the real TravelGraph and paints the
+## returned polyline as an ink trail, then frames the camera on that road's midpoint.
+## It proves "the path follows the road and crosses no water" visually — the numbers are
+## asserted in `tools/verify.gd::s1_3_path`.
+##   Godot --path . -- --shot=route_region --scene=res://scenes/dev/strategic_shots.tscn \
+##         --seed=20250929 --tier=region --route=1 --warmup=60 --frames=12 \
+##         --out=res://.shots/s13b/route_region
 ##
 ## Framing rule: GLOBAL is the whole plate (map centre, locked by the camera), while
 ## REGION / LOCAL are framed on the settlement nearest the map centre — the centre
@@ -48,6 +56,15 @@ var party_marker: PartyMarker = null
 ## --span=<m> overrides the tier's vertical span (0 = keep the tier's own size).
 ## Added for the S1.3a close-up: LOCAL is 170 m, where a 22 m marker is only ~116 px tall.
 var span_override := 0.0
+## --route=1 (S1.3b) traces the longest road with TravelGraph and paints the polyline.
+var with_route := false
+## The polyline drawn by --route=1 (empty otherwise).
+var route_points := PackedVector2Array()
+## What the trace measured, for the log line.
+var route_info := {}
+## The graph that produced `route_points` (kept so the plate can also paint its road cells).
+var route_graph: TravelGraph = null
+const StyleDef := preload("res://scripts/core/style.gd")
 
 
 func _ready() -> void:
@@ -60,6 +77,8 @@ func _ready() -> void:
 			with_party = a.split("=", true, 1)[1].to_int() != 0
 		elif a.begins_with("--span="):
 			span_override = a.split("=", true, 1)[1].to_float()
+		elif a.begins_with("--route="):
+			with_route = a.split("=", true, 1)[1].to_int() != 0
 	if not TIERS.has(tier_name):
 		push_warning("[shots] 未知 --tier='%s'，回退 global" % tier_name)
 		tier_name = "global"
@@ -75,6 +94,9 @@ func build(p_seed: int, p_tier: String) -> void:
 		map.free()
 		map = null
 	party_marker = null
+	route_points = PackedVector2Array()
+	route_info = {}
+	route_graph = null
 	seed_value = p_seed
 	tier_name = p_tier if TIERS.has(p_tier) else "global"
 	var state := get_node_or_null("/root/GameState")
@@ -89,7 +111,13 @@ func build(p_seed: int, p_tier: String) -> void:
 		push_error("[shots] 战略图没有相机，取景失败")
 		return
 	cam.call("set_tier", int(TIERS[tier_name]))
-	var spot := _pick_settlement()
+	var site := _pick_settlement()
+	var spot := site
+	if with_route:
+		var route := _trace_route()
+		if route.has("mid"):
+			var mid: Vector2 = route["mid"]
+			spot = Vector3(mid.x, 0.0, mid.y)
 	if tier_name == "global":
 		cam.call("snap_to_target")
 	else:
@@ -99,9 +127,12 @@ func build(p_seed: int, p_tier: String) -> void:
 		cam.call("snap_to_target")
 	_publish_ink()
 	if with_party:
-		_place_party(spot)
-	print("[shots] seed=%d tier=%s focus=%s size=%.1f party=%s" % [
-			seed_value, tier_name, str(focus_point()), _size(), str(_party_point())])
+		_place_party(site)
+	if with_route:
+		_draw_route()
+	print("[shots] seed=%d tier=%s focus=%s size=%.1f party=%s route=%s" % [
+			seed_value, tier_name, str(focus_point()), _size(), str(_party_point()),
+			str(route_info.get("summary", "off"))])
 
 
 ## Plants the S1.3a marker at the framed settlement, facing the map centre (so the
@@ -137,6 +168,140 @@ func _place_party(spot: Vector3) -> void:
 
 
 
+## Traces the **longest** road with the real `TravelGraph` (S1.3b), so the plate shows
+## the shipped pathfinder's output rather than a hand-drawn line.  Ties break on the
+## road order (roads are already sorted by `a` then `b`), so one seed always frames the
+## same road.  Returns `{}` (and warns) when there is no session / no road / no path.
+func _trace_route() -> Dictionary:
+	var session: Variant = map.get("session") if map != null else null
+	if session == null:
+		push_warning("[shots] --route 需要世界 session，本张图不带路径")
+		return {}
+	var field: Variant = session.get("field")
+	var data: Variant = session.get("data")
+	if field == null or data == null:
+		push_warning("[shots] --route 需要 field 与 data")
+		return {}
+	var graph := TravelGraph.new()
+	route_graph = graph
+	if not graph.build(field as HeightField, data as WorldData, TravelGraph.Params.load_from()):
+		push_warning("[shots] 行军图构建失败：%s" % ", ".join(graph.warnings))
+		return {}
+	var roads: Array = data.get("roads")
+	if roads.is_empty():
+		push_warning("[shots] 这个世界没有道路")
+		return {}
+	var by_id := {}
+	for s in Array(data.get("settlements")):
+		by_id[String(s["id"])] = s
+	var best: Dictionary = roads[0]
+	for r in roads:
+		if float(r["length"]) > float(best["length"]):
+			best = r
+	var a: Dictionary = by_id.get(String(best["a"]), {})
+	var b: Dictionary = by_id.get(String(best["b"]), {})
+	if a.is_empty() or b.is_empty():
+		return {}
+	var from := Vector2(float(a["x"]), float(a["z"]))
+	var to := Vector2(float(b["x"]), float(b["z"]))
+	var path := graph.find_path(from, to)
+	if not bool(path["ok"]):
+		push_warning("[shots] 寻路失败：%s" % String(path["reason"]))
+		return {}
+	route_points = path["points"]
+	route_info = {
+		"points": route_points.size(),
+		"cost": float(path["cost"]),
+		"road_m": float(path["road_m"]),
+		"offroad_m": float(path["offroad_m"]),
+		"expanded": int(path["expanded"]),
+		"mid": (from + to) * 0.5,
+		"summary": "%s→%s %d 点 / 路 %.0f m / 野 %.0f m / 成本 %.0f" % [
+				String(best["a"]), String(best["b"]), route_points.size(),
+				float(path["road_m"]), float(path["offroad_m"]), float(path["cost"])],
+	}
+	return route_info
+
+
+## Paints the traced polyline as an ink trail (one dot per 12 m) so a REGION plate reads
+## as "the road, followed" instead of a few isolated dots.  Dots carry **no ink hull**:
+## they are 3 m props, and the inverted hull on a combined mesh shatters into slivers
+## (`docs/ENGINEERING.md` §5 trap 35).
+func _draw_route() -> void:
+	if route_points.size() < 2 or map == null:
+		return
+	var session: Variant = map.get("session")
+	var field: Variant = session.get("field") if session != null else null
+	var data: Variant = session.get("data") if session != null else null
+	# 先铺**图里的道路格**（暗沙色、宽而低），再把路径压在上面（墨色、窄而高）。
+	# 只画路径的话，图上没有任何"路"可对照，"它确实沿路走"就退化成一句自述；
+	# 画"设计上的直线"又会对不上 —— 路径点在格心，直线点在线上，两者天然差半格。
+	var road_pts := _road_cell_points()
+	if not road_pts.is_empty():
+		_add_trail(road_pts, "RoadCells", 3.4, 1.2, StyleDef.PALETTE["sand_deep"], 0.0)
+	_add_trail(_trail_points(route_points, 12.0), "RouteTrail", 4.2, 3.0,
+			StyleDef.PALETTE["ink"], 12.0)
+
+
+## 图里所有"道路格"的格心。路径点也是格心，所以两层能严丝合缝地叠在一起。
+func _road_cell_points() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if route_graph == null or not route_graph.built:
+		return out
+	for iz in route_graph.n:
+		for ix in route_graph.n:
+			if route_graph.road[route_graph.index_of(ix, iz)] != 0:
+				out.append(route_graph.cell_center(ix, iz))
+	return out
+
+
+## 一条点带 = 一个 `MultiMeshInstance3D`（1 个 draw call）。点是无描边的扁球：
+## 3–4 m 的小道具挂反向外壳会炸成碎屑（`docs/ENGINEERING.md` §5 陷阱 35）。
+func _add_trail(pts: PackedVector2Array, node_name: String, radius: float,
+		lift: float, tint: Color, _spacing: float) -> void:
+	if pts.is_empty():
+		return
+	var session: Variant = map.get("session")
+	var field: Variant = session.get("field") if session != null else null
+	var node := MultiMeshInstance3D.new()
+	node.name = node_name
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = MeshUtil.blob(radius, 3, 6)
+	mm.instance_count = pts.size()
+	for i in pts.size():
+		var p := pts[i]
+		var h := float(field.call("height_at", p.x, p.y)) if field != null else 0.0
+		mm.set_instance_transform(i, Transform3D(Basis(), Vector3(p.x, h + lift, p.y)))
+	node.multimesh = mm
+	var style := get_node_or_null("/root/Style")
+	if style != null:
+		node.material_override = style.call("toon", {
+			"tint": tint, "outline": false,
+			"rim": 0.0, "spec": 0.0, "shade_min": 0.92,
+		})
+	map.add_child(node)
+	print("[shots] %s %d dots（%.0f m 一点）" % [node_name, pts.size(), _spacing])
+
+
+## 折线按固定弧长重采样（含首末点）。12 m 在 REGION 档约 27 px 间距，读起来是虚线。
+func _trail_points(pts: PackedVector2Array, step: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	out.append(pts[0])
+	var since := 0.0
+	for i in range(1, pts.size()):
+		var seg := pts[i] - pts[i - 1]
+		var len := seg.length()
+		if len <= 0.0001:
+			continue
+		var dir := seg / len
+		var left := step - since
+		while left <= len:
+			out.append(pts[i - 1] + dir * left)
+			left += step
+		since = len - (left - step)
+	out.append(pts[pts.size() - 1])
+	return out
 ## 反向外壳的线宽以"屏幕像素"为单位，靠 Style.pixel_span（1 px 等于多少世界单位）
 ## 换算。战略相机不发布这个值（S1.2 的海岸墨线是几何色带，用不到外壳），所以取景台
 ## 按当前跨度与视口高度自己发一次 —— 否则同一枚棋子在 2600 m 档的线宽只有 0.03 px、

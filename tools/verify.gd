@@ -285,6 +285,14 @@ const CASES := {
 				+ "哈希一致、反向平移不同；场景接线后相机 current、舞台固定正午",
 		"kind": "pure",
 	},
+	"s1_3_path": {
+		"desc": "行军图与确定性 A*（S1.3b）：参数表规范化（32 m / 提速 0.35 / 坡度 1.6 / 水域余量 1.5）"
+				+ "且缺字段/越界/schema 越高各有契约；75×75 格图水陆互斥、道路直线栅格化为成本折扣、"
+				+ "穿水只记账；寻路不穿水不越界、单步 ≤ 一格对角、首末点精确；水里/越界各有明确失败原因；"
+				+ "同起终点两次与重建后路径逐位一致，换 seed 必变；开/关提速的成本比 = 1/1.35 且 ±5% 内，"
+				+ "道路格速度系数精确 1.35",
+		"kind": "pure",
+	},
 	"s1_3_party": {
 		"desc": "队伍棋子本体（S1.3a）：12 个圆柱/球/旗面零件合成单一 mesh（1 个 draw call、"
 				+ "非索引三角形汤），标称 22 m、脚底落在 y=0；反向外壳描边挂在 next_pass 且 enabled=1，"
@@ -589,6 +597,13 @@ func _run_one(id: String) -> Dictionary:
 	await _dispatch(id)
 	var duration := Time.get_ticks_msec() - t0
 
+	# 零断言 ⇒ 判失败。GDScript 的运行时错误（打错属性名、空引用）会静默结束协程，
+	# `_run_one` 看不到异常，于是"用例在中途崩掉"会显示成绿色的 0/0 —— 这种安静的空跑
+	# 比红更危险，必须自己抓住。
+	if _asserts.is_empty():
+		ok(false, "用例至少产出一条断言（零断言说明中途中断，不是通过）",
+				"检查 stderr 里的 SCRIPT ERROR：属性名打错 / 空引用都会这样")
+
 	var failed := 0
 	for a in _asserts:
 		if not a["ok"]:
@@ -707,6 +722,8 @@ func _dispatch(id: String) -> void:
 			await _case_strategic_perf()
 		"s1_3_party":
 			await _case_party_marker()
+		"s1_3_path":
+			await _case_travel_graph()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -6646,3 +6663,221 @@ func _case_party_marker() -> void:
 	eq(int(mt2["smooth_verts"]), int(mt["smooth_verts"]), "平滑顶点数一致")
 	twin.free()
 	marker.free()
+## S1.3b：行军图与确定性 A*。断言分六组 —— 表契约、图结构、寻路合法性、决定论、
+## 道路提速、预算。`A-` 的两条（寻路确定性 / 沿路提速符合参数）分别落在第 4、5 组。
+## 这里量的是**成本比**而不是"米每秒"：移动积分要到 b3 才有，现在把速度系数钉死，
+## b3 接上去时只需证明"位移 = 速度 × dt"。
+func _case_travel_graph() -> void:
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var s := WorldSession.boot(rng, 20250929)
+	ok(s.ok, "前置：世界建成（行军图要吃高度场与路网）")
+
+	section("参数表：规范化与兜底")
+	var raw := FileAccess.get_file_as_string(TravelGraph.PATH)
+	ok(raw != "", "读得到 %s" % TravelGraph.PATH)
+	var canon := Canon.canonicalize(raw)
+	ok(bool(canon["ok"]), "参数表是合法 JSON", String(canon.get("reason", "")))
+	eq(String(canon.get("text", "")), raw, "参数表逐字节等于自己的规范化结果（手改格式会被抓）")
+	eq(raw.count("\r"), 0, "参数表没有 CR")
+	ok(raw.ends_with("\n") and not raw.ends_with("\n\n"), "参数表末尾恰好一个换行")
+	var tp := TravelGraph.Params.load_from()
+	eq(tp.warnings.size(), 0, "规范化参数表零告警")
+	near(tp.grid_m, 32.0, 0.0001, "格距 32 m")
+	near(tp.road_speed_bonus, 0.35, 0.0001, "道路提速 35%")
+	near(tp.speed_on_road(), 1.35, 0.000001, "道路速度系数 = 1.35")
+	near(tp.cost_on_road(), 1.0 / 1.35, 0.000001, "道路成本系数 = 1/1.35")
+	ge(float(tp.max_expanded), 1000.0, "展开预算 %d" % tp.max_expanded)
+	var bad := TravelGraph.Params.from_dict({})
+	ge(float(bad.warnings.size()), 5.0, "缺字段逐条告警（%d 条）" % bad.warnings.size())
+	near(bad.grid_m, 32.0, 0.0001, "缺字段时用兜底值")
+	var clamped := TravelGraph.Params.from_dict({"road_speed_bonus": 9.0, "schema": 1})
+	near(clamped.road_speed_bonus, 1.0, 0.0001, "越界值钳到安全区间上沿")
+	ge(float(clamped.warnings.size()), 1.0, "钳制有告警")
+	var forward := TravelGraph.Params.from_dict({"schema": 99})
+	eq(forward.ok, false, "schema 高于本版 ⇒ 整表拒绝")
+	ge(float(forward.warnings.size()), 1.0, "整表拒绝有原因")
+
+	section("图结构：75×75 格、水陆互斥、道路格已栅格化")
+	var g := TravelGraph.new()
+	var t0 := Time.get_ticks_usec()
+	var built := g.build(s.field, s.data)
+	var build_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	ok(built, "建图成功")
+	eq(g.warnings.size(), 0, "建图零告警")
+	eq(g.n, 75, "每边 75 格（2400 m / 32 m）")
+	near(g.cell_m, 32.0, 0.0001, "格距 32.000 m")
+	eq(g.walkable_count + g.water_count, g.n * g.n, "可走 + 水 = 全部格子")
+	ge(float(g.walkable_count), 2000.0, "可走格 %d" % g.walkable_count)
+	ge(float(g.water_count), 500.0, "水格 %d" % g.water_count)
+	ge(float(g.road_cell_count), 60.0, "道路格 %d" % g.road_cell_count)
+	le(float(g.road_water_crossings), 20.0,
+			"道路穿水 %d 格（只记账，不因此变可走）" % g.road_water_crossings)
+	# 道路格数应与"总路长 / 格距"同量级：重叠会多算，斜穿会少算，所以给宽区间。
+	var ideal := 0.0
+	for r in s.data.roads:
+		ideal += float(r["length"]) / g.cell_m
+	var ratio := float(g.road_cell_count) / maxf(1.0, ideal)
+	ok(ratio > 0.6 and ratio < 1.8,
+			"道路格 %d 与总路长/格距 %.0f 同量级（%.2f×）" % [g.road_cell_count, ideal, ratio])
+	print("     建图 %.1f ms / 可走 %d / 水 %d / 路格 %d" % [
+			build_ms, g.walkable_count, g.water_count, g.road_cell_count])
+
+	section("寻路合法性：不穿水、不越界、步长不超一格对角")
+	var by_id := {}
+	for st in s.data.settlements:
+		by_id[String(st["id"])] = st
+	# 取**最长**的一条路：与 `scripts/dev/strategic_shots.gd --route=1` 的取证图选同一条
+	# （同长取数组序），这样台账里的数值与图说的是同一段路。
+	var r0: Dictionary = s.data.roads[0]
+	for r in s.data.roads:
+		if float(r["length"]) > float(r0["length"]):
+			r0 = r
+	var a: Dictionary = by_id[String(r0["a"])]
+	var b: Dictionary = by_id[String(r0["b"])]
+	var pa := Vector2(float(a["x"]), float(a["z"]))
+	var pb := Vector2(float(b["x"]), float(b["z"]))
+	var t1 := g.find_path(pa, pb)
+	ok(bool(t1["ok"]), "沿最长道路（%s→%s %.0f m）寻路成功（%s）" % [
+			String(r0["a"]), String(r0["b"]), float(r0["length"]), String(t1["reason"])])
+	var pts: PackedVector2Array = t1["points"]
+	ge(float(pts.size()), 2.0, "路径 %d 点" % pts.size())
+	near(pts[0].x, pa.x, 0.0001, "首点是精确起点 x")
+	near(pts[0].y, pa.y, 0.0001, "首点是精确起点 z")
+	near(pts[pts.size() - 1].x, pb.x, 0.0001, "末点是精确终点 x")
+	near(pts[pts.size() - 1].y, pb.y, 0.0001, "末点是精确终点 z")
+	var wet := 0
+	var out_of_bounds := 0
+	var longest := 0.0
+	var longest_end := 0.0
+	for i in pts.size():
+		if not g.is_walkable_at(pts[i].x, pts[i].y):
+			wet += 1
+		if absf(pts[i].x) > g.half or absf(pts[i].y) > g.half:
+			out_of_bounds += 1
+		if i > 0:
+			var seg := pts[i].distance_to(pts[i - 1])
+			if i == 1 or i == pts.size() - 1:
+				longest_end = maxf(longest_end, seg)
+			else:
+				longest = maxf(longest, seg)
+	eq(wet, 0, "路径上没有一个不可走格")
+	eq(out_of_bounds, 0, "路径全部在地界内")
+	# 中段是格心到格心，最长就是一格对角；首末段从精确点连到格心，还要再加半个格对角。
+	le(longest, g.cell_m * 1.42 + 0.01,
+			"中段最长单步 %.1f m ≤ 一格对角 %.1f m" % [longest, g.cell_m * 1.42])
+	le(longest_end, g.cell_m * 1.42 + g.cell_m * 0.71 + 0.01,
+			"首末段最长 %.1f m ≤ 一格对角 + 半格对角 %.1f m" % [
+					longest_end, g.cell_m * 2.13])
+	# 成本是"每米成本系数 × 米数"，路上系数 < 1，所以成本可以小于直线距离 ——
+	# 下界只能是"每米最低成本 × 直线距离"，上界给宽区间（坡越多越贵）。
+	var dist_ab := pa.distance_to(pb)
+	ge(float(t1["cost"]), dist_ab * g.params.cost_on_road() * 0.999,
+			"成本 %.1f ≥ 直线 × 最低系数 %.1f" % [
+					float(t1["cost"]), dist_ab * g.params.cost_on_road()])
+	le(float(t1["cost"]), dist_ab * 3.0,
+			"成本 %.1f ≤ 直线 × 3（坡度不会把成本抬到离谱）" % float(t1["cost"]))
+	le(float(t1["expanded"]), float(g.params.max_expanded), "展开格数在预算内")
+	print("     路径 %d 点 / 成本 %.1f / 直线 %.1f / 路 %.1f m / 展开 %d" % [
+			pts.size(), float(t1["cost"]), pa.distance_to(pb),
+			float(t1["road_m"]), int(t1["expanded"])])
+
+	section("失败路径：水、越界各有明确原因")
+	var water := Vector2(-1170.0, -1170.0)
+	var fw := g.find_path(water, pb)
+	eq(bool(fw["ok"]), false, "从水面出发失败")
+	contains(String(fw["reason"]), "起点", "原因指名起点不可走")
+	var fwl := g.find_path(pa, water)
+	eq(bool(fwl["ok"]), false, "终点在水面失败")
+	contains(String(fwl["reason"]), "终点", "原因指名终点不可走")
+	var fo := g.find_path(Vector2(-5000.0, 0.0), pb)
+	eq(bool(fo["ok"]), false, "越界起点失败")
+	contains(String(fo["reason"]), "越界", "原因指名越界")
+
+	section("决定论：同起终点两次逐位一致，重建后仍一致")
+	var key1 := TravelGraph.path_key(t1["points"])
+	var t2 := g.find_path(pa, pb)
+	eq(TravelGraph.path_key(t2["points"]), key1, "同实例两次路径逐位一致")
+	near(float(t2["cost"]), float(t1["cost"]), 0.0001, "两次成本一致")
+	var g2 := TravelGraph.new()
+	g2.build(s.field, s.data)
+	var t3 := g2.find_path(pa, pb)
+	eq(TravelGraph.path_key(t3["points"]), key1, "重建图后路径逐位一致")
+	eq(int(t3["expanded"]), int(t1["expanded"]), "重建图后展开格数一致")
+	print("     路径指纹 %s…" % key1.substr(0, 64))
+
+	section("道路提速：同起终点开/关 bonus 的成本比 = 1/(1+0.35)（±5%）")
+	var p_off := TravelGraph.Params.load_from()
+	p_off.road_speed_bonus = 0.0
+	var g_off := TravelGraph.new()
+	g_off.build(s.field, s.data, p_off)
+	var t_off := g_off.find_path(pa, pb)
+	ok(bool(t_off["ok"]), "关掉提速后同一段仍可达")
+	var got := float(t1["cost"]) / float(t_off["cost"])
+	var want := 1.0 / 1.35
+	near(got, want, want * 0.05,
+			"成本比 %.5f ≈ %.5f（提速 ±5%% 判据）" % [got, want])
+	ok(float(t1["cost"]) < float(t_off["cost"]),
+			"开路后成本更低：%.1f < %.1f" % [float(t1["cost"]), float(t_off["cost"])])
+	# 速度系数在道路格上必须精确等于 1 + bonus，b3 的移动积分直接用这个数。
+	var road_cell := Vector2i(-1, -1)
+	for iz in g.n:
+		for ix in g.n:
+			if g.road[g.index_of(ix, iz)] != 0:
+				road_cell = Vector2i(ix, iz)
+				break
+		if road_cell.x >= 0:
+			break
+	ok(road_cell.x >= 0, "图里至少有一个道路格")
+	if road_cell.x >= 0:
+		var rc := g.cell_center(road_cell.x, road_cell.y)
+		near(g.speed_factor_at(rc.x, rc.y), 1.35, 0.000001, "道路格速度系数 1.35")
+		near(g.cost_per_m_at(rc.x, rc.y), 1.0 / 1.35, 0.000001, "道路格每米成本 1/1.35")
+		ok(g.on_road_at(rc.x, rc.y), "道路格能自报在道路上")
+	# "路上更快"不能只验公式，要验成**全序**：所有道路格都比所有非道路格快。
+	var max_land := 0.0
+	var min_road := INF
+	for iz in g.n:
+		for ix in g.n:
+			var i := g.index_of(ix, iz)
+			if g.walkable[i] == 0:
+				continue
+			var c := g.cell_center(ix, iz)
+			var sp := g.speed_factor_at(c.x, c.y)
+			if g.road[i] != 0:
+				min_road = minf(min_road, sp)
+			else:
+				max_land = maxf(max_land, sp)
+	near(min_road, 1.35, 0.000001, "最慢的道路格也是 1.35")
+	le(max_land, 1.0 + 0.000001, "最快的地面格不超过 1.0（%.4f）" % max_land)
+	ok(min_road > max_land,
+			"道路格全序快于地面格：%.4f > %.4f" % [min_road, max_land])
+
+	section("换 seed 必变（反向对照）")
+	rng.call("seed_from", 20250930)
+	var s2 := WorldSession.boot(rng, 20250930)
+	ok(s2.ok, "换 seed 的世界建成")
+	var g3 := TravelGraph.new()
+	ok(g3.build(s2.field, s2.data), "换 seed 后仍能建图")
+	ne(g3.road_cell_count, g.road_cell_count, "道路格数随世界改变")
+	ne(g3.walkable_count, g.walkable_count, "可走格数随世界改变")
+	var by_id2 := {}
+	for st in s2.data.settlements:
+		by_id2[String(st["id"])] = st
+	var r2: Dictionary = s2.data.roads[0]
+	var a2: Dictionary = by_id2[String(r2["a"])]
+	var b2: Dictionary = by_id2[String(r2["b"])]
+	var t4 := g3.find_path(Vector2(float(a2["x"]), float(a2["z"])),
+			Vector2(float(b2["x"]), float(b2["z"])))
+	ok(bool(t4["ok"]), "新世界里的第一条道路可达")
+	ne(TravelGraph.path_key(t4["points"]), key1, "换 seed 路径指纹必变")
+
+
+## 找一个"可走但不在道路上"的格心，用来对照速度系数。
+func _travel_land_point(g: TravelGraph) -> Vector2:
+	for iz in g.n:
+		for ix in g.n:
+			var i := g.index_of(ix, iz)
+			if g.walkable[i] != 0 and g.road[i] == 0:
+				return g.cell_center(ix, iz)
+	return Vector2.ZERO

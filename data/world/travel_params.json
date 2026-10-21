@@ -1,0 +1,8 @@
+{
+  "grid_m": 32,
+  "max_expanded": 20000,
+  "road_speed_bonus": 0.350000,
+  "schema": 1,
+  "slope_cost": 1.600000,
+  "water_margin": 1.500000
+}
