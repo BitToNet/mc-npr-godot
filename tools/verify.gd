@@ -140,6 +140,13 @@ const CASES := {
 				+ "点暂停真的暂停整棵树并变「继续」",
 		"kind": "pure",
 	},
+	"s1_4_migrate": {
+		"desc": "存档 v1→v2 迁移（S1.4c）：schema 2 且 v1 钩子已注册、day_length→visual_day_length、"
+				+ "0..170 相位按天折叠后等比换成游戏秒（分钟也保住）、"
+				+ "非法 game_time（负/无穷）整档拒读而 GameState 一字不改、"
+				+ "缺少 game 段仍报原问题、v2 文件不再重复迁移",
+		"kind": "pure",
+	},
 	"s0_6_repro": {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
@@ -694,6 +701,9 @@ func _dispatch(id: String) -> void:
 			await _case_speed()
 		"s1_4_hud":
 			await _case_hud()
+		"s1_4_migrate":
+			await _case_migrate()
+
 		"s0_6_repro":
 			await _case_repro()
 		"s1_0_scene_arg":
@@ -1658,6 +1668,144 @@ func _find_button(root: Node, button_name: String) -> Button:
 ## 两次**独立进程**的同参数截图必须逐位一致。这是 S0.2 里那条实测 1.62%–5.67%
 ## 噪声底的正面修复证据，也是 `B-` 门禁能否使用的前提。
 ## 反向对照同样重要：若两次都是空图/冻结图，逐位一致就毫无意义。
+## S1.4c：存档 v1 → v2 迁移。
+##
+## 全程走**真文件** + 真 `SaveSystem.load_slot()`，不直接调迁移钩子：只测钩子会漏掉
+## "链没接上"这种最常见的错（钩子写得对，但 `migrations` 里没注册）。
+func _case_migrate() -> void:
+	await process_frame
+	var ss := get_root().get_node_or_null("SaveSystem")
+	var gs := get_root().get_node_or_null("GameState")
+	ok(ss != null and gs != null, "SaveSystem / GameState 均存在")
+	if ss == null or gs == null:
+		return
+	_saves_begin()
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+
+	section("格式常量：v1 的一天 170 s / v2 的一天 86 400 游戏秒，都不许漂")
+	var consts: Dictionary = (ss.get_script() as Script).get_script_constant_map()
+	var gs_consts: Dictionary = (gs.get_script() as Script).get_script_constant_map()
+	eq(int(consts.get("SCHEMA_VERSION", -1)), 2, "SaveSystem.SCHEMA_VERSION = 2")
+	near(float(consts.get("V1_DAY_PHASE_SECONDS", -1.0)), 170.0, 0.000001,
+			"v1 的一天 = 170 现实秒（冻结的格式常量，不跟着默认值改）")
+	near(float(consts.get("V2_SECONDS_PER_DAY", -1.0)),
+			float(gs_consts.get("SECONDS_PER_DAY", -1.0)), 0.000001,
+			"v2 的一天 = GameState.SECONDS_PER_DAY（两个常量同值）")
+
+
+	section("v1 真文件：42.5/170 的一天 → 06:00，旧字段改名不丢值")
+	gs.call("new_game", 424242)
+	gs.set("money", 0)
+	_write_text(_slot_file(1), '{"schema_version": 1, "saved_at": "2025-10-16 06:00:00", '
+			+ '"meta": {"slot": 1}, "game": {"world_seed": 424242, "game_time": 42.5, '
+			+ '"day_length": 170.0, "money": 77}}')
+	var r1: Dictionary = ss.call("load_slot", 1)
+	ok(bool(r1.get("ok")), "v1 存档可读（不再报「无迁移路径」）", str(r1.get("reason")))
+	eq(int(r1.get("migrated_from", -1)), 1, "结果里 self-report migrated_from = 1")
+	eq(int(r1.get("schema_version", -1)), 2, "读完后 schema_version = 2")
+	ok((ss.get("migrations") as Dictionary).has(1),
+			"首次 load_slot 就补齐钩子（惰性注册：启动零动作，不写盘也不建目录）")
+	near(gs.get("game_time"), 21600.0, 0.000001, "42.5/170 的一天 = 21 600 游戏秒（06:00）")
+	eq(String(gs.call("clock_text")), "第 1 天 06:00", "clock_text 落在 06:00：分钟没被丢掉")
+	eq(String(gs.call("date_text")), "第 1 年 1 月 1 日 06:00",
+			"date_text 的完整形态：第 1 年 1 月 1 日 06:00")
+	near(gs.get("visual_day_length"), 170.0, 0.000001, "day_length 改名搬到 visual_day_length")
+	eq(int(gs.get("money")), 77, "同一文件里其余字段照常应用")
+	ok(not (gs.call("snapshot") as Dictionary).has("day_length"),
+			"v2 快照不再写 day_length（旧名彻底退场）")
+	var w1: PackedStringArray = r1.get("warnings", PackedStringArray())
+	ok(_warn_mentions(w1, "迁移"), "告警说明发生过迁移", str(w1))
+	ok(_warn_mentions(w1, "重标定"), "告警说明时间被重标定", str(w1))
+
+	section("相位折叠：0/170/340 都落在 00:00，非整数比落到最近的整秒")
+	for c in [{"t": 0.0, "secs": 0.0, "clock": "00:00"},
+			{"t": 170.0, "secs": 0.0, "clock": "00:00"},
+			{"t": 340.0, "secs": 0.0, "clock": "00:00"},
+			{"t": 21.25, "secs": 10800.0, "clock": "03:00"},
+			{"t": 85.0, "secs": 43200.0, "clock": "12:00"},
+			{"t": 1.0, "secs": 508.0, "clock": "00:08"}]:
+		_write_text(_slot_file(2), '{"schema_version": 1, "game": {"game_time": %s}}' % str(c["t"]))
+		var r: Dictionary = ss.call("load_slot", 2)
+		ok(bool(r.get("ok")), "相位 %s 可读" % str(c["t"]), str(r.get("reason")))
+		near(gs.get("game_time"), float(c["secs"]), 0.000001,
+				"相位 %s → %s 游戏秒" % [str(c["t"]), str(c["secs"])])
+		eq(String(gs.call("clock_text")), "第 1 天 " + String(c["clock"]),
+				"相位 %s 的时钟读数" % str(c["t"]))
+
+	section("非法 game_time：整档拒读，GameState 一个字段都不改")
+	gs.set("money", 555)
+	gs.set("game_time", 43200.0)
+	var bad := [
+		{"slot": 3, "text": '{"schema_version": 2, "game": {"game_time": -0.5}}',
+			"what": "v2 负值"},
+		{"slot": 4, "text": '{"schema_version": 1, "game": {"game_time": -5.0, "day_length": 170.0}}',
+			"what": "v1 负相位（迁移不许瞎猜正数）"},
+	]
+	for c in bad:
+		_write_text(_slot_file(int(c["slot"])), String(c["text"]))
+		var r: Dictionary = ss.call("load_slot", int(c["slot"]))
+		ok(not bool(r.get("ok")), "拒读：%s" % c["what"], str(r.get("reason")))
+		ok(String(r.get("reason")).contains("game_time"), "拒读原因点名 game_time",
+				str(r.get("reason")))
+		eq(int(r.get("migrated_from", -1)), 0, "拒读结果里 migrated_from = 0")
+	eq(int(gs.get("money")), 555, "两次拒读之后 money 仍是 555")
+	near(gs.get("game_time"), 43200.0, 0.000001, "两次拒读之后 game_time 仍是 43 200")
+	var validator := Callable(ss, "_bad_game_time")
+	ok(String(validator.call({"game_time": INF})).contains("无穷"), "INF 被判定为非法")
+	ok(String(validator.call({"game_time": -INF})).contains("无穷"), "-INF 被判定为非法")
+	ok(String(validator.call({"game_time": NAN})).contains("NaN"), "NaN 被判定为非法")
+	ok(String(validator.call({"game_time": -1.0})).contains("负"), "负值被判定为非法")
+	eq(String(validator.call({"game_time": 0.0})), "", "0 是合法时刻")
+	eq(String(validator.call({"game_time": "早晨"})), "",
+			"字符串不在这一步拦（那是字段级告警的活，整档不该因此被拒）")
+	eq(String(validator.call({})), "", "缺字段不在这里拦（由 restore() 报缺失）")
+
+	section("v1 缺 game 段：报原问题，不伪造 game")
+	_write_text(_slot_file(5), '{"schema_version": 1}')
+	var r5: Dictionary = ss.call("load_slot", 5)
+	ok(not bool(r5.get("ok")), "v1 缺 game 段仍拒读")
+	ok(String(r5.get("reason")).contains("game"), "原因仍是「缺少 game 段」", str(r5.get("reason")))
+
+	section("v2 文件不再迁移；game_time 原样应用")
+	_write_text(_slot_file(6), '{"schema_version": 2, "game": {"game_time": 43200.0, '
+			+ '"visual_day_length": 170.0, "money": 9}}')
+	var r6: Dictionary = ss.call("load_slot", 6)
+	ok(bool(r6.get("ok")), "v2 文件可读", str(r6.get("reason")))
+	eq(int(r6.get("migrated_from", -1)), 0, "v2 文件 migrated_from = 0（不重复迁移）")
+	ok(not _warn_mentions(r6.get("warnings", PackedStringArray()), "迁移"), "v2 文件没有迁移告警")
+	near(gs.get("game_time"), 43200.0, 0.000001, "v2 的 game_time 原样应用（不被当成相位再缩放）")
+	eq(int(gs.get("money")), 9, "v2 文件字段照常应用")
+
+	section("v1 同时带两个名字：visual_day_length 优先，不被旧名覆盖")
+	_write_text(_slot_file(7), '{"schema_version": 1, "game": {"day_length": 170.0, '
+			+ '"visual_day_length": 200.0, "game_time": 17.0}}')
+	var r7: Dictionary = ss.call("load_slot", 7)
+	ok(bool(r7.get("ok")), "同时带两个名字仍可读", str(r7.get("reason")))
+	near(gs.get("visual_day_length"), 200.0, 0.000001,
+			"visual_day_length 保留 200（没有被 day_length 的 170 覆盖）")
+
+	section("一次性提示真的出现在菜单上（不是只写进 warnings）")
+	var page: Node = (load("res://scripts/ui/menu_page.gd") as Script).new()
+	get_root().add_child(page)
+	await process_frame
+	_write_text(_slot_file(8), '{"schema_version": 1, "game": {"game_time": 42.5, "day_length": 170.0}}')
+	page.call("_load_from", 8)
+	var hint := String(page.call("hint_text"))
+	contains(hint, "迁移", "读 v1 存档后，菜单提示里说明发生了迁移")
+	contains(hint, "重标定", "提示里说明时间被重标定")
+	contains(hint, "06:00", "提示直接报迁移后的时刻（玩家不用自己换算）")
+	eq(String(gs.call("clock_text")), "第 1 天 06:00", "读档后时钟确实是 06:00")
+	_write_text(_slot_file(9), '{"schema_version": 2, "game": {"game_time": 43200.0}}')
+	page.call("_load_from", 9)
+	var hint2 := String(page.call("hint_text"))
+	ok(not hint2.contains("迁移"), "v2 存档不会重复提示迁移", hint2)
+	page.queue_free()
+	await process_frame
+
+	_saves_end()
+	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "隔离目录已清走（saves.bak 不存在）")
+	_restore_defaults()
+
 func _case_repro() -> void:
 	await process_frame
 	var base := _opt_out.path_join("repro")
@@ -2811,7 +2959,7 @@ func _case_state() -> void:
 	if gs_script != null:
 		for p in gs_script.get_script_property_list():
 			props[String(p["name"])] = true
-	for prop in ["world_seed", "game_time", "day_length", "party", "money",
+	for prop in ["world_seed", "game_time", "visual_day_length", "party", "money",
 			"food", "supply", "scene_kind", "player_pos", "playtime"]:
 		ok(props.has(prop), "GameState.%s 属性存在" % prop)
 
@@ -2837,8 +2985,8 @@ func _case_state() -> void:
 	var main_src := FileAccess.get_file_as_string("res://scripts/core/main.gd")
 	ok(main_src.contains("var world_seed := 20250929"),
 			"main.gd 的 world_seed 默认值仍是 20250929（两个来源同值，接线才不改变画面）")
-	eq(gs.get("day_length"), 170.0,
-			"GameState.day_length 仍是 170（S1.4a 起只是 v1 存档的遗留字段，时钟不再读它）")
+	eq(gs.get("visual_day_length"), 170.0,
+			"GameState.visual_day_length 仍是 170（S1.4c 起只是数据字段，日历不读它）")
 
 	section("逻辑步：60Hz 固定步，game_time 只以整秒块前进（不掺真实 delta）")
 	eq(Engine.physics_ticks_per_second, 60, "引擎物理步长 = 60Hz（§3.2 逻辑固定步）")
@@ -3033,7 +3181,7 @@ func _case_roundtrip() -> void:
 	var parsed: Variant = JSON.parse_string(raw)
 	ok(typeof(parsed) == TYPE_DICTIONARY, "槽 3 是合法 JSON 对象")
 	var d: Dictionary = parsed if typeof(parsed) == TYPE_DICTIONARY else {}
-	eq(int(d.get("schema_version", 0)), 1, "存档含 schema_version: 1")
+	eq(int(d.get("schema_version", 0)), 2, "存档含 schema_version: 2（S1.4c 起）")
 	ok(String(d.get("saved_at", "")).length() >= 16, "含可读的真实写入时刻",
 			str(d.get("saved_at", "")))
 	ok(int(d.get("saved_at_unix", 0)) > 0, "含 unix 写入时刻", str(d.get("saved_at_unix", 0)))
@@ -3046,7 +3194,7 @@ func _case_roundtrip() -> void:
 	eq(int(game.get("food", -1)), PROBE_FOOD, "game.food")
 	eq(int(game.get("supply", -1)), PROBE_SUPPLY, "game.supply")
 	eq(int(game.get("scene_kind", -1)), PROBE_SCENE_KIND, "game.scene_kind")
-	near(float(game.get("day_length", -1.0)), 170.0, 0.000001, "game.day_length")
+	near(float(game.get("visual_day_length", -1.0)), 170.0, 0.000001, "game.visual_day_length")
 	var pos: Array = game.get("player_pos", [])
 	eq(pos.size(), 3, "game.player_pos 为 [x,y,z]")
 	if pos.size() == 3:
@@ -3168,7 +3316,7 @@ func _case_dirty() -> void:
 	gs.set("game_time", 1.0)
 
 	section("可用但脏：缺失字段逐条告警并保留当前值")
-	_write_text(_slot_file(1), '{"schema_version": 1, "game": {}}')
+	_write_text(_slot_file(1), '{"schema_version": 2, "game": {}}')
 	var r1: Dictionary = ss.call("load_slot", 1)
 	ok(bool(r1.get("ok")), "空 game 段仍可读（字段级问题不该拒绝整个存档）",
 			str(r1.get("reason")))
@@ -3222,7 +3370,7 @@ func _case_dirty() -> void:
 	section("缺失 schema_version：告警并沿用当前版本")
 	_write_text(_slot_file(1), '{"game": {"money": 12}}')
 	var r7: Dictionary = ss.call("load_slot", 1)
-	ok(bool(r7.get("ok")), "缺失 schema_version 仍按 v1 读取", str(r7.get("reason")))
+	ok(bool(r7.get("ok")), "缺失 schema_version 仍按当前格式 v2 读取", str(r7.get("reason")))
 	ok(_warn_mentions(r7.get("warnings", PackedStringArray()), "缺少 schema_version"),
 			"告警说明缺失 schema_version")
 	eq(gs.get("money"), 12, "字段照常应用")
@@ -3388,7 +3536,7 @@ func _case_atomic() -> void:
 
 	section("残留 .tmp 既不是槽位，也不会被当成存档")
 	var tmp8 := _slot_file(8) + ".tmp"
-	_write_text(tmp8, '{"schema_version": 1, "game": {}}')
+	_write_text(tmp8, '{"schema_version": 2, "game": {}}')
 	ok(not bool(ss.call("slot_exists", 8)), "slot_exists(8) 为假（.tmp 不算槽位）")
 	var r8: Dictionary = ss.call("load_slot", 8)
 	ok(not bool(r8.get("ok")), "load_slot(8) 拒绝")
@@ -3422,7 +3570,7 @@ func _case_no_autosave() -> void:
 
 	section("阶段 2：目录已有存档时，全流程内容哈希与 mtime 零变化")
 	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
-	_write_text(_slot_file(1), '{"schema_version": 1, "game": {"money": 5}}')
+	_write_text(_slot_file(1), '{"schema_version": 2, "game": {"money": 5}}')
 	var before := _saves_snapshot(ProjectSettings.globalize_path(SAVES_DIR))
 	eq(before.size(), 1, "基线快照含 1 个文件")
 	await _idle_run(90)
@@ -4293,9 +4441,9 @@ func _fixture_slot_text(slot: int) -> String:
 	var hour := (6 + slot) % 24
 	var minute := slot * 5
 	var playtime := float(slot * 137)
-	var game_time := float(slot - 1) * 170.0 + (float(hour) * 60.0 + float(minute)) / 1440.0 * 170.0
+	var game_time := float(slot - 1) * 86400.0 + float(hour) * 3600.0 + float(minute) * 60.0
 	return JSON.stringify({
-		"schema_version": 1,
+		"schema_version": 2,
 		"saved_at": "2025-10-16 %02d:%02d:00" % [hour, minute],
 		"saved_at_unix": 1760571600 + slot * 60,
 		"meta": {
@@ -4313,7 +4461,7 @@ func _fixture_slot_text(slot: int) -> String:
 		"game": {
 			"world_seed": PROBE_SEED,
 			"game_time": game_time,
-			"day_length": 170.0,
+			"visual_day_length": 170.0,
 			"party": {"name": "无名军团", "level": slot},
 			"money": slot * 11,
 			"food": slot * 3,
@@ -4432,13 +4580,13 @@ func _saves_snapshot(dir_path: String) -> Dictionary:
 	return out
 
 
-## 一次观测是否算「完整」：JSON 对象 + schema_version 1 + 必备 game.money。
+## 一次观测是否算「完整」：JSON 对象 + schema_version 2 + 必备 game.money。
 ## 「不存在」与「存在但读不出」是另外两类观测，由调用方单独计数，不算半截。
 func _slot_text_is_complete(txt: String) -> bool:
 	var d := _parse_json_silent(txt)
 	if d.is_empty():
 		return false
-	if int(d.get("schema_version", -1)) != 1:
+	if int(d.get("schema_version", -1)) != 2:
 		return false
 	var game_v: Variant = d.get("game", null)
 	if typeof(game_v) != TYPE_DICTIONARY:
@@ -5001,7 +5149,7 @@ func _dir_has_json(dir_path: String) -> bool:
 func _world_facts(gs: Node) -> Dictionary:
 	var snap: Dictionary = gs.call("snapshot")
 	var out := {}
-	for k in ["world_seed", "day_length", "party", "money", "food", "supply",
+	for k in ["world_seed", "visual_day_length", "party", "money", "food", "supply",
 			"scene_kind", "player_pos"]:
 		out[k] = snap.get(k)
 	return out
