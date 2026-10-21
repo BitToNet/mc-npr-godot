@@ -287,10 +287,18 @@ const CASES := {
 	},
 	"s1_3_path": {
 		"desc": "行军图与确定性 A*（S1.3b）：参数表规范化（32 m / 提速 0.35 / 坡度 1.6 / 水域余量 1.5）"
-				+ "且缺字段/越界/schema 越高各有契约；75×75 格图水陆互斥、道路直线栅格化为成本折扣、"
+				+ "含 S1.3c 的 24 m/s / 300°/s / 6 m / ±12°，且缺字段/越界/schema 越高各有契约；75×75 格图水陆互斥、道路直线栅格化为成本折扣、"
 				+ "穿水只记账；寻路不穿水不越界、单步 ≤ 一格对角、首末点精确；水里/越界各有明确失败原因；"
 				+ "同起终点两次与重建后路径逐位一致，换 seed 必变；开/关提速的成本比 = 1/1.35 且 ±5% 内，"
 				+ "道路格速度系数精确 1.35",
+		"kind": "pure",
+	},
+	"s1_3_move": {
+		"desc": "移动积分与点击移动（S1.3c）：场景根长到 6 个子节点、队伍落在 parties[0] 且脚底贴地；"
+				+ "24 m/s / 300°/s / 6 m / ±12° 这四组数值从参数表生效；屏幕点拾取回地面误差 ≤ 1 m；"
+				+ "60 s × 3600 帧轨迹逐帧断言（贴地 ≤ 0.02 m、位移 ≡ 速度 × dt ≤ 1 mm、帧间转角 ≤ 300°/s×dt、"
+				+ "零 NaN、零帧进水、俯仰不超 12° 且确实随地形起伏）；到达后 1 s 静止、改令不回弹、"
+				+ "水格/界外点击被拒且不打断原命令；同一段 300 帧轨迹两次逐位一致",
 		"kind": "pure",
 	},
 	"s1_3_party": {
@@ -724,6 +732,8 @@ func _dispatch(id: String) -> void:
 			await _case_party_marker()
 		"s1_3_path":
 			await _case_travel_graph()
+		"s1_3_move":
+			await _case_travel_move()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -3137,7 +3147,7 @@ func _case_router() -> void:
 			bus.connect(sig, func(_a: Dictionary) -> void:
 				facts.append(sig))
 
-	section("世界基线：S1.2c 起 world 是「地形 + 固定正午舞台 + 相机」")
+	section("世界基线：S1.3c 起 world 是「地形 + 固定正午舞台 + 相机 + 队伍」")
 	var base_nodes := get_node_count()
 	var base_fp := _world_fingerprint(current_scene)
 	ok(base_nodes > 5, "世界节点数 = %d（地形 + autoload，不是空指针）" % base_nodes)
@@ -3146,10 +3156,14 @@ func _case_router() -> void:
 	# 判据第二次随交付物迁移（S1.2c）：世界现在有地形 + 固定正午舞台 + 相机，所以
 	# 「指纹恰为『根 → 地形』、且没有相机」不再成立。换成的仍是能力断言：地形在、
 	# 相机会渲染、舞台三件齐备 —— 而且明确要求「唯一 current 相机」，不比原来弱。
-	ok(String(base_fp).begins_with("StrategicMap:Node3D:5|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
-			"结构指纹形如『根 → 地形 → 块容器』且根有 5 个子节点：%s" % String(base_fp).substr(0, 72))
+	# 判据第三次随交付物迁移（S1.3c）：根多了第 6 个子节点 `PartyLayer`。这里同步
+	# 抬到 6，并且**加**三条能力断言（队伍在、棋子贴地、自带行军图），不是简单改数字。
+	ok(String(base_fp).begins_with("StrategicMap:Node3D:6|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
+			"结构指纹形如『根 → 地形 → 块容器』且根有 6 个子节点：%s" % String(base_fp).substr(0, 72))
 	contains(base_fp, "StrategicCamera:Node3D:1|Camera3D:Camera3D",
 			"结构指纹里有相机（S1.2c 的交付物）")
+	contains(base_fp, "PartyLayer:Node3D:1|PartyMarker:Node3D:",
+			"结构指纹里有队伍棋子（S1.3c 的交付物）")
 	var terr: Node = current_scene.get_node_or_null("StrategicTerrain")
 	ok(terr != null, "世界有 StrategicTerrain")
 	var cam_rig: Node = current_scene.get_node_or_null("StrategicCamera")
@@ -3159,10 +3173,25 @@ func _case_router() -> void:
 	if vp != null:
 		cams = vp.get_camera_3d()
 	ok(cams != null, "视口里有 current 相机（画面不再全黑）")
-	eq(current_scene.get_child_count(), 5,
-			"根 5 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机")
+	eq(current_scene.get_child_count(), 6,
+			"根 6 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机 + 队伍")
 	ok(current_scene.get_node_or_null("Sun") != null, "世界有 Sun（固定正午）")
 	ok(current_scene.get_node_or_null("WorldEnvironment") != null, "世界有 WorldEnvironment")
+	# S1.3c 第三次迁移的能力断言：队伍在、棋子贴地、自带行军图。
+	var party_layer: Node = current_scene.get_node_or_null("PartyLayer")
+	ok(party_layer != null, "世界有 PartyLayer（S1.3c 的交付物）")
+	var party_marker: Node = null
+	if party_layer != null:
+		party_marker = party_layer.get_node_or_null("PartyMarker")
+	ok(party_marker != null, "PartyLayer 下挂着 PartyMarker")
+	var pw: Dictionary = current_scene.call("party_report")
+	eq(String(pw.get("state", "")), "IDLE", "刚进世界时队伍没有命令（IDLE）")
+	ok(bool(pw.get("graph_ok", false)), "队伍自带一张已建好的行军图")
+	var wsession = current_scene.get("session")
+	if party_marker != null and wsession != null:
+		near(float(party_marker.position.y),
+				float(wsession.field.height_at(float(pw.get("x", 0.0)), float(pw.get("z", 0.0)))),
+				0.001, "队伍脚底贴地（与 height_at 一致）")
 	var chunk_n := 0
 	var mesh_n := 0
 	if terr != null:
@@ -6131,7 +6160,7 @@ func _case_strategic_mesh() -> void:
 	ne(_terrain_signature(t3), sig, "换 seed 几何必变（反向对照）")
 	ne(int(t3.stats["max_y"]), int(st["max_y"]), "换 seed 最高点不同")
 
-	section("场景接线：地形 + 舞台 + 相机（S1.2c 后根有 5 个子节点）")
+	section("场景接线：地形 + 舞台 + 相机 + 队伍（S1.3c 后根有 6 个子节点）")
 	rng.call("seed_from", 20250929)
 	var ps := load(WORLD_SCENE) as PackedScene
 	ok(ps != null, "strategic_map.tscn 可加载")
@@ -6139,7 +6168,8 @@ func _case_strategic_mesh() -> void:
 	get_root().add_child(inst)
 	await process_frame
 	ok(inst.terrain != null, "场景建出了 StrategicTerrain")
-	eq(inst.get_child_count(), 5, "根 5 个子节点：地形 + 舞台三件 + 相机")
+	eq(inst.get_child_count(), 6, "根 6 个子节点：地形 + 舞台三件 + 相机 + 队伍")
+	ok(inst.get("party") != null, "场景建出了 PartyLayer")
 	eq(String(inst.get_child(0).name), "StrategicTerrain", "第一个子节点仍是地形")
 	var sc: Dictionary = inst.terrain_stats()
 	eq(int(sc.get("land_tris", 0)), 11250, "场景里的地形也是 11 250 三角")
@@ -6688,8 +6718,14 @@ func _case_travel_graph() -> void:
 	near(tp.speed_on_road(), 1.35, 0.000001, "道路速度系数 = 1.35")
 	near(tp.cost_on_road(), 1.0 / 1.35, 0.000001, "道路成本系数 = 1/1.35")
 	ge(float(tp.max_expanded), 1000.0, "展开预算 %d" % tp.max_expanded)
+	near(tp.march_speed, 24.0, 0.0001, "行军速度 24 m/s（S1.3c）")
+	near(tp.turn_rate_deg, 300.0, 0.0001, "转向角速度 300°/s")
+	near(tp.arrive_radius, 6.0, 0.0001, "到达半径 6 m")
+	near(tp.max_pitch_deg, 12.0, 0.0001, "爬坡俯仰上限 12°")
+	near(tp.turn_rate_rad(), deg_to_rad(300.0), 0.000001, "转向角速度的弧度形式")
+	near(tp.max_pitch_rad(), deg_to_rad(12.0), 0.000001, "俯仰上限的弧度形式")
 	var bad := TravelGraph.Params.from_dict({})
-	ge(float(bad.warnings.size()), 5.0, "缺字段逐条告警（%d 条）" % bad.warnings.size())
+	ge(float(bad.warnings.size()), 9.0, "缺字段逐条告警（%d 条：9 个字段各说一次，含 S1.3c 的 4 个移动参数）" % bad.warnings.size())
 	near(bad.grid_m, 32.0, 0.0001, "缺字段时用兜底值")
 	var clamped := TravelGraph.Params.from_dict({"road_speed_bonus": 9.0, "schema": 1})
 	near(clamped.road_speed_bonus, 1.0, 0.0001, "越界值钳到安全区间上沿")
@@ -6881,3 +6917,227 @@ func _travel_land_point(g: TravelGraph) -> Vector2:
 			if g.walkable[i] != 0 and g.road[i] == 0:
 				return g.cell_center(ix, iz)
 	return Vector2.ZERO
+
+## S1.3c：移动积分 —— 落位 / 点击闭环 / 60 s 轨迹 / 到达与改令语义 / 决定论。
+## 全部在**真实场景**里跑（`strategic_map.tscn` 的 `PartyLayer`），步长固定 1/60 秒，
+## 不读帧率也不读 `Time.*`，所以这条轨迹与真机同源，而且可以逐帧断言。
+func _case_travel_move() -> void:
+	const DT := 1.0 / 60.0
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var ps := load(WORLD_SCENE) as PackedScene
+	ok(ps != null, "strategic_map.tscn 可加载")
+	if ps == null:
+		return
+	var inst: Node = ps.instantiate()
+	get_root().add_child(inst)
+	await process_frame
+
+	section("落位：队伍随场景建起来，并且踩在地上")
+	eq(String(inst.get("boot_error")), "", "世界建成（无 boot_error）")
+	ok(String(inst.get("party_error")) == "", "行军图建成：%s" % String(inst.get("party_error")))
+	var party: PartyMover = inst.get("party")
+	ok(party != null, "场景根建出了 PartyLayer")
+	if party == null:
+		inst.queue_free()
+		return
+	eq(String(party.name), "PartyLayer", "队伍节点叫 PartyLayer（第 6 个子节点）")
+	ok(party.marker != null and party.marker.get_parent() == party, "棋子挂在 PartyLayer 下")
+	var field: HeightField = party.field
+	var data: WorldData = party.data
+	var graph: TravelGraph = party.graph
+	ok(graph != null and graph.built, "队伍自带一张已建好的行军图")
+	var report: Dictionary = inst.call("party_report")
+	eq(String(report["state"]), "IDLE", "开局状态 IDLE（没有命令）")
+	ok(bool(report["graph_ok"]), "party_report 报图可用")
+	var start := Vector2(float(report["x"]), float(report["z"]))
+	var p0: Dictionary = data.parties[0]
+	near(start.distance_to(Vector2(float(p0["x"]), float(p0["z"]))), 0.0, 0.001,
+		"出生点 = data.parties[0]（世界数据说了算）")
+	near(float(report["y"]), field.height_at(start.x, start.y), 0.001, "棋子脚底贴地")
+
+	section("数值从参数表生效：24 m/s / 300°/s / 6 m / ±12°")
+	near(party.speed_mps, 24.0, 0.0001, "行军速度 24 m/s")
+	near(party.turn_rate, deg_to_rad(300.0), 0.000001, "转向 300°/s")
+	near(party.arrive_radius, 6.0, 0.0001, "到达半径 6 m")
+	near(party.max_pitch, deg_to_rad(12.0), 0.000001, "俯仰上限 12°")
+
+	section("点击闭环：屏幕点 → 地面点 → 寻路")
+	var cam: StrategicCamera = inst.get("camera")
+	ok(cam != null, "场景有相机")
+	# 最长的一条路：与 `s1_3_path` 和取证图选同一条（同长取数组序）。
+	var by_id := {}
+	for st in data.settlements:
+		by_id[String(st["id"])] = st
+	var r0: Dictionary = data.roads[0]
+	for r in data.roads:
+		if float(r["length"]) > float(r0["length"]):
+			r0 = r
+	var a: Dictionary = by_id[String(r0["a"])]
+	var b: Dictionary = by_id[String(r0["b"])]
+	var pa := Vector2(float(a["x"]), float(a["z"]))
+	var pb := Vector2(float(b["x"]), float(b["z"]))
+	var faction := int(a["faction"])
+	party.spawn_at(pa.x, pa.y, faction)
+	cam.set_tier(StrategicCamera.Tier.REGION)
+	cam.focus_on(pb.x, pb.y)
+	cam.snap_to_target()
+	var screen := cam.screen_of(Vector3(pb.x, field.height_at(pb.x, pb.y), pb.y))
+	var pick: Dictionary = cam.pick_ground(screen)
+	ok(bool(pick["ok"]), "屏幕点 %s 能拾取到地面（%s）" % [str(screen), String(pick["reason"])])
+	var hit := Vector3.ZERO
+	if bool(pick["ok"]):
+		hit = pick["point"]
+		var err := Vector2(hit.x, hit.z).distance_to(pb)
+		le(err, 1.0, "拾取误差 %.3f m ≤ 1 m" % err)
+		near(hit.y, field.height_at(hit.x, hit.z), 0.000001, "拾取点的 y 就是地面高度")
+		var order := party.order_to(hit.x, hit.z)
+		ok(bool(order["ok"]), "按拾取点下令成功（%s）" % String(order["reason"]))
+		ge(float(order["length"]), 600.0, "命令长度 %.1f m（沿 %.0f m 的那条路）" % [
+			float(order["length"]), float(r0["length"])])
+		eq(party.state_name(), "MARCHING", "下令后状态 MARCHING")
+
+	section("非法目标被拒：水格 / 界外，且不打断原命令")
+	var wet := Vector2.ZERO
+	var found_wet := false
+	for iz in graph.n:
+		for ix in graph.n:
+			if graph.walkable[graph.index_of(ix, iz)] == 0:
+				wet = graph.cell_center(ix, iz)
+				found_wet = true
+				break
+		if found_wet:
+			break
+	ok(found_wet, "图里至少有一个不可走格（水）")
+	var before := party.state_name()
+	var bad := party.order_to(wet.x, wet.y)
+	ok(not bool(bad["ok"]), "点水格被拒：%s" % String(bad["reason"]))
+	contains(String(bad["reason"]), "水", "拒绝原因说清水/边界")
+	eq(party.state_name(), before, "被拒后原命令不受影响（仍 %s）" % before)
+	var oob := party.order_to(5000.0, 5000.0)
+	ok(not bool(oob["ok"]), "界外目标被拒：%s" % String(oob["reason"]))
+	contains(String(oob["reason"]), "越界", "拒绝原因说清越界")
+
+	section("60 s 轨迹：逐帧贴地 / 位移 ≡ 速度 × dt / 转角限速 / 不进水里")
+	party.spawn_at(pa.x, pa.y, faction)
+	var ordered := party.order_to(pb.x, pb.y)
+	ok(bool(ordered["ok"]), "从 A 走到 B 下令成功（%s）" % String(ordered["reason"]))
+	var frames := 3600
+	var legs := 0
+	var max_ground := 0.0
+	var max_yaw := 0.0
+	var max_speed_err := 0.0
+	var max_pitch := 0.0
+	var wet_frames := 0
+	var nan_frames := 0
+	var prev_facing := party.facing
+	var target := pb
+	for i in frames:
+		if party.state_name() == "ARRIVED":
+			legs += 1
+			target = pa if target == pb else pb
+			var again := party.order_to(target.x, target.y)
+			ok(bool(again["ok"]), "第 %d 段：改走另一头成功（%s）" % [legs, String(again["reason"])])
+			# 新命令重新定义朝向基准：受 turn_rate 限制的是**行进中**的逐帧转角，
+			# 不是"停下改令"这一刻的朝向差。
+			prev_facing = party.facing
+		party.step(DT)
+		var rp: Dictionary = party.report()
+		var st := String(rp["state"])
+		var x := float(rp["x"])
+		var z := float(rp["z"])
+		var y := float(rp["y"])
+		if is_nan(x) or is_nan(z) or is_nan(y):
+			nan_frames += 1
+			continue
+		max_ground = maxf(max_ground, absf(y - field.height_at(x, z)))
+		if not graph.is_walkable_at(x, z):
+			wet_frames += 1
+		var f := float(rp["facing"])
+		max_yaw = maxf(max_yaw, absf(wrapf(f - prev_facing, -PI, PI)))
+		prev_facing = f
+		max_pitch = maxf(max_pitch, absf(float(rp["pitch"])))
+		# 只有"还有余路"的帧才必须精确等于预算：最后一步走的是剩余量，天然小于预算。
+		if float(rp["remaining"]) > party.arrive_radius + 0.001:
+			var factor := graph.speed_factor_at(x, z)
+			max_speed_err = maxf(max_speed_err,
+				absf(float(rp["last_moved"]) - 24.0 * factor * DT))
+	eq(nan_frames, 0, "3600 帧没有 NaN")
+	le(max_ground, 0.02, "全程贴地误差 %.6f m ≤ 0.02 m" % max_ground)
+	eq(wet_frames, 0, "全程没有一帧落在不可走格（水）")
+	le(max_yaw, party.turn_rate * DT + 0.000001,
+		"帧间朝向变化 %.6f ≤ %.6f rad" % [max_yaw, party.turn_rate * DT])
+	le(max_speed_err, 0.001, "位移与 24×系数×dt 的最大偏差 %.6f m ≤ 1 mm" % max_speed_err)
+	le(max_pitch, party.max_pitch + 0.000001, "俯仰 %.4f rad 没超过 12°" % max_pitch)
+	ge(max_pitch, deg_to_rad(6.0), "俯仰确实随地形起伏（峰值 %.2f°）" % rad_to_deg(max_pitch))
+	ge(float(legs), 2.0, "60 s 里走完 %d 段（不止一段，改令真的生效）" % legs)
+
+	section("到达后静止：不再有一丝位移")
+	var guard := 0
+	while party.state_name() != "ARRIVED" and guard < 4000:
+		party.step(DT)
+		guard += 1
+	eq(party.state_name(), "ARRIVED", "最终状态 ARRIVED")
+	var rest := Vector2(float(party.report()["x"]), float(party.report()["z"]))
+	for i in 60:
+		party.step(DT)
+	var after := Vector2(float(party.report()["x"]), float(party.report()["z"]))
+	le(rest.distance_to(after), 0.000001, "到达后 1 s 位移 %.9f m" % rest.distance_to(after))
+	le(float(party.report()["remaining"]), party.arrive_radius + 0.000001,
+		"停在到达半径内（剩余 %.3f m）" % float(party.report()["remaining"]))
+
+	section("改令不回弹：新命令立刻生效，不沿旧路滑行")
+	var old_target := Vector2(float(party.report()["x"]), float(party.report()["z"]))
+	var o2 := party.order_to(pa.x, pa.y)
+	ok(bool(o2["ok"]), "从 B 侧改走 A 成功（%s）" % String(o2["reason"]))
+	var d_prev := Vector2(float(party.report()["x"]), float(party.report()["z"])).distance_to(old_target)
+	var grew := true
+	for i in 20:
+		party.step(DT)
+		var d := Vector2(float(party.report()["x"]), float(party.report()["z"])).distance_to(old_target)
+		if d <= d_prev:
+			grew = false
+		d_prev = d
+	ok(grew, "20 帧内离旧终点的距离单调增大（没有按旧路继续走）")
+
+	section("手感（D-）：点下去当帧就走，且不挪相机")
+	party.spawn_at(pa.x, pa.y, faction)
+	cam.set_tier(StrategicCamera.Tier.REGION)
+	cam.focus_on(pb.x, pb.y)
+	cam.snap_to_target()
+	var focus_before := cam.focus
+	var s2 := cam.screen_of(Vector3(pb.x, field.height_at(pb.x, pb.y), pb.y))
+	var p2: Dictionary = cam.pick_ground(s2)
+	ok(bool(p2["ok"]), "第二次拾取仍然成功（%s）" % String(p2["reason"]))
+	if bool(p2["ok"]):
+		var hp: Vector3 = p2["point"]
+		var o3 := party.order_to(hp.x, hp.z)
+		ok(bool(o3["ok"]), "第二次下令成功")
+		party.step(DT)
+		ok(float(party.report()["last_moved"]) > 0.1,
+			"下单后第一帧就动了 %.3f m（不是先原地转身）" % float(party.report()["last_moved"]))
+	near(cam.focus.distance_to(focus_before), 0.0, 0.000001, "点击移动没有挪动相机焦点")
+
+	section("决定论：同一段 300 帧轨迹两次逐位一致")
+	party.spawn_at(pa.x, pa.y, faction)
+	var sig1 := _travel_trace(party, pb, 300, DT)
+	party.spawn_at(pa.x, pa.y, faction)
+	var sig2 := _travel_trace(party, pb, 300, DT)
+	ne(sig1, "", "轨迹签名非空")
+	eq(sig1, sig2, "两次轨迹签名逐位一致（%d 字符）" % sig1.length())
+
+	inst.queue_free()
+	rng.call("seed_from", 20250929)
+
+
+## 跑 `frames` 帧并返回位置 + 朝向签名（用例内部用；不属于产品代码）。
+func _travel_trace(party: PartyMover, to: Vector2, frames: int, dt: float) -> String:
+	var o := party.order_to(to.x, to.y)
+	if not bool(o["ok"]):
+		return ""
+	var parts := PackedStringArray()
+	for i in frames:
+		party.step(dt)
+		var rp: Dictionary = party.report()
+		parts.append("%.6f,%.6f,%.6f" % [float(rp["x"]), float(rp["z"]), float(rp["facing"])])
+	return "\n".join(parts)

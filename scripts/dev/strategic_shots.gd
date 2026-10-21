@@ -64,6 +64,9 @@ var route_points := PackedVector2Array()
 var route_info := {}
 ## The graph that produced `route_points` (kept so the plate can also paint its road cells).
 var route_graph: TravelGraph = null
+## `--march=<秒>` (S1.3c) lets the real party walk the `--route=1` road for that many
+## seconds before the shutter, so "移动积分" also has a plate, not just test numbers.
+var march_seconds := 0.0
 const StyleDef := preload("res://scripts/core/style.gd")
 
 
@@ -79,6 +82,8 @@ func _ready() -> void:
 			span_override = a.split("=", true, 1)[1].to_float()
 		elif a.begins_with("--route="):
 			with_route = a.split("=", true, 1)[1].to_int() != 0
+		elif a.begins_with("--march="):
+			march_seconds = a.split("=", true, 1)[1].to_float()
 	if not TIERS.has(tier_name):
 		push_warning("[shots] 未知 --tier='%s'，回退 global" % tier_name)
 		tier_name = "global"
@@ -130,6 +135,8 @@ func build(p_seed: int, p_tier: String) -> void:
 		_place_party(site)
 	if with_route:
 		_draw_route()
+	if march_seconds > 0.0:
+		_march(march_seconds)
 	print("[shots] seed=%d tier=%s focus=%s size=%.1f party=%s route=%s" % [
 			seed_value, tier_name, str(focus_point()), _size(), str(_party_point()),
 			str(route_info.get("summary", "off"))])
@@ -227,6 +234,43 @@ func _trace_route() -> Dictionary:
 ## as "the road, followed" instead of a few isolated dots.  Dots carry **no ink hull**:
 ## they are 3 m props, and the inverted hull on a combined mesh shatters into slivers
 ## (`docs/ENGINEERING.md` §5 trap 35).
+## `--march=<秒>`：让场景里**真**的队伍沿 `--route=1` 那条路走 `秒` 秒（固定 1/60 步长），
+## 然后把镜头对到它身上并**冻结**它 —— 场景根的 `_process` 会继续推着它走，不冻结的话
+## 同一条命令两次拍出来的位置就不一样，图不能当证据。
+func _march(seconds: float) -> void:
+	var mover: PartyMover = null
+	if map != null:
+		mover = map.get("party") as PartyMover
+	if mover == null:
+		push_warning("[shots] --march 需要场景里已经建好队伍")
+		return
+	if route_points.size() < 2:
+		push_warning("[shots] --march 需要 --route=1 给出的折线")
+		return
+	var from: Vector2 = route_points[0]
+	var to: Vector2 = route_points[route_points.size() - 1]
+	mover.spawn_at(from.x, from.y, 0)
+	var order := mover.order_to(to.x, to.y)
+	if not bool(order.get("ok", false)):
+		push_warning("[shots] --march 下令失败：%s" % String(order.get("reason", "")))
+		return
+	var dt := 1.0 / 60.0
+	var frames := int(round(seconds / dt))
+	for i in frames:
+		mover.step(dt)
+	var report := mover.report()
+	mover.stop()
+	var cam: Node3D = map.get("camera") as Node3D
+	if cam != null and tier_name != "global":
+		cam.call("focus_on", float(report["x"]), float(report["z"]))
+		if span_override > 0.0:
+			cam.set("size_target", span_override)
+		cam.call("snap_to_target")
+	print("[shots] march %.1f s / %d 帧 → %s 位置=(%.1f, %.1f) 剩余 %.1f m（已冻结）" % [
+			seconds, frames, String(report["state"]), float(report["x"]), float(report["z"]),
+			float(report["remaining"])])
+
+
 func _draw_route() -> void:
 	if route_points.size() < 2 or map == null:
 		return

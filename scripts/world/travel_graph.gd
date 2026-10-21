@@ -13,7 +13,8 @@ extends RefCounted
 ##      确定性浮点运算 —— 同起终点两次运行必须逐位一致，不允许用哈希表迭代序。
 ##   2. **合法性**：一格"可走"要求**中心 + 四个角**都高于水面；对角移动还要求两个
 ##      正交邻居都可走（否则会从两块陆地之间的水角"斜穿"过去）。
-##   3. **数值进表**：格距 / 道路提速 / 坡度成本 / 水域余量 / 展开预算全在
+##   3. **数值进表**：格距 / 道路提速 / 坡度成本 / 水域余量 / 展开预算，以及 S1.3c 的
+##      行军速度 / 转向角速度 / 到达半径 / 爬坡俯仰上限，全在
 ##      `data/world/travel_params.json`，代码里只有安全区间与兜底值。
 ##
 ## 本类是纯数据 + 纯函数：不碰 `Time.*`、不抽随机数、不碰 `get_tree()`，所以能离树构建，
@@ -30,6 +31,11 @@ const DEFAULTS := {
 	"slope_cost": 1.6,
 	"water_margin": 1.5,
 	"max_expanded": 20000,
+	# 移动积分（S1.3c）：米/秒、转向角速度（°/s）、到达半径（m）、爬坡俯仰上限（°）。
+	"march_speed": 24.0,
+	"turn_rate_deg": 300.0,
+	"arrive_radius": 6.0,
+	"max_pitch_deg": 12.0,
 }
 
 ## 安全区间（超出即钳制并记告警，不致命）。
@@ -39,6 +45,10 @@ const RANGES := {
 	"slope_cost": [0.0, 8.0],
 	"water_margin": [0.0, 20.0],
 	"max_expanded": [100.0, 500000.0],
+	"march_speed": [1.0, 200.0],
+	"turn_rate_deg": [10.0, 1440.0],
+	"arrive_radius": [0.5, 60.0],
+	"max_pitch_deg": [0.0, 45.0],
 }
 
 ## 邻居展开顺序必须固定：先四个正交（+x / −x / +z / −z），再四个对角。顺序一变，
@@ -57,6 +67,10 @@ class Params:
 	var slope_cost := 1.6
 	var water_margin := 1.5
 	var max_expanded := 20000
+	var march_speed := 24.0
+	var turn_rate_deg := 300.0
+	var arrive_radius := 6.0
+	var max_pitch_deg := 12.0
 	var warnings := PackedStringArray()
 	var ok := true
 
@@ -67,6 +81,13 @@ class Params:
 	## 道路格的速度系数（b3 的移动积分直接用这个数，不再二次换算）。
 	func speed_on_road() -> float:
 		return 1.0 + road_speed_bonus
+
+	## 转向角速度（弧度/秒）与爬坡俯仰上限（弧度）—— 移动积分只认弧度。
+	func turn_rate_rad() -> float:
+		return deg_to_rad(turn_rate_deg)
+
+	func max_pitch_rad() -> float:
+		return deg_to_rad(max_pitch_deg)
 
 	static func load_from(path: String = PATH) -> Params:
 		var p := Params.new()
@@ -125,6 +146,14 @@ class Params:
 					p.water_margin = v
 				"max_expanded":
 					p.max_expanded = int(v)
+				"march_speed":
+					p.march_speed = v
+				"turn_rate_deg":
+					p.turn_rate_deg = v
+				"arrive_radius":
+					p.arrive_radius = v
+				"max_pitch_deg":
+					p.max_pitch_deg = v
 		return p
 
 

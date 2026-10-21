@@ -3,17 +3,23 @@ extends Node3D
 ## Root script of `scenes/world/strategic_map.tscn` (S1.2).
 ##
 ## SCOPE.  This scene owns exactly **one** `WorldSession`, one `StrategicTerrain`
-## built from it (S1.2b), and — since S1.2c — one `StrategicCamera` plus the fixed
-## noon stage it needs to be visible at all (`WorldEnvironment` + `Sun` +
-## `DayNight`, auto-cycle off).  The day/night *system* is still S1.7's; here the
-## node is only a way to reuse the diorama's exact sky and sun without inventing a
-## second look.
+## built from it (S1.2b), one `StrategicCamera` plus the fixed noon stage it needs
+## to be visible at all (`WorldEnvironment` + `Sun` + `DayNight`, auto-cycle off),
+## and — since S1.3c — the player party (`PartyMover` + its `PartyMarker`).  The
+## day/night *system* is still S1.7's; here the node is only a way to reuse the
+## diorama's exact sky and sun without inventing a second look.
 ##
 ## Booting the scene keeps one invariant true from the first batch: there is never
 ## more than one world instance per scene, and it is always built through
 ## `WorldSession.boot()`, which reseeds the generator (so re-entering the scene
 ## cannot inherit a half-drawn `world_gen` stream; see
 ## `docs/ENGINEERING.md` §9.8.5 / §9.9).
+##
+## INPUT SCOPE (S1.3c).  This node owns **click-to-move only**: left click → screen
+## pick → `order_to()`.  Keyboard walking is deliberately *not* implemented in this
+## batch — the interactive keys are already taken by the camera (arrows pan, Q/E
+## yaw, R/F pitch, P projection, T tier), and a second scheme has to be designed
+## together with unit selection, which is a later batch.  See ROADMAP §6 S1.3c.
 ##
 ## AUTOLOADS BY PATH, NOT BY NAME.  `tools/verify.gd` runs as a `--script` MainLoop
 ## where autoload identifiers do not compile, and it instantiates this scene to
@@ -37,12 +43,19 @@ var session: WorldSession
 var terrain: StrategicTerrain
 ## The three-tier camera.  `null` when the world failed to build.
 var camera: StrategicCamera
+## The player party (S1.3c).  `null` when the world failed to build.
+var party: PartyMover
 ## The stage nodes, kept as fields so the case can assert what is on screen.
 var sun: DirectionalLight3D
 var environment_owner: WorldEnvironment
 var day_night: DayNight
 ## Non-empty only when `session` is `null` because something went wrong.
 var boot_error := ""
+## Why the party could not be built (empty in the normal case).  Kept separate from
+## `boot_error`: a lost travel graph must not blank the whole strategic map.
+var party_error := ""
+## Last rejected click ("clicked the sky" / "clicked into water" as a reason).
+var last_pick_error := ""
 
 
 func _ready() -> void:
@@ -50,8 +63,8 @@ func _ready() -> void:
 
 
 ## Builds (or rebuilds) the world for the current `GameState.world_seed`, then
-## rebuilds the terrain, the stage and the camera from it.  Safe to call twice:
-## the previous session is dropped, and the new one is built from a reseeded
+## rebuilds the terrain, the stage, the camera and the party from it.  Safe to call
+## twice: the previous session is dropped, and the new one is built from a reseeded
 ## generator, so a rebuild is not "the same world, continued".
 func boot() -> void:
 	session = null
@@ -73,6 +86,7 @@ func boot() -> void:
 	_rebuild_terrain()
 	_rebuild_stage()
 	_rebuild_camera()
+	_rebuild_party()
 
 
 ## Applies the generated world to the visible mesh.  Kept separate from `boot()`
@@ -115,6 +129,61 @@ func _rebuild_camera() -> void:
 	camera.setup(session.field)
 
 
+## The player party (S1.3c).  It owns its own `TravelGraph` — ~47 ms to build, and
+## per-scene state rather than an autoload, because `boot()` can reseed the world
+## and the graph must be rebuilt with it.
+func _rebuild_party() -> void:
+	party_error = ""
+	if party == null:
+		party = PartyMover.new()
+		party.name = "PartyLayer"
+		add_child(party)
+	if not party.setup(session.field, session.data):
+		party_error = "行军图建不起来"
+		push_warning(party_error)
+		return
+	var spawn := _spawn_party()
+	party.spawn_at(float(spawn["x"]), float(spawn["z"]), int(spawn["faction"]))
+
+
+## Where the player party starts.  `WorldData` already decided that in S1.1c
+## (`parties[0]`), so the scene does not invent a second answer; the map centre is
+## only a fallback for a world without parties.
+func _spawn_party() -> Dictionary:
+	var list: Array = []
+	if session != null and session.data != null:
+		list = session.data.parties
+	if list.is_empty():
+		return {"x": 0.0, "z": 0.0, "faction": 0}
+	var p: Dictionary = list[0]
+	return {"x": float(p.get("x", 0.0)), "z": float(p.get("z", 0.0)),
+			"faction": int(p.get("faction", 0))}
+
+
+## The party integrates every frame; it is the only node that moves it.
+func _process(delta: float) -> void:
+	if party != null:
+		party.step(delta)
+
+
+## Click-to-move.  A rejected pick never cancels the current march: clicking the
+## sky or a lake should be a no-op with a reason, not a "stop" the player did not
+## ask for.
+func _unhandled_input(event: InputEvent) -> void:
+	if party == null or camera == null:
+		return
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var pick := camera.pick_ground(mb.position)
+	if not bool(pick.get("ok", false)):
+		last_pick_error = "点击没有落在地面上：%s" % String(pick.get("reason", ""))
+		return
+	last_pick_error = ""
+	var point: Vector3 = pick["point"]
+	party.order_to(point.x, point.z)
+
+
 ## The generated world's macro indicators (empty before `_ready()` / after a
 ## failed boot).
 func metrics() -> Dictionary:
@@ -135,3 +204,15 @@ func camera_report() -> Dictionary:
 	if camera == null:
 		return {}
 	return camera.report()
+
+
+## What the party is doing (empty before `_ready()` / after a failed boot).  The
+## case asserts on this instead of reaching into the mover's internals.
+func party_report() -> Dictionary:
+	if party == null:
+		return {}
+	var out := party.report()
+	out["graph_ok"] = party.graph != null and party.graph.built
+	out["error"] = party_error
+	out["pick_error"] = last_pick_error
+	return out

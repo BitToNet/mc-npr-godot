@@ -232,6 +232,69 @@ func camera_y() -> float:
 	return _camera.position.y if _camera != null else 0.0
 
 
+## World position → screen position.  UI markers and the click test both need it;
+## keeping it here means the projection matrix is read from the one `Camera3D`
+## that actually renders, instead of a second camera that could drift.
+func screen_of(world: Vector3) -> Vector2:
+	if _camera == null:
+		return Vector2.ZERO
+	return _camera.unproject_position(world)
+
+
+## Screen point → ground point (S1.3c click-to-move).
+##
+## The terrain is a bare `ArrayMesh` with no colliders, so a physics raycast would
+## hit nothing.  Instead the view ray is stepped in 4 m slices until it goes below
+## `height_at`, then bisected 10 times: the returned XZ is accurate to well under
+## a metre, and the returned Y is the **ground height**, not the ray hit, so the
+## caller can hand it straight to `order_to`.
+func pick_ground(screen: Vector2) -> Dictionary:
+	var miss := {"ok": false, "point": Vector3.ZERO, "reason": ""}
+	if field == null or _camera == null:
+		miss["reason"] = "相机或地形未就绪"
+		return miss
+	var origin := _camera.project_ray_origin(screen)
+	var dir := _camera.project_ray_normal(screen)
+	if dir.y > -0.0001:
+		miss["reason"] = "视线不朝地面"
+		return miss
+	# Standing under the ground (camera hugging a hill): treat the cursor as the
+	# point below it rather than reporting a miss the player cannot understand.
+	var h0 := origin.y - field.height_at(origin.x, origin.z)
+	if h0 <= 0.0:
+		return {"ok": true, "point": Vector3(origin.x, field.height_at(origin.x, origin.z),
+				origin.z), "reason": ""}
+	# 注意：正交档的 `project_ray_origin()` 会落在**地图之外**（相机后撤 3 500 m），所以
+	# 不能拿"采样点越界"当提前退出的条件 —— 那会在第一步就误判成 miss。改成先按
+	# "相机高度 + 余量" 估一个足够长的上限，命中之后再判是否落在地界内。
+	var step := 4.0
+	var limit := minf((absf(origin.y) + 800.0) / maxf(0.05, absf(dir.y)), 30000.0)
+	var t_prev := 0.0
+	var t := 0.0
+	while t <= limit:
+		t += step
+		var p := origin + dir * t
+		if p.y - field.height_at(p.x, p.z) <= 0.0:
+			var lo := t_prev
+			var hi := t
+			for i in 10:
+				var mid := (lo + hi) * 0.5
+				var mp := origin + dir * mid
+				if mp.y - field.height_at(mp.x, mp.z) > 0.0:
+					lo = mid
+				else:
+					hi = mid
+			var hit := origin + dir * hi
+			if absf(hit.x) > field.half_size or absf(hit.z) > field.half_size:
+				miss["reason"] = "点击落在地界之外"
+				return miss
+			return {"ok": true, "point": Vector3(hit.x, field.height_at(hit.x, hit.z),
+					hit.z), "reason": ""}
+		t_prev = t
+	miss["reason"] = "视线没有落在地界内"
+	return miss
+
+
 func report() -> Dictionary:
 	return {
 		"tier": tier,

@@ -207,6 +207,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 35 | **反向外壳描边要求"切线槽里是平滑法线"，而 `MeshUtil` 的生成器把面法线同时写进法线与切线槽 ⇒ 合成道具的描边完全看不见** | `shaders/common/outline.gdshader` 沿 `TANGENT` 膨胀（项目约定：切线槽存**平滑**法线，见 `MeshUtil._tri_grad`）。但 `tapered_cylinder` / `blob` / `combine` 输出的三角形汤给每个顶点写的切线就是该**面**的法线，外壳于是沿各自面法线炸成互不相连的三角片 —— 正常线宽（2–4 px）下碎片全被本体挡住，肉眼看是"根本没画描边"。本批实测：`width` 拉到 120 才看到几道洋红碎屑；而断言里查 `next_pass != null && enabled == 1` 是全绿的，只有看图才发现 | 合并后重算一次：按位置量化（`roundi(p * 10000)`）共享顶点、按**面积加权**累加法线，只写进切线槽；法线槽保留面法线，面着色不受影响。`PartyMarker._with_smooth_tangents()` 是参考实现；`MeshUtil.facet_rebuild()` 做同一件事，但它按 `(c-a)×(b-a)` 取方向，接别人的零件前先确认朝向与网格一致 |
 | 36 | **A\* 的 `g[goal]` 不等于"报出去的那条折线的成本"** | 寻路把 `_g[goal]` 直接当 `cost` 返回，而 `_g` 只从**起点格心**累加到**终点格心**；折线的首末两段（精确点 → 格心、格心 → 精确点）不在里面。实测：`village_8→fortress_2` 折线 672.9 m，按折线算 **498.5**，接口返回的却是 **483.9**（低 3%）——"成本 ≥ 直线 × 最低系数"的断言因此假红，而且调用方拿到的成本与折线根本不是同一趟行程 | 成本在**生成折线的同一个循环里**重算：`Σ 段长 × 0.5(两格系数)`，端点段用所属格系数；A\* 的 `_g` 只作内部排序用，不出接口。规则：**凡是"算出来的路径"，对外报的成本必须沿着报出去的折线再加一遍** |
 | 37 | **用例中途崩掉会显示成绿色 0/0** | GDScript 运行时错误（打错属性名、空引用）只打印 `SCRIPT ERROR` 并**结束协程**，`_run_one` 感知不到异常，于是 `failed == 0` ⇒ `PASS`，汇总里就是一条绿色的"0/0 断言通过"。本批首次跑 `s1_3_path` 正是如此：一行错误的字典取值把用例打断在第一个 section，`[verify] PASS` 却照打 | `_run_one` 在 `await _dispatch()` 之后加守卫：`_asserts.is_empty()` ⇒ 记一条失败断言（"零断言说明中途中断，不是通过"）。**规则：新增用例先看断言条数**，0 就是崩了，不是通过 |
+| 38 | **正交相机 `project_ray_origin()` 落在地图之外 ⇒ "采样点越界就提前退出"让点击拾取永远失败** | `pick_ground()` 第一版沿视线步进时顺手写了 `if absf(p.x) > half_size: break`，REGION 档每次点击都返回"视线没有落在地界内"。原因：**正交**射线的起点不是相机位置，而是屏幕点反投影到远平面的平面；相机为了看清 700 m 又后撤约 `size × 1.35`，起点已经在 ±1200 之外，第一步采样必然"越界"，循环还没开始就退出 | 正交 / 远距相机下射线起点 ≠ 相机位置，也不在目标区域内：越界判定只能作用在**已经命中**的点上，步进循环只允许按"朝向地面"和"预算上限"退出（`limit = (|origin.y| + 800) / |dir.y|`，上限 30000） |
+| 39 | **"到达就吸附到终点"= 最多一个到达半径的瞬移；拿弦长当位移会在拐角帧假红** | `step()` 原先在 `remaining <= arrive_radius` 时把位置直接设成折线终点，再按 `speed × factor × dt` 记账。实测同一条路：位移与预算的最大偏差 **0.258 m**（约半帧）。两个原因叠加 —— 吸附最多把位置往前拽 6 m；位置从段 A 折到段 B 时，两点**直线距离**（弦）短于**折线弧长** | 位移一律按**弧长**记账（`推进前剩余 − 推进后剩余`），位置只允许落在折线上；"到达"是**状态**不是坐标（停在 `remaining <= arrive_radius` 处，不瞬移） |
 
 ---
 
@@ -372,9 +374,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ### 7.2 `class_name`（全局类）
 
-**22 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
+**23 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
 S1.1c 新增 `WorldData`，S1.2a 新增 `WorldSession`，S1.2b 新增 `StrategicTerrain`，S1.2c 新增
-`StrategicCamera`，S1.3a 新增 `PartyMarker`，S1.3b 新增 `TravelGraph`；`grep -n "^class_name" scripts/**/*.gd`）：
+`StrategicCamera`，S1.3a 新增 `PartyMarker`，S1.3b 新增 `TravelGraph`，S1.3c 新增 `PartyMover`；`grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
 |---|---|---|
@@ -400,6 +402,7 @@ S1.1c 新增 `WorldData`，S1.2a 新增 `WorldSession`，S1.2b 新增 `Strategic
 | `StrategicCamera` | `scripts/world/strategic_camera.gd` | 战略三档镜头：2600 / 700 / 170 m、GLOBAL 锁正交等距、边界钳制 + 阻尼 + 防穿地（S1.2c，§9.11） |
 | `PartyMarker` | `scripts/world/party_marker.gd` | 队伍棋子：12 个零件合成单一 mesh（556 三角）、标称 22 m、脚底 `y=0`、反向外壳描边（S1.3a，§9.12） |
 | `TravelGraph` | `scripts/world/travel_graph.gd` | 行军图：32 m × 75×75 可走格 + 道路格成本折扣 + 确定性 A\*（S1.3b，§9.13） |
+| `PartyMover` | `scripts/world/party_mover.gd` | 队伍移动：沿折线按弧长积分 + 转向限速 + 贴地俯仰 + 点击下令（S1.3c，§9.14） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
 只在两个文件之间用的类型应走 `preload()` 常量（见 §3），因为全局类会进
@@ -962,6 +965,7 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 | 三档取景台 | `scripts/dev/strategic_shots.gd` / `scenes/dev/strategic_shots.tscn` | 只读 `--seed=` 与 `--tier=global/region/local`，`build()` 公开；`capture.gd` 的其余批次参数（`--shots` / `--warmup=` / `--frames=` / `--out=`）照旧。**只证明“能拍出这一档该拍到的范围”**，不是“美术挑过的机位” |
 | 取景主体 | 同上 `_pick_settlement()` | 「低地（≤ 40 m）优先 → 海拔 → 距中心距离」选**真实聚落**，确定性。第一版按“最近聚落”选，seed 20250929 选中 92 m 的高原村庄，局部图拍成全白/青平面 —— 取证工具选错主体，图就没有证据力 |
 | 落位接口 | `StrategicCamera.snap_to_target()` / `focus_on(x, z)` | 截图必须落到档位终值：`step()` 的缩放缓动 6/s，抓帧会抓到变焦中途，同档两次不是同一张图 |
+| 行军取证 | scripts/dev/strategic_shots.gd 的 --march=<秒>（配 --route=1） | 真队伍沿那条路走 N 秒再拍；**拍前必须 stop() 冻结** —— 场景根的 _process 会继续推着它走，两次拍图位置不同，图就不能当证据 |
 | 帧率探针 | `tools/perf_map.gd` | 逐档 2 × 0.5 s、**强关 vsync**（否则量的是显示器刷新率）、按档读 primitives / draw calls；**反向对照**再量一次“隐藏地图的空天空”，两者分不开就自评 `pass=false` |
 | 用例 | `s1_2_perf`（`kind="headed"`） | 26 断言：三档 ≥ 60 fps、全球档 prims == 16 920 且 ≤ 34 611、draws ≤ 120、空天空 > 最慢档 × 1.5、`build()` 的 seed / tier 与重建时旧世界释放；headless 自动 SKIP |
 
@@ -1048,7 +1052,8 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 - `speed_factor_at(x, z) = 1 / 系数`：道路上恒 **1.35**、地面最快 **1.0**、坡上更小。b3 的移动积分直接读
   这张表，因此不会出现"寻路算得便宜、走起来不快"的两套数值。
 - 参数表 `data/world/travel_params.json`：`grid_m 32` / `road_speed_bonus 0.35` / `slope_cost 1.6` /
-  `water_margin 1.5` / `max_expanded 20000`。契约与 `GenParams` 一致（§9.2）：越界钳制 + 告警、缺字段逐条
+  `water_margin 1.5` / `max_expanded 20000`（S1.3c 另加 `march_speed` / `turn_rate_deg` / `arrive_radius` /
+  `max_pitch_deg`，见 §9.14.1）。契约与 `GenParams` 一致（§9.2）：越界钳制 + 告警、缺字段逐条
   兜底、`schema` 高于本版整表拒绝；用例另断言"文件逐字节等于自己的 Canon 规范化结果"，手改格式会被抓。
 
 #### 9.13.3 决定论
@@ -1084,6 +1089,71 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 3. 只有 8 邻域的静态代价，没有动态阻挡 / 局部避让：NPC、敌方队伍占格留给后续批次。
 4. 道路是 S1.1 的**直线拓扑**，不是地貌：没有折线、没有宽度；穿水只记 `road_water_crossings`，路不会"遇水改道"。
 5. 没有逐帧寻路预算，只有 `max_expanded` 上限；M5 的大批量单位需要流场或分层图，本类是单条路径的地基。
+
+### 9.14 移动积分与点击移动（S1.3c）
+
+#### 9.14.1 四个数字都在参数表里
+
+`data/world/travel_params.json` 在 S1.3b 的 6 个字段之后加 4 个（同一张表、`schema` 仍是 1；缺字段告警
+并按 `DEFAULTS` 兜底，越界钳制到 `RANGES`，契约同 §9.2）：
+
+| 字段 | 值 | 语义 | 为什么是这个数 |
+|---|---|---|---|
+| `march_speed` | 24 | 平地行军速度（m/s） | 最长的那条路 673 m ⇒ 约 28 s 走完，一段路正好是"抬眼看一下"的时长 |
+| `turn_rate_deg` | 300 | 朝向角速度上限（°/s） | 180° 掉头 0.6 s：比"瞬间转身"可信，又不至于让反向行军像卡住 |
+| `arrive_radius` | 6 | 到达判定半径（m） | REGION 档 700 m 视野下约 8 px，肉眼是"到了"；再大就会停得离目标明显偏 |
+| `max_pitch_deg` | 12 | 棋子爬坡俯仰上限（°） | 坡再陡也不让棋子躺倒 —— 贴地的是**脚底**，不是整块模型 |
+
+`TravelGraph.Params` 另给 `turn_rate_rad()` / `max_pitch_rad()`：产品码里不写 `deg_to_rad(300)` 这种把数字
+抄第二遍的形式，改手感只改 JSON。
+
+#### 9.14.2 积分契约（`PartyMover.step(delta)`）
+
+每帧**一个**入口，顺序固定：
+
+1. `factor = graph.speed_factor_at(x, z)`；`factor <= 0` ⇒ 立即 `BLOCKED`（不硬推着进水）。
+2. `budget = speed × factor × delta`，沿折线推进 `budget` 米（`_advance()` 逐段扣预算）。
+3. 位移按**弧长**记账：`last_moved = 剩余(推进前) − 剩余(推进后)`，位置本身永远落在折线上。
+4. `remaining <= arrive_radius` ⇒ `ARRIVED`，**不吸附到终点**（吸附 = 最后一帧最多瞬移 6 m，见陷阱 39）。
+5. 朝向：`facing` 以 `turn_rate × delta` 为上限逼近当前段方向（`wrapf` 取最短弧）；`pitch` 由前后视点
+   高差算出并夹到 `±max_pitch`，**只作用于渲染**，不进入位置。
+6. `marker.place_at(x, z)` + `marker.rotation = Vector3(-pitch, facing, 0)`。
+
+状态机 `IDLE → MARCHING → ARRIVED`，`BLOCKED` 是异常出口；`stop()` 保留位置、清空路径。
+**改令语义**：`order_to()` 成功就整条替换、并从**当前位置**重新寻路；失败（水 / 越界）保留原命令 ——
+一次误点不该把正在走的队伍停住。
+
+#### 9.14.3 点击移动（`StrategicCamera.pick_ground`）
+
+地形是裸 `ArrayMesh`、**没有碰撞体**，所以不走物理射线：沿视线 4 m 步进找与 `height_at` 的第一个交点，
+再二分 10 次（横向误差实测 0.003 m）。返回的 `y` 是**地面高度**而不是视线交点，调用方可直接交给
+`order_to()`。拒绝理由分开：`视线不朝地面` / `点击落在地界之外` / `视线没有落在地界内`，`order_to()`
+再拒一次"终点不可走（水或边界）"。正交档的射线起点在地图外，见陷阱 38。
+
+#### 9.14.4 实测（seed 20250929，用例 `s1_3_move`）
+
+- 60 s × 3600 帧（固定 1/60 步长，不读帧率）：贴地最大误差 **0.000004 m**、位移与 `24 × 系数 × dt`
+  最大偏差 **0.000043 m**、帧间转角 **0.087266 rad = 300°/s × dt**（顶到上限）、俯仰峰值 **12.00°**、
+  零 NaN、零帧落在不可走格；两段行军（A→B 20.6 s 到达且差 5.497 m 停在路上，随后改令反向）。
+- 点击闭环：`screen_of` → `pick_ground` 回到聚落，横向误差 **0.003 m**；到达后 1 s 位移 0.000000000 m；
+  改令 20 帧内离旧终点严格变远（不回弹）；下单当帧就动 0.540 m（不是先原地转身）。
+- 决定论：同一段 300 帧轨迹两次签名逐位一致（9599 字符）。
+- 场景根 **6 个子节点**（地形 + 舞台三件 + 相机 + `PartyLayer`），队伍落在 `data.parties[0]`、脚底贴地。
+
+#### 9.14.5 取证通道
+
+`scripts/dev/strategic_shots.gd` 的 `--march=<秒>`（配 `--route=1`）：真队伍沿那条路走 N 秒 → 镜头对到它
+身上 → **冻结**（`stop()`）。必须冻结：场景根的 `_process` 会继续推着它走，同一条命令两次拍出来的位置
+不同，图就不算证据。REGION plate 见 `.shots/s13c/march_region`（21 点折线，12 s 走到 58%，离终点 284 m）。
+`--march` 只改"拍之前走多久"，不抢退出码、不触发批次。
+
+#### 9.14.6 已知边界
+
+1. **本批只有点击移动，没有键盘行军**（用户决定）：`ui_*` 的上下左右已被相机占用，键盘行军要和"选部队 /
+   编队"一起设计，硬塞只会变成第二套互相打架的输入。台账 §6 S1.3c 已记录该决定。
+2. 没有平滑：折线是 32 m 格心的台阶状，转弯是"到点再拐"。插曲线要同时解决自交与逐位可复现，留给后续。
+3. 单队伍、单路径；没有编队 / 补给 / 迷雾 / 动态阻挡。
+4. 俯仰只影响渲染，不影响速度与可走性（可走性仍由 `TravelGraph` 的水陆表决定）。
 
 ## 10. autoload 上限与顺序
 
