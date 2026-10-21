@@ -30,9 +30,25 @@ extends Node
 ##
 ## SPEED (S1.4b) multiplies the **number of ticks per frame**, never the tick size —
 ## see `TICK_GAME_SECONDS`: that is what makes 4x and 1x land on the same floats.
+## Every tick is announced on `simulation_tick`, and gameplay (the party mover)
+## advances from that signal instead of `_process(delta)`; a speed tier therefore
+## changes only *how many* steps a frame runs, not *what* a step is.
+##
+## PAUSE is `get_tree().paused` (S0.3 batch 4 kept the HUD and the render clock on
+## `PROCESS_MODE_ALWAYS`): this node keeps the default mode, so pausing stops the
+## clock **and** everything that integrates from `simulation_tick`, while the render
+## clock (`scripts/core/render_clock.gd`) keeps ticking.  There is deliberately no
+## "0x speed": a second way to stop time would let the world walk on behind a
+## paused HUD.
 ##
 ## ⚠️ `tools/verify.gd` runs as a `--script` MainLoop where autoload identifiers do
 ## not compile; reach this node as `root.get_node("GameState")` there.
+
+## One logical step of the simulation just happened (S1.4b).  `step` is a monotonic
+## counter over the run; `seconds` is the real time a step represents
+## (`TICK_REAL_SECONDS`), passed along so listeners never invent their own step size.
+## Emitted once per tick — at 1x that is once per physics frame, at 4x four times.
+signal simulation_tick(step: int, seconds: float)
 
 ## Where the player currently is.  Only `SceneRouter` is allowed to set it
 ## (ROADMAP §5 S0.3 risk note: "只有 SceneRouter 能切场景").
@@ -66,6 +82,13 @@ const DAYS_PER_YEAR := DAYS_PER_MONTH * MONTHS_PER_YEAR
 const TICK_GAME_SECONDS := 1.0
 ## Game seconds per real second at 1x, spelled out so the two cannot disagree.
 const GAME_SECONDS_PER_REAL_SECOND := 60.0
+## Real seconds one logical step occupies.  Derived from the two numbers above
+## rather than typed as `1.0 / 60.0`, so a future change to either cannot leave the
+## step and the rate contradicting each other.  S1.4b passes it to every
+## `simulation_tick` listener, which is why the mover never guesses a step length.
+const TICK_REAL_SECONDS := TICK_GAME_SECONDS / GAME_SECONDS_PER_REAL_SECOND
+## The only speed tiers (S1.4b).  `0` is not one of them — see the PAUSE note.
+const SPEED_TIERS := [1, 2, 4]
 
 ## Exactly the keys `snapshot()` writes.  `restore()` uses the same list to report
 ## unknown keys, so the writer and the validator cannot drift apart.
@@ -98,8 +121,21 @@ var playtime := 0.0
 var _last_hour_tick := -1
 ## Sub-tick remainder of the real-time delta.  A frame contributes 0.9999 or 1.0001
 ## game seconds depending on float rounding; carrying the remainder keeps the
-## **average** rate at exactly `GAME_SECONDS_PER_REAL_SECOND` in both cases.
+## **average** rate at exactly `GAME_SECONDS_PER_REAL_SECOND` in both cases.  S1.4b
+## scales the *inflow* by `speed`, so the remainder still absorbs rounding — the
+## tick itself stays a whole `TICK_GAME_SECONDS`.
 var _tick_residual := 0.0
+## S1.4b speed tier (one of `SPEED_TIERS`).  Deliberately **not** in
+## `SNAPSHOT_FIELDS`: a save records the world, not how fast the player happened to
+## be watching it, and restoring 4x would make a load's first frame differ from the
+## frame that was saved.  Same reasoning for the pause flag, which lives on the tree.
+var speed := 1
+## Monotonic counter carried by `simulation_tick` (S1.4b).
+var _step_index := 0
+## True while a capture has pinned the clock (see `pin_time`).  A pinned clock does
+## not advance, so a screenshot batch is reproducible no matter how long the window
+## took to open.
+var _pinned := false
 
 
 func _ready() -> void:
@@ -110,11 +146,18 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# A pinned clock is a capture, not gameplay: `playtime` must not grow either, or
+	# the save card in two identical screenshots would disagree.
+	if _pinned:
+		return
 	# Real seconds: `playtime` is what the save card shows and it must not grow with
 	# the speed setting (S1.4b), so it takes the raw delta while `game_time` takes
 	# whole ticks.  The two are deliberately separate numbers.
 	playtime += delta
-	_tick_residual += delta * GAME_SECONDS_PER_REAL_SECOND
+	# S1.4b — speed scales the **inflow**, never the tick: 4x runs the 1x loop four
+	# times instead of making a tick four times as big, so `game_time` stays integral
+	# and a 4x day is bit-identical to a 1x day.
+	_tick_residual += delta * GAME_SECONDS_PER_REAL_SECOND * float(speed)
 	while _tick_residual >= TICK_GAME_SECONDS:
 		_tick_residual -= TICK_GAME_SECONDS
 		_advance_one_tick()
@@ -122,8 +165,12 @@ func _physics_process(delta: float) -> void:
 
 ## One logical step.  Kept separate from the loop above so S1.4b can call it N times
 ## per frame without touching the accumulator, and so a test can drive it directly.
+## **Every** piece of gameplay that moves with time must advance from the signal
+## emitted here — that is the whole contract behind "4x for N days == 1x for N days".
 func _advance_one_tick() -> void:
 	game_time += TICK_GAME_SECONDS
+	simulation_tick.emit(_step_index, TICK_REAL_SECONDS)
+	_step_index += 1
 	# One announcement per in-game hour.  Announcing every tick would put 60 signals/s
 	# on the bus to say nothing new.
 	var hour_index := hour_of_day()
@@ -206,6 +253,58 @@ func is_valid_time(t: float) -> bool:
 	return is_finite(t) and t >= 0.0
 
 
+## S1.4b — change the speed tier.  Anything outside `SPEED_TIERS` is **rejected and
+## the current tier is left untouched**, so a HUD mis-wiring cannot silently park the
+## world on an unlisted speed.
+func set_speed(tier: int) -> bool:
+	if not SPEED_TIERS.has(tier):
+		push_warning("速度档位只能是 %s，收到 %d" % [str(SPEED_TIERS), tier])
+		return false
+	speed = tier
+	return true
+
+
+## S1.4b — pause toggles the **tree**, not this node: the party, the mover and every
+## future time-driven system inherit the pause mode, so they stop together.  The
+## render clock and the HUD stay on `PROCESS_MODE_ALWAYS` (S0.6 / S0.3 batch 4).
+## Returns the new paused state.
+func toggle_pause() -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	tree.paused = not tree.paused
+	return tree.paused
+
+
+func is_paused() -> bool:
+	var tree := get_tree()
+	return tree != null and tree.paused
+
+
+## S1.4b — freeze the clock at `t` for a screenshot batch (`t < 0` keeps the current
+## value).  A capture must not depend on how many physics frames the window took to
+## open, and the time bar now renders `game_time`, so `--shots` pins it.  Returns
+## false when `t` is not a valid time (same rule a save file gets in S1.4c).
+func pin_time(t: float = -1.0) -> bool:
+	if t >= 0.0:
+		if not is_valid_time(t):
+			return false
+		game_time = t
+	_tick_residual = 0.0
+	_pinned = true
+	return true
+
+
+## Undo `pin_time()` — the clock resumes from wherever it was pinned.
+func unpin_time() -> void:
+	_pinned = false
+	_tick_residual = 0.0
+
+
+func is_time_pinned() -> bool:
+	return _pinned
+
+
 ## Starts a fresh run.  The seed is a **parameter**, never drawn here: S0.3 gives
 ## `Rng` no entropy source on purpose (see `scripts/core/rng.gd`), so the
 ## new-game flow (S1.x, main menu) picks it and passes it down.  `Rng` is re-rooted
@@ -223,6 +322,9 @@ func new_game(p_world_seed: int) -> void:
 	player_pos = Vector3.ZERO
 	_tick_residual = 0.0
 	_last_hour_tick = -1
+	_step_index = 0
+	speed = 1
+	_pinned = false
 	Rng.seed_from(p_world_seed)
 
 

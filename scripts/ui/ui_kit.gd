@@ -93,6 +93,17 @@ static func button_hud(font_: Font, text: String, accent: Color) -> Button:
 	return b
 
 
+## 给已建好的 HUD 按钮换底色（S1.4b：档位按钮的"当前档"是黄色，其余是纸色）。
+## 样式清单与 `button_hud` 逐项相同 —— 只是作用在既有实例上，调用方不必为了换个颜色
+## 重建控件（重建会丢掉连接与焦点顺序）。
+static func repaint_hud(b: Button, accent: Color) -> void:
+	b.add_theme_stylebox_override("normal", sb(accent, 4, 6, Vector2(5, 5), 10))
+	b.add_theme_stylebox_override("hover", sb(INK, 4, 6, Vector2(5, 5), 10))
+	b.add_theme_stylebox_override("pressed", sb(accent.darkened(0.12), 4, 0, Vector2(1, 1), 10))
+	b.add_theme_stylebox_override("focus", sb(accent, 4, 6, Vector2(5, 5), 10))
+	b.add_theme_stylebox_override("disabled", sb(accent.darkened(0.3), 4, 0, Vector2.ZERO, 10))
+
+
 ## 菜单页按钮（`menu_page.gd` 抽取前原样）：hover **同色提亮**，无 disabled 态。
 static func button_page(font_: Font, text: String, accent: Color) -> Button:
 	var b := _button_base(font_, text, 48, 18, INK)

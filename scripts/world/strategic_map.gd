@@ -21,6 +21,13 @@ extends Node3D
 ## yaw, R/F pitch, P projection, T tier), and a second scheme has to be designed
 ## together with unit selection, which is a later batch.  See ROADMAP §6 S1.3c.
 ##
+## TIME DRIVES THE PARTY (S1.4b).  The party integrates on `GameState.simulation_tick`,
+## not on `_process(delta)`: a tick is a fixed 1/60 s slice of **game** time, and a
+## speed tier only changes how many ticks a frame runs.  Driving the mover from a raw
+## delta instead would make "4x for one day" disagree with "1x for one day" in the
+## last millimetres — which is exactly what `s1_4_speed` forbids.  The tick hands the
+## step length along, so this file never spells `1.0 / 60.0` itself.
+##
 ## AUTOLOADS BY PATH, NOT BY NAME.  `tools/verify.gd` runs as a `--script` MainLoop
 ## where autoload identifiers do not compile, and it instantiates this scene to
 ## prove the wiring.  Looking the nodes up as `/root/Rng` / `/root/GameState` keeps
@@ -31,6 +38,11 @@ extends Node3D
 ## `Rng.DEFAULT_MASTER_SEED`.  Only used when `GameState` is absent (bare
 ## `--script` runs); the game always reads the live value.
 const FALLBACK_SEED := 20250929
+
+## The top-of-screen time bar (S1.4b).  No `class_name` on purpose: `verify.gd` counts
+## the documented global classes, and this one is wired by path exactly like
+## `ui_panel.gd`'s sibling `save_grid.gd`.
+const TIME_BAR_SCRIPT := preload("res://scripts/ui/time_bar.gd")
 
 ## Fixed noon, so every screenshot of this scene is reproducible (S1.2c).
 const STAGE_TIME := 0.5
@@ -45,6 +57,9 @@ var terrain: StrategicTerrain
 var camera: StrategicCamera
 ## The player party (S1.3c).  `null` when the world failed to build.
 var party: PartyMover
+## The time bar (S1.4b): pause / 1x / 2x / 4x + the current date.  `null` only when
+## the scene was never added to the tree.
+var time_bar: CanvasLayer
 ## The stage nodes, kept as fields so the case can assert what is on screen.
 var sun: DirectionalLight3D
 var environment_owner: WorldEnvironment
@@ -60,6 +75,12 @@ var last_pick_error := ""
 
 func _ready() -> void:
 	boot()
+	_rebuild_hud()
+	# Godot disconnects a signal automatically when the receiving object is freed, so
+	# leaving the scene needs no `_exit_tree()` bookkeeping here.
+	var state := get_node_or_null("/root/GameState")
+	if state != null:
+		state.connect("simulation_tick", _on_simulation_tick)
 
 
 ## Builds (or rebuilds) the world for the current `GameState.world_seed`, then
@@ -160,10 +181,21 @@ func _spawn_party() -> Dictionary:
 			"faction": int(p.get("faction", 0))}
 
 
-## The party integrates every frame; it is the only node that moves it.
-func _process(delta: float) -> void:
+## The party integrates on the fixed logical step (S1.4b); it is the only node that
+## moves it.  `seconds` comes from `GameState` so the step length has one definition.
+func _on_simulation_tick(_step: int, seconds: float) -> void:
 	if party != null:
-		party.step(delta)
+		party.step(seconds)
+
+
+## The time bar (S1.4b).  Built once per scene instance — `boot()` may run twice (a
+## world rebuild must not stack two HUDs, or F1 would have to hide both).
+func _rebuild_hud() -> void:
+	if time_bar != null:
+		return
+	time_bar = TIME_BAR_SCRIPT.new() as CanvasLayer
+	time_bar.name = "TimeBar"
+	add_child(time_bar)
 
 
 ## Click-to-move.  A rejected pick never cancels the current march: clicking the
