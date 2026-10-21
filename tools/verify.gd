@@ -311,7 +311,7 @@ const CASES := {
 	},
 	"s1_2_perf": {
 		"desc": "战略图分档帧率（C-）：vsync 关闭下三档（2600 / 700 / 170 m）平均帧率均 ≥ 60 fps，"
-				+ "全球档三角面 = 16 920 且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
+				+ "全球档三角面 = 18 032（地形 16 920 + 棋子 1 112）且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
 				+ "帧率 > 最慢档 × 1.5』证明采样器能分辨地图与空天空；外加 B- 取景工具接线"
 				+ "（--seed= / --tier= 的 build() 真的换了世界与档位）",
 		"kind": "headed",
@@ -6400,8 +6400,12 @@ func _case_strategic_perf() -> void:
 			global_prims = prims
 			global_draws = int(row.get("draw_calls", 0))
 		le(float(prims), 34611.0, "%s 档三角面 %d 不超 C- 上限 34 611" % [tier_name, prims])
-	eq(global_prims, 16920,
-			"全球档三角面 %d = 陆面 11 250 + 水面 4 470 + 裙边 1 200（与网格统计逐个对上）" % global_prims)
+	# S1.3a 起地图上常驻队伍棋子：556 三角 + 反向外壳描边第二遍 = 1 112。这里量的是
+	# **渲染器面数**（整视口），所以全球档是地形 16 920 + 棋子 1 112 = 18 032；地形网格
+	# 自身的 11 250 仍由 `s1_2_mesh` 单独钉住，两条断言各管一件事。
+	eq(global_prims, 18032,
+			"全球档三角面 %d = 地形 16 920（陆 11 250 + 水 4 470 + 裙边 1 200）+ 棋子 1 112"
+					% global_prims)
 	le(float(global_draws), 120.0, "全球档绘制调用 %d ≤ 120（分块没有把批次数炸掉）" % global_draws)
 	var empty: Dictionary = r.get("empty", {})
 	var empty_fps := float(empty.get("fps_mean", 0.0))
