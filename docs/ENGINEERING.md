@@ -377,7 +377,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 **23 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
 S1.1c 新增 `WorldData`，S1.2a 新增 `WorldSession`，S1.2b 新增 `StrategicTerrain`，S1.2c 新增
-`StrategicCamera`，S1.3a 新增 `PartyMarker`，S1.3b 新增 `TravelGraph`，S1.3c 新增 `PartyMover`；`grep -n "^class_name" scripts/**/*.gd`）：
+`StrategicCamera`，S1.3a 新增 `PartyMarker`，S1.3b 新增 `TravelGraph`，S1.3c 新增 `PartyMover`；**S1.4b 未新增**（时间条 `time_bar.gd` 故意不挂 `class_name`，理由见 §9.17.4）；`grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
 |---|---|---|
@@ -1144,7 +1144,7 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 #### 9.14.5 取证通道
 
 `scripts/dev/strategic_shots.gd` 的 `--march=<秒>`（配 `--route=1`）：真队伍沿那条路走 N 秒 → 镜头对到它
-身上 → **冻结**（`stop()`）。必须冻结：场景根的 `_process` 会继续推着它走，同一条命令两次拍出来的位置
+身上 → **冻结**（`stop()`）。必须冻结：队伍现在由 `GameState.simulation_tick` 推着走（S1.4b 起 `_process` 那条老路已删），只要不暂停它就会继续前进，同一条命令两次拍出来的位置
 不同，图就不算证据。REGION plate 见 `.shots/s13c/march_region`（21 点折线，12 s 走到 58%，离终点 284 m）。
 `--march` 只改"拍之前走多久"，不抢退出码、不触发批次。
 
@@ -1219,7 +1219,7 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 1. **不漂移**：只在整秒上加 ⇒ 值域内的 float 加法精确（365 日 = 31 536 000 ≪ 2^53）。若直接
    `game_time += delta * 60`，每帧引入一次舍入，长跑后日期会慢慢歪。
 2. **帧率无关**：60 Hz 一帧 1 秒、30 Hz 一帧 2 秒，走的都是"整秒"，1x 的速率不随帧率变。
-3. **为 S1.4b 留好接口**：变速 = 每帧调用 N 次 `_advance_one_tick()`，仍是同一条浮点路径，
+3. **为 S1.4b 留好接口**：变速 = 每帧调用 N 次 `_advance_one_tick()`，仍是同一条浮点路径，（S1.4b 已按此落地，见 §9.17.1：入口是放大 `_tick_residual` 的**流入**，效果等价于每帧多跑几次 `_advance_one_tick()`，而 tick 的大小始终不变）
    所以"4x 跑 N 日"与"1x 跑 N 日"可以逐字段相同。
 
 `playtime` 仍然加真实 `delta`（存档卡片显示玩了多少现实时间），和 `game_time` 是两个数。
@@ -1242,6 +1242,90 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 变速与暂停（S1.4b）、v1→v2 存档迁移（S1.4c）、365 日长跑与 `B-` 三张时分板（S1.4d）都不在本批。
 `SNAPSHOT_FIELDS` 仍是 10 项，`day_length` 作为 **v1 遗留字段**保留并由 `restore()` 原样吃下（已无读者），
 迁移由 S1.4c 把它搬进 `visual_day_length`。
+
+### 9.17 变速、暂停与时间条（S1.4b）
+
+#### 9.17.1 变速 = 放大**流入**，不是放大步长
+
+```gdscript
+_tick_residual += delta * GAME_SECONDS_PER_REAL_SECOND * float(speed)
+while _tick_residual >= TICK_GAME_SECONDS:
+	_tick_residual -= TICK_GAME_SECONDS
+	_advance_one_tick()
+```
+
+- `speed ∈ SPEED_TIERS = [1, 2, 4]` 只改**每帧能攒出多少 tick**；tick 永远是 `TICK_GAME_SECONDS = 1.0`。
+- 于是 `game_time` 始终是整数（不漂移的理由与 §9.16.3 同源），而"4x 跑 N 日"与"1x 跑 N 日"走的是
+  **同一条浮点路径**，只是循环次数不同 ⇒ 可以逐字段断言相等（`s1_4_speed`）。
+- `TICK_REAL_SECONDS = TICK_GAME_SECONDS / GAME_SECONDS_PER_REAL_SECOND = 1/60`；这个派生常量是
+  所有"一步多长"的唯一来源，`verify.gd` 直接钉住它，业务代码不许自己写 `1.0 / 60.0`。
+- `set_speed(tier) -> bool`：不在 `SPEED_TIERS` 里就 `push_warning` 并返回 `false`，**当前档原样保留**。
+  拒绝不等于半改 —— 否则 HUD 一次误接线就能把世界停在一个不存在的档位上。
+- 代价：4x 时每帧最多跑 4 次 tick（当前每 tick 只有一次整数加法 + 一条信号，微秒级）。
+
+#### 9.17.2 暂停 = 整棵树，不是某个节点
+
+原计划写的是 `N = 0/1/2/4`（0x 档）。实现改成 `get_tree().paused`，理由只有一个：
+**0x 只停时钟的话，队伍与 AI 会在 HUD 后面继续走**。暂停必须同时冻住时间与模拟。
+
+| 谁 | 进程模式 | 暂停时 |
+|---|---|---|
+| `GameState`（以及未来的 AI / 战斗） | 默认 `PROCESS_MODE_INHERIT` | 停（`_physics_process` 不再被调用） |
+| `Clock`（渲染时钟）、时间条、菜单、`ToastLayer`、`Debug` | `PROCESS_MODE_ALWAYS` | 照常 |
+
+约定：**任何"暂停时也必须活着"的节点，在 `_ready()` 里自己设 `PROCESS_MODE_ALWAYS`**；是 UI 的话
+同时进 `#hud` 组（F1「隐藏全部 UI」按组找属主）。反过来，游戏逻辑节点**不要**设 ALWAYS。
+
+`GameState` 里没有 `paused` 字段 —— 状态挂在场景树上，只有 `toggle_pause()` / `is_paused()` 两个门面。
+好处是不会出现"树暂停了但 `paused` 字段为 false"这种双真相。
+
+#### 9.17.3 模拟入口：`simulation_tick(step, seconds)`
+
+```gdscript
+signal simulation_tick(step: int, seconds: float)
+```
+
+- 每 tick 一条，`_advance_one_tick()` 里发；`step` 单调 +1（诊断用），`seconds` 是这一步的长度。
+- **为什么信号在 `GameState` 而不是 `EventBus`**：`s0_3_state` 钉死 `EventBus` 恰好 5 个信号，
+  而 tick 是高频内部节拍，不是"事件"。放进总线既会打破那条契约，也会让每个 tick 多一次广播。
+- **为什么带 `seconds`**：调用方（`strategic_map` → `party.step()`）不该自己写步长常量。
+  `strategic_map` 因此删掉了 `_process(delta)`，队伍只由 tick 驱动 ⇒ 暂停/变速对它**自动生效**。
+- 接入方式：`state.connect("simulation_tick", handler)`，处理器签名 `(step: int, seconds: float)`。
+  **不要**再用 `_process(delta)` 推进任何"随游戏时间变化"的东西 —— 那会重新引入倍速不等价。
+
+#### 9.17.4 时间条（`scripts/ui/time_bar.gd`）
+
+- 结构：`CanvasLayer`（`layer = 10`）→ `Control(PRESET_FULL_RECT, IGNORE)` → `MarginContainer(TOP_WIDE,
+  20 px)` → `HBox(居中)` → ① `PanelContainer`「暂停 | 1x | 2x | 4x」② `PanelContainer` 日期读数。
+- 样式：`UiKit.sb()` 厚墨边 + 硬投影 + 零圆角。**当前档 = 黄色底，其余纸色**；暂停后按钮文案变「继续」
+  并转粉。`UiKit.repaint_hud()` 只换 `StyleBox`、不重建控件（重建会丢连接、打乱焦点顺序）。
+- 不持状态：日期取 `GameState.date_text()`、档位取 `speed`、暂停取 `is_paused()`。`_process` 每帧调
+  `refresh()`，但**只在状态变化时**重建 `StyleBox`（幂等刷新，避免每帧分配）。
+- `report()` 返回一帧快照（档位、按钮文案、读数、组/进程模式），用例读它而不是自己去摸按钮树。
+- **没有 `class_name`**：§7.2 的全局类清单是有人数的（23 个），而这个节点只被
+  `strategic_map.gd` 用 `preload()` 接线一次 —— 与 `save_grid.gd` 同一处理方式。新增全局类要走
+  "删 `.godot/global_script_class_cache.cfg` + `--import`" 的流程，不值得为一个 HUD 付这个成本。
+- 档位清单仍是**单一来源**：`_ready()` 从 `GameState` 的脚本常量表里读 `SPEED_TIERS`（读不到才退到
+  `FALLBACK_TIERS`），因为 `--script` 模式下 autoload 标识符不参与编译（陷阱 34）。
+
+#### 9.17.5 截图取证的时钟纪律（新增，必须遵守）
+
+时间条把 `game_time` 搬上了屏幕 ⇒ **能看见时间的截图从此必须钉住时钟**，否则两次同参数运行会差在
+"窗口打开时跑了几个物理帧"。
+
+| 通道 | 规则 |
+|---|---|
+| `capture.gd` | 新增 `--game-time=<游戏秒>`（默认 `43200` = 第 1 天 12:00，与 `STAGE_TIME` 的正午一致）。取样前调 `GameState.pin_time(t)`：`_physics_process` 直接 return ⇒ `game_time` 与 `playtime` 都不动，渲染时钟照常（S0.6 不变） |
+| `pin_time(t)` 语义 | `t >= 0`：钉在该时刻（非有限值 → `false`，与存档同一套 `is_valid_time`）；`t < 0`（默认）：**就地钉住**当前时刻，方便"冻在当前状态"的取证 |
+| `--bench` / `perf_map.gd` | 不钉（bench 要真实时钟）。`perf_map.gd` 采样前**隐藏 `#hud` 组** ⇒ 三角面仍只数 3D，全球档仍是 `18 032`；字体光栅的面数随平台变化，绝不能混进那条断言 |
+| `scripts/dev/strategic_shots.gd` | 默认隐藏时间条（S1.3d 四张 `B-` 因此**逐字节不变**）；要拍带 HUD 的图传 `--hud=1` |
+| 用例 | `s1_4_speed` 断言"钉住后物理帧照跑、`game_time` 不动"；`s1_4_hud` 先钉到 12:00 再断言读数 |
+
+#### 9.17.6 S1.4b 没做什么
+
+v1→v2 存档迁移（S1.4c）、365 日长跑与 04:00 / 12:00 / 21:00 三张 `B-` 板（S1.4d）都不在本批。
+`SNAPSHOT_FIELDS` 仍是 10 项 —— **档位与暂停是瞬时 UI 状态，不入档**：一旦入档，"读档第一帧"就必然
+和"存档那一帧"不同，`s0_3_roundtrip` 的逐字段一致会永远抖。读档后统一从 1x、未暂停开始。
 
 ## 10. autoload 上限与顺序
 
