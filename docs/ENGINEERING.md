@@ -968,6 +968,7 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 | 落位接口 | `StrategicCamera.snap_to_target()` / `focus_on(x, z)` | 截图必须落到档位终值：`step()` 的缩放缓动 6/s，抓帧会抓到变焦中途，同档两次不是同一张图 |
 | 行军取证 | scripts/dev/strategic_shots.gd 的 --march=<秒>（配 --route=1） | 真队伍沿那条路走 N 秒再拍；**拍前必须 stop() 冻结** —— 场景根的 _process 会继续推着它走，两次拍图位置不同，图就不能当证据 |
 | 帧率探针 | `tools/perf_map.gd` | 逐档 2 × 0.5 s、**强关 vsync**（否则量的是显示器刷新率）、按档读 primitives / draw calls；**反向对照**再量一次“隐藏地图的空天空”，两者分不开就自评 `pass=false` |
+| 基线重定 | **S0.4 六张历史板 + S1.3d 四张相册的哈希保持有效**：`strategic_shots.gd` 默认隐藏 `#hud`，时间条不入画。时间条入画后的重定基线**一次性放到 S1.4d**（用户 2026-10-21 裁定），届时旧值在本节保留、新哈希另记，不许悄悄覆盖 |
 | 用例 | `s1_2_perf`（`kind="headed"`） | 26 断言：三档 ≥ 60 fps、全球档 prims == 16 920 且 ≤ 34 611、draws ≤ 120、空天空 > 最慢档 × 1.5、`build()` 的 seed / tier 与重建时旧世界释放；headless 自动 SKIP |
 
 实测（2026-10-21，1600×900）：GLOBAL **994.8 fps** / 16 920 三角 / 59 draws；REGION **960.0** / 10 764 / 29；LOCAL **1034.0** / 5 238 / 11；空天空 **1 510** fps。`B-` 五张 plate 两轮独立进程逐位相同、五张两两不同。
