@@ -27,7 +27,8 @@
 | `shaders/terrain/` | 地形/水体专用 | `water.gdshader` |
 | `shaders/character/`、`shaders/fx/` | **待建** | 角色与特效着色器（M3 起） |
 | `data/` | 资源与数据表（`units/ weapons/ frames/ world/ economy/`） | **已建**（S1.1a 起）：`world/gen_params.json`（世界生成参数表，schema=1）。其余子目录随 M1 之后的数据驱动步骤逐个建 |
-| `tools/` | 验收用例与离线脚本 | `verify.gd`（断言运行器）、`img_diff.gd`、`baseline.gd`、`analyze.gd`、`diag.gd`、`probe.gd`、`windtest.gd` |
+| `tools/` | 验收用例与离线脚本 | `verify.gd`（断言运行器）、`img_diff.gd`、`baseline.gd`、`analyze.gd`、`diag.gd`、`probe.gd`、`windtest.gd`、`perf_map.gd`（**战略图分档帧率探针**，S1.2d：强关 vsync + 空天空反向对照） |
+| `scripts/dev/`、`scenes/dev/` | **dev-only 取证舞台**；产品码不得反向引用（`s0_2_guard` 守卫） | `diorama.tscn`（岛屿夹具，`baseline.gd` / `s0_2_baseline` 用）、`strategic_shots.gd` + `.tscn`（S1.2d 三档取景台，只读 `--seed=` / `--tier=`） |
 | `docs/` | 文档 | `ROADMAP.md`（唯一事实来源）、`成果.md`（只追加成果台账）、`ENGINEERING.md`（本文件） |
 | `.shots/`、`.verify/` | 产物目录，**不进版本库** | 截图与验收报告 |
 
@@ -201,6 +202,7 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 30 | **离树节点上 `get_tree()` / `queue_free()` 各打印一条 `ERROR: Parameter "data.tree" is null`** | `StrategicTerrain` 必须能离树构建（`--script` 里 verify 就是这么造的），但 `get_tree()` 一调就报错，且 `queue_free()` 找不到 `SceneTree` 同样报错。13 条 ERROR 全来自这两处，断言却全绿 —— 只看断言会漏 | 取 `Style` 前先 `is_inside_tree()`；清块时 `is_inside_tree() ? queue_free() : free()`。判据：用例输出 `ERROR:` 行数必须为 **0**，与断言同权 |
 | 31 | **`enum Projection` 与 Godot 内置的 `Projection` 类型撞名，整个脚本解析失败** | `strategic_camera.gd` 首次加载报 `Parse Error: The member "Projection" cannot have the same name as a builtin type`；`--check-only` 只给一句错，看不出是命名撞车 | 枚举改名 `Lens`（`ORTHO` / `PERSP` 保留）。给「投影」起枚举名之前先查内置类型表：`Projection` / `Basis` / `Transform` 这类数学类型都已被占用 |
 | 32 | **离树节点上读 `global_position` 也会打印 `ERROR: Condition "!is_inside_tree()" is true`** | 陷阱 30 已经记了 `get_tree()` / `queue_free()`，但 `StrategicCamera.camera_y()` 用 `_camera.global_position.y` 又踩了同一族错误，600 帧轨迹用例整屏刷 `ERROR:` | 相机位移只写 `_camera.transform`（rig 常驻原点），`camera_y()` 读局部 `_camera.position.y` —— 局部即世界，且离树安全。**规则：离树可用的类只碰 `position` / `transform`，不碰 `global_*`** |
+| 33 | **`--script` 模式下在 `_initialize()` 里用 `/root/...` 绝对路径取 autoload 会失败，且 `add_child` 的节点 `_ready()` 不跑** | 探针脚本第一版在 `_initialize()` 里 `get_root().get_node_or_null("GameState")`，日志是 `ERROR: Can't use get_node() with absolute paths from outside the active scene tree`；`add_child(map)` 后 `_ready()` 也没执行（`boot_error` 空、`terrain` 为 `null`，因为 `Rng` 要等第一帧才在 `/root` 下）。`--script` 模式的探针必须把入口放在 `_process()` 的**第一帧**（`tools/baseline.gd` / `tools/perf_map.gd` 都是这个形状），`_initialize()` 只做命令行参数解析 |
 
 ---
 
@@ -938,13 +940,31 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 
 #### 9.11.5 已知边界
 
-1. **`B-` 三档截图仍未拍**（批 4）：本批交付的是「能拍」的工具与数值判据，不是像素验收。
+1. **`B-` 三档截图已在批 4 拍完**（工具与实测见 §9.11.6）：本节的数值判据与像素验收因此都到位；拍图暴露的三条**内容级**限制记在 §9.11.7，不涉及镜头参数。
 2. 只做**垂直**净空：相机抬高避免钻山，但没有沿视线 raycast 推近，所以近地档理论上仍可能被
    焦点与相机之间的独立山峰挡住（战略尺度下未观察到）。
 3. 滚轮是整档、没有连续变焦；中键拖动的 1 px 增益是常数，未做「缩得越小拖得越慢」的细调。
 4. GLOBAL 档故意锁 yaw / pitch：整图截图必须逐位可复现，转动会让 `B-` 基线漂移。
 5. `s0_3_router` 的世界基线**第二次**迁移（S1.2b 的「根 → 地形」→ 现在的「根 → 地形 + 舞台 + 相机、
    且视口里恰有一个 current 相机」）。两次都是能力等价替换，不是删断言。
+
+#### 9.11.6 取证工具（批 4：`B-` 相册 + `C-` 帧率）
+
+| 工具 | 位置 | 它能证明什么（以及不证明什么） |
+|---|---|---|
+| 三档取景台 | `scripts/dev/strategic_shots.gd` / `scenes/dev/strategic_shots.tscn` | 只读 `--seed=` 与 `--tier=global/region/local`，`build()` 公开；`capture.gd` 的其余批次参数（`--shots` / `--warmup=` / `--frames=` / `--out=`）照旧。**只证明“能拍出这一档该拍到的范围”**，不是“美术挑过的机位” |
+| 取景主体 | 同上 `_pick_settlement()` | 「低地（≤ 40 m）优先 → 海拔 → 距中心距离」选**真实聚落**，确定性。第一版按“最近聚落”选，seed 20250929 选中 92 m 的高原村庄，局部图拍成全白/青平面 —— 取证工具选错主体，图就没有证据力 |
+| 落位接口 | `StrategicCamera.snap_to_target()` / `focus_on(x, z)` | 截图必须落到档位终值：`step()` 的缩放缓动 6/s，抓帧会抓到变焦中途，同档两次不是同一张图 |
+| 帧率探针 | `tools/perf_map.gd` | 逐档 2 × 0.5 s、**强关 vsync**（否则量的是显示器刷新率）、按档读 primitives / draw calls；**反向对照**再量一次“隐藏地图的空天空”，两者分不开就自评 `pass=false` |
+| 用例 | `s1_2_perf`（`kind="headed"`） | 26 断言：三档 ≥ 60 fps、全球档 prims == 16 920 且 ≤ 34 611、draws ≤ 120、空天空 > 最慢档 × 1.5、`build()` 的 seed / tier 与重建时旧世界释放；headless 自动 SKIP |
+
+实测（2026-10-21，1600×900）：GLOBAL **994.8 fps** / 16 920 三角 / 59 draws；REGION **960.0** / 10 764 / 29；LOCAL **1034.0** / 5 238 / 11；空天空 **1 510** fps。`B-` 五张 plate 两轮独立进程逐位相同、五张两两不同。
+
+#### 9.11.7 拍图暴露的三条内容级限制（批 4 登记，不改已验收档位）
+
+1. **海岸阶梯**：32 m 格距在 GLOBAL / REGION 上可见台阶。压到 16 m 会到 ~45 000 三角、超 `C-` 上限 34 611 —— 这是 S1.2b 已验收的格距取舍，不是镜头问题。
+2. **高原长相**：seed 20250929 的岛内部是一整块松石青高原，雪帽整格同色、读起来像“白色剪纸”（整格同色 + 32 m 面片 ⇒ 看不出立体）。属 S1.1 世界长相。
+3. **LOCAL 内容空**：170 m ≈ 5.3 格，纯地形阶段只有大色块，要等 S1.3 的据点与角色落位才有内容。
 
 ---
 
