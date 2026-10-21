@@ -71,6 +71,9 @@ var route_graph: TravelGraph = null
 ## road itself (`--route=1` not needed); with `--route=1` the polyline is painted too, without
 ## it the frame stays clean —— that is how the S1.3d close-up is shot.
 var march_seconds := 0.0
+## S1.4b — keep the time bar on the plate (`--hud=1`) or hide it (default).
+var show_hud := false
+
 const StyleDef := preload("res://scripts/core/style.gd")
 
 
@@ -88,6 +91,8 @@ func _ready() -> void:
 			with_route = a.split("=", true, 1)[1].to_int() != 0
 		elif a.begins_with("--march="):
 			march_seconds = a.split("=", true, 1)[1].to_float()
+		elif a.begins_with("--hud="):
+			show_hud = a.split("=", true, 1)[1].to_int() != 0
 	if not TIERS.has(tier_name):
 		push_warning("[shots] 未知 --tier='%s'，回退 global" % tier_name)
 		tier_name = "global"
@@ -115,6 +120,12 @@ func build(p_seed: int, p_tier: String) -> void:
 	map = ps.instantiate() as Node3D
 	map.name = "StrategicMap"
 	add_child(map)
+	# S1.4b — the album plates are 3D evidence (S1.3d): the time bar is a HUD, and
+	# hiding it is what keeps those four sha256 values byte-identical after the bar
+	# landed.  A batch that *wants* the bar (S1.4d's hour plates) passes `--hud=1`.
+	var bar: Node = map.get("time_bar")
+	if bar is CanvasLayer and not show_hud:
+		(bar as CanvasLayer).visible = false
 	var cam: Node3D = map.get("camera") as Node3D
 	if cam == null:
 		push_error("[shots] 战略图没有相机，取景失败")

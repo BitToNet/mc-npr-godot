@@ -169,6 +169,11 @@ var _frames := 10
 var _warmup := 40
 var _realtime := false
 var _clock_hz := 60.0
+## S1.4b — the game clock a capture batch is shot at, in game seconds.  Default is
+## 12:00 of day 1 (`43200`), the same instant `STAGE_TIME` pins the sun to, so the
+## bar and the lighting agree.  `--game-time=` overrides it (S1.4d shoots 04:00 /
+## 12:00 / 21:00 with it).
+var _shot_clock_sec := 43200.0
 ## S1.0b — `--scene=` 的值；空串表示"用 `run/main_scene`"。
 var _scene_override := ""
 
@@ -242,6 +247,10 @@ func _ready() -> void:
 			_realtime = true
 		elif a.begins_with("--clock-hz="):
 			_clock_hz = a.split("=", true, 1)[1].to_float()
+		elif a.begins_with("--game-time="):
+			# S1.4b — 游戏的时刻（游戏秒）。纯修饰符：钉住后 HUD 上的日期是一张常数，
+			# 截图才可能逐字节可复现（见 `_pin_shot_clock_sec`）。
+			_shot_clock_sec = a.split("=", true, 1)[1].to_float()
 		elif a == "--noquit":
 			_quit = false
 	if not want:
@@ -339,6 +348,25 @@ func _swap_scene() -> bool:
 	return true
 
 
+## S1.4b — freeze the **game** clock for the batch.  The render clock was already made
+## deterministic (S0.6), but the time bar renders `game_time`, and `game_time` advances
+## on physics frames: two runs of the same case would differ by however many steps the
+## window happened to take while opening.  Pinning makes the date on screen a constant
+## of the batch, exactly like `start_time` pins the sun.
+##
+## `--bench` wants wall-clock behaviour for its perf numbers, so it keeps a running
+## clock: a bench report is not `B-` evidence.
+func _pin_shot_clock_sec() -> void:
+	if _bench:
+		return
+	var gs := get_node_or_null("/root/GameState")
+	if gs == null:
+		return
+	gs.call("pin_time", _shot_clock_sec)
+	print("[capture] 游戏时钟钉在 %.0f 游戏秒（%s）" % [
+		_shot_clock_sec, String(gs.call("date_text"))])
+
+
 func _run() -> void:
 	# S1.0b — 换场景必须在 `Clock.set_deterministic()` **之前**，而且**不额外消耗帧**：
 	# 之后的确定性时钟会把 t/frame 归零，所以"换场景"与"缺省开机"两条路径在快门之前
@@ -361,6 +389,7 @@ func _run() -> void:
 		print("[capture] 时钟=确定性 %.1fHz（可复现；--realtime 可关闭）" % _clock_hz)
 	else:
 		print("[capture] 时钟=真实 delta（--realtime，截图不保证可复现）")
+	_pin_shot_clock_sec()
 	# let the world build + a few frames of wave/wind animation settle
 	for i in _warmup:
 		await get_tree().process_frame
