@@ -13,7 +13,7 @@ extends Node
 ##
 ## FILE LAYOUT
 ## ```json
-## { "schema_version": 1,
+## { "schema_version": 2,
 ##   "saved_at": "2026-10-16 16:20:00",  "saved_at_unix": 1760600000,
 ##   "meta": { ...card fields for the 3x3 grid: day, clock, party, playtime... },
 ##   "game": { ...exactly GameState.snapshot()... } }
@@ -69,9 +69,11 @@ const SLOT_PREFIX := "slot_"
 const SLOT_EXT := ".json"
 const TMP_SUFFIX := ".tmp"
 
-## First (and for now only) format this project ever wrote.  Bump only together
-## with a `migrations` entry that can bring the previous version forward.
-const SCHEMA_VERSION := 1
+## v2 = S1.4c.  v1 stored the pre-S1.4 clock (a 0..170 s phase in `game_time` plus
+## `day_length`); v2 stores game seconds plus `visual_day_length`.  Bump only together
+## with a registered migration that can bring the previous version forward — a file
+## claiming a version with no hook is refused, never reinterpreted.
+const SCHEMA_VERSION := 2
 
 ## Retry budget for the measured "target is open, rename fails" race (measured with
 ## the batch-2 probe: a read handle on the target makes `rename` return `Failed` and
@@ -86,11 +88,21 @@ const RENAME_RETRY_MS := 3
 const READ_RETRIES := 20
 const READ_RETRY_MS := 3
 
+## The v1 clock's period: the pre-S1.4 loop ran one full 24 h every 170 real seconds,
+## so v1 saves store that number in `game_time`/`day_length`.  Frozen on purpose — it
+## is a property of the **file format**, not of today's `GameState` defaults, so old
+## saves keep mapping with 170 even if the visual day length is retuned later.
+const V1_DAY_PHASE_SECONDS := 170.0
+## v2 stores **game seconds**; one in-game day is 86 400 of them.  Pinned here as a
+## format constant and cross-checked against `GameState.SECONDS_PER_DAY` by `s1_4_migrate`
+## (a `--script` MainLoop cannot read an autoload constant at parse time).
+const V2_SECONDS_PER_DAY := 86400.0
+
 ## Migration hooks: `source schema version -> Callable(Dictionary) -> Dictionary`.
-## Empty by default because v1 is the first format that exists, so there is nothing
-## to migrate *from* yet; a file claiming a version with no hook is refused with a
-## reason naming that version — never silently reinterpreted.  It is a `var`, not a
-## `const`, so the chain is reachable in tests (a const Dictionary is read-only in
+## The v1->v2 hook is registered in `_ready()` (`_migrate_v1_to_v2`); later formats add
+## one entry each.  A file claiming a version with no hook is refused with a reason
+## naming that version — never silently reinterpreted.  It is a `var`, not a `const`,
+## so the chain stays reachable in tests (a const Dictionary would be read-only in
 ## GDScript, which would make the loop below untestable dead code).
 var migrations := {}
 
@@ -266,7 +278,9 @@ func load_slot(slot: int) -> Dictionary:
 		return _load_fail(slot, "存档 schema_version = %d 高于本构建支持的 %d：拒绝读取（存档来自更新的版本）" % [
 			version, SCHEMA_VERSION,
 		])
+	_ensure_migrations()
 	var hops := 0
+	var migrated_from := 0
 	while version < SCHEMA_VERSION:
 		if not migrations.has(version):
 			return _load_fail(slot, "存档 schema_version = %d 无迁移路径（已注册来源版本：%s）：拒绝读取" % [
@@ -278,7 +292,15 @@ func load_slot(slot: int) -> Dictionary:
 			return _load_fail(slot, "schema v%d -> v%d 的迁移钩子未返回字典：拒绝读取" % [
 				version, version + 1,
 			])
+		if migrated_from == 0:
+			migrated_from = version
 		d = migrated
+		# A hook may leave a `_notice` behind: it is stripped here and surfaced as a
+		# warning, so the hook itself never has to know how warnings are stored.
+		var notice := String(d.get("_notice", ""))
+		if notice != "":
+			d.erase("_notice")
+			warnings.append(notice)
 		version = int(d.get("schema_version", version + 1))
 		hops += 1
 		if hops > 16:
@@ -287,6 +309,13 @@ func load_slot(slot: int) -> Dictionary:
 	var game_v: Variant = d.get("game", null)
 	if typeof(game_v) != TYPE_DICTIONARY:
 		return _load_fail(slot, "存档缺少 game 段或类型错误（%s）：拒绝读取" % type_string(typeof(game_v)))
+	# S1.4c: `game_time` is the one field whose garbage cannot be papered over — a NaN
+	# or negative clock would poison every date derived from it, and `restore()` only
+	# warns (it must keep working for hand-run fixtures).  Refuse the whole file here
+	# instead: nothing has been applied yet, so the session is untouched.
+	var time_bad := _bad_game_time(game_v)
+	if time_bad != "":
+		return _load_fail(slot, "存档 game_time 非法（%s）：拒绝读取" % time_bad)
 	warnings.append_array(GameState.restore(game_v))
 
 	current_slot = slot
@@ -298,6 +327,7 @@ func load_slot(slot: int) -> Dictionary:
 		"warnings": warnings, "requires_confirm": false,
 		"meta": meta_v if typeof(meta_v) == TYPE_DICTIONARY else {},
 		"schema_version": version,
+		"migrated_from": migrated_from,
 	}
 
 
@@ -417,6 +447,83 @@ func _is_int_like(v: Variant) -> bool:
 	return false
 
 
+## Registers the built-in migration chain exactly once.  Called lazily from
+## `load_slot()` (not `_ready()`), so a test that instantiates this node by hand still
+## gets the real chain, and a test that swaps an individual key still can.
+func _ensure_migrations() -> void:
+	if not migrations.has(1):
+		migrations[1] = _migrate_v1_to_v2
+
+
+## v1 -> v2 (S1.4c).  Two renames, nothing else:
+##
+## * `game.day_length` -> `game.visual_day_length` (same number, so no art pacing
+##   information is lost; the field is inert data in v2 as well).
+## * `game.game_time`: v1 stored a **0..170 s phase** of the old 24 h loop; v2 stores
+##   game seconds.  The old clock was cyclic with period 170, so the mapping is
+##   `fposmod(t, 170) / 170 * 86400` — a pure linear stretch that keeps hour *and*
+##   minute, with `170` and `340` folding back to 00:00 of day 1 instead of jumping a
+##   day.  Rounded to whole seconds, which is what v2's tick actually lands on.
+##
+## A non-finite or negative v1 value is **not** guessed at: it is left alone, and
+## `_bad_game_time()` then refuses the whole file.  Reinterpreting garbage silently is
+## exactly the class of bug this step exists to stop.
+func _migrate_v1_to_v2(d: Dictionary) -> Dictionary:
+	var out: Dictionary = d.duplicate(true)
+	out["schema_version"] = 2
+	out["_notice"] = "存档已从 schema v1 迁移到 v2：时间已按新历法重标定（旧的一天 = 170 现实秒，新的一天 = 86 400 游戏秒）"
+	var game_v: Variant = out.get("game", null)
+	if typeof(game_v) != TYPE_DICTIONARY:
+		# No `game` section: leave it missing so the caller still reports the real
+		# problem ("存档缺少 game 段") instead of a migration-shaped one.
+		return out
+	var game: Dictionary = game_v
+	if game.has("day_length"):
+		if not game.has("visual_day_length"):
+			game["visual_day_length"] = game["day_length"]
+		game.erase("day_length")
+	if game.has("visual_day_length"):
+		game["visual_day_length"] = _finite_or(game["visual_day_length"], V1_DAY_PHASE_SECONDS)
+	var t := _finite_or(game.get("game_time", 0.0), NAN)
+	if not is_nan(t) and t >= 0.0:
+		var phase := fposmod(t, V1_DAY_PHASE_SECONDS)
+		game["game_time"] = roundf(phase / V1_DAY_PHASE_SECONDS * V2_SECONDS_PER_DAY)
+	out["game"] = game
+	return out
+
+
+## "" when `game.game_time` is usable (or absent), else a short reason fragment.
+## Absent is not a failure: `restore()` already warns about a missing field and keeps
+## the current clock, and a hand-written 4-field fixture must stay loadable.
+func _bad_game_time(game: Dictionary) -> String:
+	if not game.has("game_time"):
+		return ""
+	var v: Variant = game["game_time"]
+	if typeof(v) != TYPE_INT and typeof(v) != TYPE_FLOAT:
+		# Not a number at all: that is a *dirty field*, not an impossible clock, and
+		# `restore()` already reports it while keeping the current value.  Refusing the
+		# whole file here would break the long-standing "类型错误字段不拒绝整个存档".
+		return ""
+	var f := float(v)
+	if is_nan(f):
+		return "值是 NaN"
+	if is_inf(f):
+		return "值是 %s 无穷大" % ("正" if f > 0.0 else "负")
+	if f < 0.0:
+		return "值 %.3f 为负（游戏秒不可能倒退）" % f
+	return ""
+
+
+## `fallback` unless `v` is a finite number (JSON cannot carry NaN/INF, but a
+## hand-edited or future-written file can), in which case the number itself.
+func _finite_or(v: Variant, fallback: float) -> float:
+	if typeof(v) != TYPE_INT and typeof(v) != TYPE_FLOAT:
+		return fallback
+	var f := float(v)
+	if is_nan(f) or is_inf(f):
+		return fallback
+	return f
+
 func _fail(slot: int, reason: String, requires_confirm: bool = false) -> Dictionary:
 	last_error = reason
 	save_failed.emit(slot, reason)
@@ -424,6 +531,7 @@ func _fail(slot: int, reason: String, requires_confirm: bool = false) -> Diction
 		"ok": false, "slot": slot, "path": slot_path(slot) if is_valid_slot(slot) else "",
 		"reason": reason, "warnings": PackedStringArray(),
 		"requires_confirm": requires_confirm, "bytes": 0,
+		"migrated_from": 0,
 	}
 
 
@@ -434,4 +542,5 @@ func _load_fail(slot: int, reason: String) -> Dictionary:
 		"ok": false, "slot": slot, "path": slot_path(slot) if is_valid_slot(slot) else "",
 		"reason": reason, "warnings": PackedStringArray(),
 		"requires_confirm": false, "schema_version": 0, "meta": {},
+		"migrated_from": 0,
 	}

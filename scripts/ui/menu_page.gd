@@ -329,9 +329,17 @@ func _load_from(slot: int) -> void:
 	var res: Dictionary = SaveSystem.load_slot(slot)
 	if bool(res.get("ok", false)):
 		var warns: PackedStringArray = res.get("warnings", PackedStringArray())
-		var tail := "" if warns.is_empty() else "，%d 条字段告警" % warns.size()
-		_hint("已读取槽位 %d%s（世界重建留到 S1.9：本次只应用 GameState 已登记字段）" % [
-			slot, tail], "ok")
+		var from := int(res.get("migrated_from", 0))
+		if from > 0 and from < SaveSystem.SCHEMA_VERSION:
+			# S1.4c: say so once, and say what changed.  A player whose day counter
+			# jumps from "0.0 s phase" to "第 1 天 06:00" deserves the sentence; burying
+			# it in "N 条字段告警" would look like corruption.
+			_hint("槽位 %d 是 v%d 存档，已迁移到 v%d：时间已按新历法重标定（现在 %s）" % [
+				slot, from, SaveSystem.SCHEMA_VERSION, GameState.clock_text()], "warn")
+		else:
+			var tail := "" if warns.is_empty() else "，%d 条字段告警" % warns.size()
+			_hint("已读取槽位 %d%s（世界重建留到 S1.9：本次只应用 GameState 已登记字段）" % [
+				slot, tail], "ok")
 		show_home()
 		refresh()
 		return

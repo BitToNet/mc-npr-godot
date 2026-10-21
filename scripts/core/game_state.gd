@@ -58,12 +58,12 @@ enum SceneKind { NONE, WORLD, BATTLE }
 ## S1.2 points the scene entry point at this service, the diorama must generate the
 ## identical world — otherwise every `B-` baseline hash moves for no real reason.
 const DEFAULT_WORLD_SEED := 20250929
-## ⚠️ S1.4a legacy.  The pre-S1.4 clock ran one full 24 h loop every 170 s, so saves
-## written before this step store a 0..170 **phase** in `game_time` and a matching
-## `day_length`.  Nothing reads it any more (a day is `SECONDS_PER_DAY` now); the field
-## survives only so v1 saves still round-trip until S1.4c migrates it into
-## `visual_day_length`.  Do not add new readers.
-const DEFAULT_DAY_LENGTH := 170.0
+## ⚠️ Legacy, kept for data only.  The pre-S1.4 clock ran one full 24 h loop every 170 s
+## and stored that period on every save.  Since S1.4c the schema is v2 and the field is
+## spelled `visual_day_length` (the v1→v2 migration in `SaveSystem` renames it, so no v1
+## value is lost).  Nothing computes with it: a day is `SECONDS_PER_DAY` game seconds.
+## Do not add readers — `S1.4d` decides whether this number is ever used for art pacing.
+const DEFAULT_VISUAL_DAY_LENGTH := 170.0
 
 # --- calendar (S1.4a) ------------------------------------------------------------
 ## 24 h × 60 min × 60 s of game time per in-game day.
@@ -93,7 +93,7 @@ const SPEED_TIERS := [1, 2, 4]
 ## Exactly the keys `snapshot()` writes.  `restore()` uses the same list to report
 ## unknown keys, so the writer and the validator cannot drift apart.
 const SNAPSHOT_FIELDS := [
-	"world_seed", "game_time", "day_length", "party",
+	"world_seed", "game_time", "visual_day_length", "party",
 	"money", "food", "supply", "scene_kind", "player_pos", "playtime",
 ]
 
@@ -101,8 +101,8 @@ const SNAPSHOT_FIELDS := [
 var world_seed := DEFAULT_WORLD_SEED
 ## Total in-game seconds since the run started (see the TIME note at the top).
 var game_time := 0.0
-## Legacy (see `DEFAULT_DAY_LENGTH`): only ever written back to a v1 save verbatim.
-var day_length := DEFAULT_DAY_LENGTH
+## Legacy (see `DEFAULT_VISUAL_DAY_LENGTH`): data only, no readers.
+var visual_day_length := DEFAULT_VISUAL_DAY_LENGTH
 ## The player's army.  S1.x replaces this dictionary with a real party object.
 var party := {"name": "无名军团", "level": 1}
 var money := 0
@@ -313,7 +313,7 @@ func new_game(p_world_seed: int) -> void:
 	world_seed = p_world_seed
 	game_time = 0.0
 	playtime = 0.0
-	day_length = DEFAULT_DAY_LENGTH
+	visual_day_length = DEFAULT_VISUAL_DAY_LENGTH
 	party = {"name": "无名军团", "level": 1}
 	money = 0
 	food = 0
@@ -335,7 +335,7 @@ func snapshot() -> Dictionary:
 	return {
 		"world_seed": world_seed,
 		"game_time": game_time,
-		"day_length": day_length,
+		"visual_day_length": visual_day_length,
 		"party": party.duplicate(true),
 		"money": money,
 		"food": food,
@@ -362,7 +362,7 @@ func restore(d: Dictionary) -> PackedStringArray:
 
 	world_seed = _take_int(d, "world_seed", warn, world_seed)
 	game_time = _take_float(d, "game_time", warn, game_time)
-	day_length = _take_float(d, "day_length", warn, day_length)
+	visual_day_length = _take_float(d, "visual_day_length", warn, visual_day_length)
 	playtime = _take_float(d, "playtime", warn, playtime)
 	money = _take_int(d, "money", warn, money)
 	food = _take_int(d, "food", warn, food)
