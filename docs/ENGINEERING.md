@@ -203,6 +203,8 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 | 31 | **`enum Projection` 与 Godot 内置的 `Projection` 类型撞名，整个脚本解析失败** | `strategic_camera.gd` 首次加载报 `Parse Error: The member "Projection" cannot have the same name as a builtin type`；`--check-only` 只给一句错，看不出是命名撞车 | 枚举改名 `Lens`（`ORTHO` / `PERSP` 保留）。给「投影」起枚举名之前先查内置类型表：`Projection` / `Basis` / `Transform` 这类数学类型都已被占用 |
 | 32 | **离树节点上读 `global_position` 也会打印 `ERROR: Condition "!is_inside_tree()" is true`** | 陷阱 30 已经记了 `get_tree()` / `queue_free()`，但 `StrategicCamera.camera_y()` 用 `_camera.global_position.y` 又踩了同一族错误，600 帧轨迹用例整屏刷 `ERROR:` | 相机位移只写 `_camera.transform`（rig 常驻原点），`camera_y()` 读局部 `_camera.position.y` —— 局部即世界，且离树安全。**规则：离树可用的类只碰 `position` / `transform`，不碰 `global_*`** |
 | 33 | **`--script` 模式下在 `_initialize()` 里用 `/root/...` 绝对路径取 autoload 会失败，且 `add_child` 的节点 `_ready()` 不跑** | 探针脚本第一版在 `_initialize()` 里 `get_root().get_node_or_null("GameState")`，日志是 `ERROR: Can't use get_node() with absolute paths from outside the active scene tree`；`add_child(map)` 后 `_ready()` 也没执行（`boot_error` 空、`terrain` 为 `null`，因为 `Rng` 要等第一帧才在 `/root` 下）。`--script` 模式的探针必须把入口放在 `_process()` 的**第一帧**（`tools/baseline.gd` / `tools/perf_map.gd` 都是这个形状），`_initialize()` 只做命令行参数解析 |
+| 34 | **`--script` 模式下 autoload 的全局标识符在编译期不可见，而且编译失败会让 `_run()` 走不到 `quit()`（进程挂死）** | 新类 `party_marker.gd` 里按常规写 `Style.toon({...})`，`--script` 探针直接 `Compile Error: Identifier not found: Style`（`party_marker.gd:124`）—— 没有主场景时 autoload 的**全局单例名**不参与脚本编译。更麻烦的是失败路径进不到 `_run()`，`quit()` 永不执行，探针进程挂了 300 s 才被手杀，看起来像"卡死"而不是"编译错" | ① 常量一律 `const StyleDef := preload("res://scripts/core/style.gd")` 后取 `StyleDef.PALETTE`；② 需要单例行为时运行时取 `Engine.get_main_loop().root.get_node_or_null("Style")`，`null` 就退回纯数据路径（本类里材质返回 `null`，用例判失败而不是静默无描边）；③ `--script` 探针一律 `Start-Process -PassThru` + `WaitForExit(超时)`，别同步调用 |
+| 35 | **反向外壳描边要求"切线槽里是平滑法线"，而 `MeshUtil` 的生成器把面法线同时写进法线与切线槽 ⇒ 合成道具的描边完全看不见** | `shaders/common/outline.gdshader` 沿 `TANGENT` 膨胀（项目约定：切线槽存**平滑**法线，见 `MeshUtil._tri_grad`）。但 `tapered_cylinder` / `blob` / `combine` 输出的三角形汤给每个顶点写的切线就是该**面**的法线，外壳于是沿各自面法线炸成互不相连的三角片 —— 正常线宽（2–4 px）下碎片全被本体挡住，肉眼看是"根本没画描边"。本批实测：`width` 拉到 120 才看到几道洋红碎屑；而断言里查 `next_pass != null && enabled == 1` 是全绿的，只有看图才发现 | 合并后重算一次：按位置量化（`roundi(p * 10000)`）共享顶点、按**面积加权**累加法线，只写进切线槽；法线槽保留面法线，面着色不受影响。`PartyMarker._with_smooth_tangents()` 是参考实现；`MeshUtil.facet_rebuild()` 做同一件事，但它按 `(c-a)×(b-a)` 取方向，接别人的零件前先确认朝向与网格一致 |
 
 ---
 
@@ -368,8 +370,9 @@ S0.1 的 6 批迁移已全部完成，下表**全部为已生效状态**。`.uid
 
 ### 7.2 `class_name`（全局类）
 
-**17 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
-S1.1c 新增 `WorldData`；`grep -n "^class_name" scripts/**/*.gd`）：
+**21 个**（S0.5 实测 12 个，S1.1a 新增 `Canon` / `GenParams`，S1.1b 新增 `HeightField` / `WorldRegions`，
+S1.1c 新增 `WorldData`，S1.2a 新增 `WorldSession`，S1.2b 新增 `StrategicTerrain`，S1.2c 新增
+`StrategicCamera`，S1.3a 新增 `PartyMarker`；`grep -n "^class_name" scripts/**/*.gd`）：
 
 | 类名 | 文件 | 用途 |
 |---|---|---|
@@ -393,6 +396,7 @@ S1.1c 新增 `WorldData`；`grep -n "^class_name" scripts/**/*.gd`）：
 | `WorldSession` | `scripts/world/world_session.gd` | 世界入口 / 组合根：先 seed_from(seed)，再按固定顺序建世界（S1.2a，§9.9） |
 | `StrategicTerrain` | `scripts/world/strategic_terrain.gd` | 战略尺度地形网格：32 m × 75×75 = 11 250 三角、6×6 分块、水面 + 外缘墨色裙边（S1.2b，§9.10） |
 | `StrategicCamera` | `scripts/world/strategic_camera.gd` | 战略三档镜头：2600 / 700 / 170 m、GLOBAL 锁正交等距、边界钳制 + 阻尼 + 防穿地（S1.2c，§9.11） |
+| `PartyMarker` | `scripts/world/party_marker.gd` | 队伍棋子：12 个零件合成单一 mesh（556 三角）、标称 22 m、脚底 `y=0`、反向外壳描边（S1.3a，§9.12） |
 
 **规则**：`class_name` 用 `PascalCase`；**新增全局类必须先问"真的需要全局可见吗"** ——
 只在两个文件之间用的类型应走 `preload()` 常量（见 §3），因为全局类会进
@@ -967,6 +971,54 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 3. **LOCAL 内容空**：170 m ≈ 5.3 格，纯地形阶段只有大色块，要等 S1.3 的据点与角色落位才有内容。
 
 ---
+
+### 9.12 队伍棋子（S1.3a）
+
+#### 9.12.1 造型与预算
+
+| 项 | 值 |
+|---|---|
+| 零件 | **12 个**：底座（墨色唇 + 腿 + 奶油顶面）、两段斗篷、双臂、领口、头、兜帽、旗杆、旗面（正/背/四条边墙） |
+| 合并 | `MeshUtil.combine()` ⇒ **单一** `ArrayMesh`：556 三角 / 1668 顶点 / 1 个 `surface` / 1 个 draw call |
+| 体量 | 标称高度 22 m（实测 21.74），底座半径 3.4 m，旗面 5.0 × 8.2 m，占地 8.72 × 7.24 m |
+| 锚点 | 脚底精确 `y = 0` —— `place_at()` 只写 `position.y = height_at()`，所以「`min_y = 0` + 落点高度」两件事一起才叫贴地 |
+| 阵营 | `FACTION_KEYS = ["cloth", "water_deep", "cloth_alt", "plinth"]`；换色只重写顶点色，**不重建几何** |
+
+#### 9.12.2 描边契约（本批最贵的教训）
+
+`shaders/common/outline.gdshader` 沿 `TANGENT` 膨胀。`MeshUtil` 的生成器把**面法线**同时写进法线与
+切线槽，外壳于是沿各自面法线炸成互不相连的三角片 —— 正常线宽下全被本体挡住，肉眼看是"根本没画
+描边"（§5 陷阱 35）。`_with_smooth_tangents()` 在 `combine()` 之后重算一次：
+
+1. 按 `roundi(p * 10000)` 量化位置共享顶点（不共享就会沿接缝裂开）；
+2. 按**面积加权**累加面法线，归一化后**只写切线槽**；
+3. 法线槽保留原样 ⇒ 面着色（faceted flat shading）不受影响。
+
+用例断言 `smooth_verts ≥ 30`：只查 `next_pass != null && enabled == 1` 会全绿，但画面上什么都没有。
+
+#### 9.12.3 实测（seed 20250929）
+
+| 项 | 实测 |
+|---|---|
+| 贴地 | 100 个定种子采样点最大偏差 **0.00000 m**，正负 **52 / 48**（不是一路抬） |
+| 描边 | `next_pass = outline.gdshader`、`enabled = 1`；切线槽平滑顶点 **1494 / 1668** |
+| 朝向 | `+X → +90°`、`−X → −90°`、`−Z → ±180°`（回绕点）、`+Z → 0°`、`+X−Z → +135°`；`facing ∈ (−π, π]` |
+| 阵营 | 4 个阵营切换后顶点数不变 |
+| 决定论 | 同参数两次构建：顶点 / 三角 / 高度 / 脚底 / 平滑顶点数全等 |
+| `s1_3_party` | **37 断言 / 86 ms** |
+
+#### 9.12.4 取证通道
+
+`scripts/dev/strategic_shots.gd` 新增两枚**纯修饰符**（不触发批次、不抢退出码）：
+`--party=1` 在取景聚落上落地一枚棋子（阵营取自该聚落，拍出来是真世界配色），
+`--span=<m>` 覆盖档位跨度做真特写（LOCAL 170 m 下 22 m 棋子只有 ~116 px、描边 ~2 px，判不了美术）。
+取景台同时按**当前跨度**发布 `Style.pixel_span` —— 否则外壳线宽仍按演示岛的 0.04 算，战略档下描边会细到看不见。
+
+#### 9.12.5 已知边界
+
+1. 棋子的「朝向」只是 `rotation.y`，**没有俯仰**：山坡上旗杆仍竖直（贴地俯仰随 S1.3c 的移动积分一起做）。
+2. 旗面是静态弯曲薄壳，无飘动动画；动画留给 S1.5 之后的表现批次。
+3. `--span` 只改相机跨度、不改档位枚举，所以它拍出来的图**不能**当三档 `B-` 基线。
 
 ## 10. autoload 上限与顺序
 
