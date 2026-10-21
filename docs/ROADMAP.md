@@ -1302,7 +1302,7 @@ S1.2 同时要"看见地形"和"镜头好用"，一次做完会把渲染红、�
 | 用例 | `s1_4_migrate`（**66 断言 / 111 ms**）：格式常量互校（`V1_DAY_PHASE_SECONDS` = 170、`V2_SECONDS_PER_DAY` == `GameState.SECONDS_PER_DAY`）· v1 **真文件**迁移（`06:00` / `visual_day_length` 170 / 快照里已无 `day_length` / `date_text` 完整形态）· **6 个相位点**（0 / 170 / 340 / 21.25 / 85 / 1.0）· 非法值拒读 ×2 且 `money`/`game_time` 一字不改 · 校验器 7 条正反例（含 `INF`/`-INF`/`NAN`/字符串/缺字段）· v1 缺 `game` 段仍报原问题（钩子不伪造 game）· v2 不重复迁移 · 两个名字同时存在时新名优先 · **菜单提示真的显示**（真 `new()` 一个 `menu_page`：v1 显示且报 06:00、v2 不显示） |
 | 既有用例更新 | `s0_3_state`（`day_length` → `visual_day_length`）· `s0_3_roundtrip`（`schema_version` 1 → **2**、`game.day_length` → `game.visual_day_length`）· `s0_3_dirty`（空 `game` 段固件升 v2；"仍按 v1 读取" → "仍按当前格式 v2 读取"）· `s0_3_slots` 九张卡固件改 v2 真游戏秒（卡片正文仍取 `meta` ⇒ **像素不变**）· `_slot_text_is_complete` / `_world_facts` 同步 |
 | 回归 | headless **41 用例 / 0 失败 / 7 跳过 / 42.9 s**；窗口 **41 / 0 / 0 / 158.1 s**；0 `ERROR` 行。本批**无新增截图**：数据迁移不改画面，`B-` 复用 `s0_3_slots` 九宫格两轮逐位一致（现有用例已覆盖"读档后 UI 一致"） |
-| 提交 | `821aa9e`（feat(core) S1.4c 存档 v1→v2 迁移）、`b88b8dc`（test(tools) `s1_4_migrate`）、`__R__`（docs(roadmap)）、`__E__`（docs(eng)）、`__S__`（docs(results)）；本行由紧随的回填提交补 |
+| 提交 | `821aa9e`（feat(core) S1.4c 存档 v1→v2 迁移）、`b88b8dc`（test(tools) `s1_4_migrate`）、`2f294ff`（docs(roadmap)）、`346a4bb`（docs(eng)）、`98be3a2`（docs(results)）；本行由紧随的回填提交补 |
 | 明确未动 | 365 日长跑 + `B-` 三张时分 + **时间条入画后一次性重定基线**（d）；暂停/变速的瞬时状态仍不入档；`Clock` / `data/**` / autoload 仍 **9 / 10** |
 **状态**：🟨 进行中 —— 批 1（S1.4a 唯一游戏时钟）✅ 2026-10-21；批 2（S1.4b 变速与暂停）✅ 2026-10-21；批 3（S1.4c 存档迁移）✅ 2026-10-21；批 4 未开始
 
