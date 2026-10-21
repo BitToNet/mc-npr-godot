@@ -275,7 +275,13 @@ const CASES := {
 		"desc": "战略地形网格：32 m 网格 / 75×75 格 ⇒ 11 250 三角（C- 上限 34 611 的 1/3）；"
 				+ "6×6 分块（36 块陆 + 36 块水 + 外缘裙边）；水面只覆盖水下格、顶点色带泡沫衰减；"
 				+ "顶点全部有限且落在 ±1200 m 地图内；两次 build 逐字节一致；换 seed 几何必变；"
-				+ "场景接线后 StrategicTerrain 是唯一子节点且 11 250 三角",
+				+ "场景接线后地形 + 舞台 + 相机全部就位且仍是 11 250 三角",
+		"kind": "pure",
+	},	"s1_2_camera": {
+		"desc": "战略镜头三档：2600 / 700 / 170 m 垂直跨度，GLOBAL 锁正交等距且焦点锁中心；"
+				+ "600 帧脚本轨迹（右移 → 第 200 帧进区域档 → 第 400 帧转 yaw）逐帧断言无 NaN、"
+				+ "焦点不越界、帧间位移 ≤ 视野×0.35×dt×1.35、相机不低于地形 3 m；同脚本两次轨迹"
+				+ "哈希一致、反向平移不同；场景接线后相机 current、舞台固定正午",
 		"kind": "pure",
 	},
 }
@@ -679,6 +685,8 @@ func _dispatch(id: String) -> void:
 			await _case_world_session()
 		"s1_2_mesh":
 			await _case_strategic_mesh()
+		"s1_2_camera":
+			await _case_strategic_camera()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -3092,18 +3100,32 @@ func _case_router() -> void:
 			bus.connect(sig, func(_a: Dictionary) -> void:
 				facts.append(sig))
 
-	section("世界基线：S1.2b 起 world 是「地形 + 块」，但仍没有相机")
+	section("世界基线：S1.2c 起 world 是「地形 + 固定正午舞台 + 相机」")
 	var base_nodes := get_node_count()
 	var base_fp := _world_fingerprint(current_scene)
 	ok(base_nodes > 5, "世界节点数 = %d（地形 + autoload，不是空指针）" % base_nodes)
 	# 判据从 S1.0d 的「空壳」迁到「形如地形」：仍是能力断言，不是删断言 —— 根只有
 	# 一个子节点、块里每个 MeshInstance3D 都真的有 mesh、而且**还没有相机**。
-	ok(String(base_fp).begins_with("StrategicMap:Node3D:1|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
-			"结构指纹形如『根 → 地形 → 块容器』：%s" % String(base_fp).substr(0, 64))
-	not_contains(base_fp, "Camera3D", "还没有相机（S1.2c 的交付物，本批不提前接线）")
+	# 判据第二次随交付物迁移（S1.2c）：世界现在有地形 + 固定正午舞台 + 相机，所以
+	# 「指纹恰为『根 → 地形』、且没有相机」不再成立。换成的仍是能力断言：地形在、
+	# 相机会渲染、舞台三件齐备 —— 而且明确要求「唯一 current 相机」，不比原来弱。
+	ok(String(base_fp).begins_with("StrategicMap:Node3D:5|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
+			"结构指纹形如『根 → 地形 → 块容器』且根有 5 个子节点：%s" % String(base_fp).substr(0, 72))
+	contains(base_fp, "StrategicCamera:Node3D:1|Camera3D:Camera3D",
+			"结构指纹里有相机（S1.2c 的交付物）")
 	var terr: Node = current_scene.get_node_or_null("StrategicTerrain")
 	ok(terr != null, "世界有 StrategicTerrain")
-	eq(current_scene.get_child_count(), 1, "根只有地形一个子节点")
+	var cam_rig: Node = current_scene.get_node_or_null("StrategicCamera")
+	ok(cam_rig != null, "世界有 StrategicCamera")
+	var vp: Viewport = current_scene.get_viewport()
+	var cams: Camera3D = null
+	if vp != null:
+		cams = vp.get_camera_3d()
+	ok(cams != null, "视口里有 current 相机（画面不再全黑）")
+	eq(current_scene.get_child_count(), 5,
+			"根 5 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机")
+	ok(current_scene.get_node_or_null("Sun") != null, "世界有 Sun（固定正午）")
+	ok(current_scene.get_node_or_null("WorldEnvironment") != null, "世界有 WorldEnvironment")
 	var chunk_n := 0
 	var mesh_n := 0
 	if terr != null:
@@ -4160,7 +4182,7 @@ func _case_doc_conventions() -> void:
 	ok(art.length() > 3000, "docs/ART_PIPELINE.md 可读且非空（%d 字符）" % art.length())
 	ok(road.length() > 10000, "docs/ROADMAP.md 可读且非空（%d 字符）" % road.length())
 
-	section("§7 命名：文档里的 19 个 class_name 逐个在代码里存在")
+	section("§7 命名：文档里的 20 个 class_name 逐个在代码里存在")
 	# (文档里必须出现的类名, 代码文件, 文件里必须有的声明)
 	var classes := {
 		"Player": "res://scripts/actors/player.gd",
@@ -4182,6 +4204,7 @@ func _case_doc_conventions() -> void:
 		"GenParams": "res://scripts/world/gen_params.gd",
 		"WorldSession": "res://scripts/world/world_session.gd",
 		"StrategicTerrain": "res://scripts/world/strategic_terrain.gd",
+		"StrategicCamera": "res://scripts/world/strategic_camera.gd",
 	}
 	for cls in classes.keys():
 		var path := String(classes[cls])
@@ -6071,7 +6094,7 @@ func _case_strategic_mesh() -> void:
 	ne(_terrain_signature(t3), sig, "换 seed 几何必变（反向对照）")
 	ne(int(t3.stats["max_y"]), int(st["max_y"]), "换 seed 最高点不同")
 
-	section("场景接线：StrategicTerrain 是唯一子节点")
+	section("场景接线：地形 + 舞台 + 相机（S1.2c 后根有 5 个子节点）")
 	rng.call("seed_from", 20250929)
 	var ps := load(WORLD_SCENE) as PackedScene
 	ok(ps != null, "strategic_map.tscn 可加载")
@@ -6079,8 +6102,8 @@ func _case_strategic_mesh() -> void:
 	get_root().add_child(inst)
 	await process_frame
 	ok(inst.terrain != null, "场景建出了 StrategicTerrain")
-	eq(inst.get_child_count(), 1, "场景只有一个子节点（地形；相机在 S1.2c）")
-	eq(String(inst.get_child(0).name), "StrategicTerrain", "子节点就是地形")
+	eq(inst.get_child_count(), 5, "根 5 个子节点：地形 + 舞台三件 + 相机")
+	eq(String(inst.get_child(0).name), "StrategicTerrain", "第一个子节点仍是地形")
 	var sc: Dictionary = inst.terrain_stats()
 	eq(int(sc.get("land_tris", 0)), 11250, "场景里的地形也是 11 250 三角")
 	eq(int(sc.get("cells", 0)), 75, "场景里的地形也是 75 格")
@@ -6143,6 +6166,146 @@ func _terrain_signature(t: StrategicTerrain) -> String:
 ## 的世界"会随用例执行顺序变化（`--all` 里 26 条边 / 8916.9 m，单跑 24 条 /
 ## 7936.7 m，本批就是这么抓到的）。生产侧由 `WorldSession.boot()` 负责同一件事，
 ## 见 `scripts/world/world_session.gd`、`ENGINEERING.md` §9.8.5 与 §5 陷阱 26。
+## S1.2c：战略镜头。四组断言 —— 档位契约、600 帧轨迹（无 NaN / 不越界 / 帧间连续 /
+## 不入地）、决定论（同脚本逐位一致 + 反向对照）、场景接线（相机 current + 固定正午）。
+func _case_strategic_camera() -> void:
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var s := WorldSession.boot(rng, 20250929)
+	ok(s.ok, "前置：世界建成（镜头要读高度场）")
+
+	section("档位契约：2600 / 700 / 170 m，GLOBAL 锁正交等距且焦点锁中心")
+	var c0 := StrategicCamera.new()
+	c0.setup(s.field)
+	var rep := c0.report()
+	eq(int(rep["tier"]), 0, "初始档 = GLOBAL")
+	near(float(rep["size"]), 2600.0, 0.001, "全球档垂直跨度 2600 m（2400 m 图 + 边距）")
+	eq(String(rep["projection"]), "ORTHO", "全球档固定正交")
+	near(float(rep["yaw_deg"]), 45.0, 0.001, "全球档 yaw = 45°（等距）")
+	near(float(rep["pitch_deg"]), -35.264, 0.01, "全球档 pitch = −35.264°")
+	near(float(rep["bounds_half"]), 0.0, 0.001, "全球档焦点锁中心（视野比地图大，不允许漂到空白里）")
+	ok(bool(rep["current"]), "相机是 current（否则视口还是黑的）")
+	ge(float(rep["far"]), 2500.0, "far 覆盖整图（%.0f m）" % float(rep["far"]))
+	near(float(rep["camera_y"]), 146.0 + 0.0, 4000.0, "相机在地图上方（y = %.1f）" % float(rep["camera_y"]))
+	c0.set_tier(1)
+	near(float(c0.report()["size_target"]), 700.0, 0.001, "区域档跨度 700 m")
+	c0.set_tier(2)
+	near(float(c0.report()["size_target"]), 170.0, 0.001, "近地档跨度 170 m")
+	c0.set_tier(0)
+	c0.toggle_projection()
+	eq(String(c0.report()["projection"]), "ORTHO", "GLOBAL 档拒绝切透视（整图必须正交）")
+	c0.set_tier(1)
+	c0.toggle_projection()
+	eq(String(c0.report()["projection"]), "PERSP", "区域档可切透视")
+	c0.toggle_projection()
+	eq(String(c0.report()["projection"]), "ORTHO", "再切回正交")
+	# 焦点一旦离开中心，切回全球档必须被拉回边界内（否则整图会偏心）
+	c0.set_tier(1)
+	for i in 90:
+		c0.step(1.0 / 60.0, Vector2(1, 0))
+	ok(absf(c0.focus.x) > 0.5, "区域档确实能平移（x = %.2f）" % c0.focus.x)
+	c0.set_tier(0)
+	near(c0.focus.x, c0.report()["bounds_half"], 0.01, "切回全球档后焦点被钳回中心（x = %.2f）" % c0.focus.x)
+	c0.free()
+
+	section("600 帧轨迹：右移 → 第 200 帧进区域档 → 第 400 帧转 yaw")
+	var cam := StrategicCamera.new()
+	cam.setup(s.field)
+	var dt := 1.0 / 60.0
+	var bad_nan := 0
+	var bad_bounds := 0
+	var bad_step := 0
+	var bad_ground := 0
+	var max_step := 0.0
+	var prev := cam.focus
+	var tiers_seen := {}
+	for i in 600:
+		var move := Vector2.ZERO
+		var zoom := 0
+		var yaw_d := 0.0
+		if i < 200:
+			move = Vector2(1, 0)
+		elif i == 200:
+			zoom = 1
+			move = Vector2(1, 0)
+		elif i < 400:
+			move = Vector2(1, 0)
+		elif i == 400:
+			yaw_d = 0.02
+		else:
+			move = Vector2(0, 1)
+		cam.step(dt, move, yaw_d, 0.0, zoom)
+		var r := cam.report()
+		var f: Vector3 = r["focus"]
+		tiers_seen[int(r["tier"])] = true
+		if is_nan(f.x) or is_nan(f.y) or is_nan(f.z) \
+				or is_inf(f.x) or is_inf(f.y) or is_inf(f.z):
+			bad_nan += 1
+			break
+		var bh := float(r["bounds_half"])
+		if absf(f.x) > bh + 0.01 or absf(f.z) > bh + 0.01:
+			bad_bounds += 1
+		var step_len := (f - prev).length()
+		max_step = maxf(max_step, step_len)
+		var allow := float(r["size"]) * StrategicCamera.PAN_FACTOR * dt * 1.35 + 0.001
+		if step_len > allow:
+			bad_step += 1
+		if float(r["camera_y"]) < float(r["ground_y"]) + StrategicCamera.GROUND_CLEAR - 0.01:
+			bad_ground += 1
+		prev = f
+	eq(bad_nan, 0, "600 帧里没有 NaN / INF")
+	eq(bad_bounds, 0, "焦点始终在 ±bounds_half 内（越界帧数 = 0）")
+	eq(bad_step, 0, "帧间位移 ≤ 视野×0.35×dt×1.35（最大实测 %.4f m）" % max_step)
+	eq(bad_ground, 0, "相机始终比脚下地形高 ≥ 3 m（不入地）")
+	ok(max_step > 0.0, "焦点确实在动（不是卡死）")
+	eq(tiers_seen.size(), 2, "轨迹里经历过 2 个档（GLOBAL → REGION）")
+	eq(int(cam.report()["tier"]), 1, "结束时停在区域档")
+	ok(float(cam.report()["size"]) < 2600.0, "跨度已经向 700 m 收敛（%.1f m）" % float(cam.report()["size"]))
+	cam.free()
+
+	section("决定论：同脚本两次轨迹逐位一致，反向平移不同")
+	var h1 := _camera_trace_hash(s.field, 1.0)
+	var h2 := _camera_trace_hash(s.field, 1.0)
+	eq(h1, h2, "同一输入脚本两次轨迹哈希相同")
+	var h3 := _camera_trace_hash(s.field, -1.0)
+	ne(h1, h3, "反向平移得到不同轨迹（反向对照）")
+
+	section("场景接线：相机 current + 舞台固定正午")
+	rng.call("seed_from", 20250929)
+	var packed := load(WORLD_SCENE) as PackedScene
+	ok(packed != null, "strategic_map.tscn 可加载")
+	var inst: Node = packed.instantiate()
+	get_root().add_child(inst)
+	await process_frame
+	ok(inst.camera != null, "场景建出了 StrategicCamera")
+	var cr: Dictionary = inst.camera_report()
+	eq(int(cr.get("tier", -1)), 0, "场景相机从全球档起步")
+	near(float(cr.get("size", 0.0)), 2600.0, 1.0, "场景相机跨度 2600 m")
+	ok(bool(cr.get("current", false)), "场景相机是 current")
+	ok(inst.sun != null, "场景有 Sun")
+	ok(inst.environment_owner != null and inst.environment_owner.environment != null,
+			"WorldEnvironment 挂了 Environment（天空与雾）")
+	ok(inst.day_night != null, "场景有 DayNight")
+	eq(bool(inst.day_night.auto_cycle), false, "DayNight 自动循环关闭（截图可复现）")
+	near(float(inst.day_night.time_of_day), 0.5, 0.0001, "固定在正午 0.5")
+	inst.queue_free()
+	await process_frame
+
+
+## 固定 240 帧的平移轨迹，返回量化后的轨迹哈希。档位先拨到区域档，否则全球档的
+## 焦点被钳在中心、两个方向都会得到同一条（空）轨迹。
+func _camera_trace_hash(p_field: HeightField, p_sign: float) -> String:
+	var c := StrategicCamera.new()
+	c.setup(p_field)
+	c.set_tier(1)
+	var acc := ""
+	for i in 240:
+		c.step(1.0 / 60.0, Vector2(p_sign, 0.0))
+		var f := c.focus
+		acc += "%.6f,%.6f,%.6f|" % [f.x, f.y, f.z]
+	c.free()
+	return str(acc.hash())
+
 func _world_fixture(p_seed: int = 20250929) -> Dictionary:
 	var loaded := GenParams.load_from()
 	var params := Dictionary(loaded["params"])
