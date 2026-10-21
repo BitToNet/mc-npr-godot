@@ -7,6 +7,10 @@ extends Node3D
 ## the faceted cel shading turns into crisp, graphic shadow slices.  Below the
 ## horizon the light flips to the opposite bearing and becomes cool moonlight
 ## instead of switching off, so the toy never goes pitch black.
+##
+## S1.4a: the phase is no longer a clock of its own.  With `auto_cycle` on it is read
+## from `GameState.time_of_day()` (the one game clock, advanced in fixed logical
+## steps); `set_time()` pins it for captures and for the strategic stage.
 
 signal cycle_changed(on: bool)
 
@@ -33,9 +37,11 @@ const KEYS := [
 		"sun": "#9fb4ff", "energy": 0.50, "amb": "#2b3a6b", "amb_e": 0.30},
 ]
 
-var time_of_day := 0.32     # 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
+## 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset.  While `auto_cycle` is on
+## this is **derived** from `GameState.time_of_day()`; `set_time()` pins it by hand.
+var time_of_day := 0.32
+## Follow the one game clock (S1.4a) instead of holding a phase of our own.
 var auto_cycle := true
-var day_length := 170.0     # seconds for a full 24h loop
 var sun_yaw := 38.0
 var sun_tilt := 24.0
 
@@ -87,16 +93,38 @@ func setup(sun_light: DirectionalLight3D, env_owner: WorldEnvironment) -> void:
 
 
 func _process(_delta: float) -> void:
-	# S0.6: the sun drives every shadow in the scene, so its advance comes off the
-	# render clock.  With a real delta, two identical runs ended up with the sun at
-	# marginally different bearings and the shadow edges landed on other pixels.
-	if auto_cycle:
-		time_of_day = fmod(time_of_day + Clock.dt / maxf(day_length, 1.0), 1.0)
-		apply()
+	# S1.4a: the phase is **derived, never accumulated**.  `GameState.game_time` is the
+	# one game clock, so the sky cannot drift away from the calendar — the old
+	# `time_of_day += Clock.dt / day_length` was exactly the second clock this step
+	# removes.  S0.6's determinism no longer rests on this arithmetic: every capture
+	# pins the phase through `set_time()` (which turns `auto_cycle` off), so two runs
+	# still agree to the byte, and a scene that needs a frozen sun simply pins it.
+	if not auto_cycle:
+		return
+	var phase := _clock_phase()
+	if phase < 0.0 or is_equal_approx(phase, time_of_day):
+		return
+	time_of_day = phase
+	apply()
 
 
+## Phase from the game clock, or -1.0 when no `GameState` is reachable (a fixture that
+## builds `DayNight` by hand, e.g. `tools/art_samples.gd` under `--script`).
+func _clock_phase() -> float:
+	var gs := get_node_or_null("/root/GameState")
+	if gs == null:
+		return -1.0
+	return float(gs.call("time_of_day"))
+
+
+## Pins the phase by hand (captures, the strategic stage, the diorama's number keys).
+## A pin **stops following the game clock** until `set_auto_cycle(true)`: otherwise the
+## very next frame would overwrite the phase we were just asked for.
 func set_time(t: float) -> void:
 	time_of_day = fmod(maxf(t, 0.0), 1.0)
+	if auto_cycle:
+		auto_cycle = false
+		cycle_changed.emit(false)
 	apply()
 
 

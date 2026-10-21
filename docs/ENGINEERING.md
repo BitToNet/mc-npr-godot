@@ -1190,6 +1190,59 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
   也不证明"棋子在 GLOBAL 档好不好看"：22 m 在 2600 m 视野下约 4 px —— 这是设计约束，棋子是战略层的符号，
   不是主角。
 
+### 9.16 唯一游戏时钟（S1.4a）
+
+#### 9.16.1 三个时钟收敛成一个
+
+| 时钟 | S1.4a 之前 | 现在 |
+|---|---|---|
+| `Clock`（`scripts/core/render_clock.gd`） | 渲染时间，写 `shader_globals/render_time` | **不动**：仍只管渲染，游戏逻辑不再读它 |
+| `GameState.game_time` | 0..170 秒的循环相位（`day_length` 170 s 一圈），没有日期 | **唯一游戏时钟**：游戏秒、单向累加、历法由它派生 |
+| `DayNight.time_of_day` | 自己 `+= Clock.dt / day_length` 累加 | **派生量**：`auto_cycle` 时读 `GameState.time_of_day()` |
+
+#### 9.16.2 单位与历法（都是常量，不是魔法数）
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `TICK_GAME_SECONDS` | `1.0` | 一个逻辑步推进的游戏秒数（1x 下 = 1 游戏秒） |
+| `GAME_SECONDS_PER_REAL_SECOND` | `60.0` | 1x：1 现实秒 = 1 游戏分钟 |
+| `SECONDS_PER_DAY` | `86 400` | 1 游戏日 = 24 现实分钟 |
+| `DAYS_PER_MONTH` × `MONTHS_PER_YEAR` | `30 × 12 = 360` | 一年 360 日，无闰日 |
+
+`game_day = floor(t / 86400) + 1`、`hour = floor(t / 3600) % 24`、`month = floor((day-1)/30) % 12 + 1`。
+
+#### 9.16.3 为什么是"整秒块 + 余量累加器"
+
+`_physics_process(delta)` 把 `delta * 60` 加进 `_tick_residual`，每满 `TICK_GAME_SECONDS` 就走一次
+`_advance_one_tick()`（`game_time += 1.0`）。理由三条：
+
+1. **不漂移**：只在整秒上加 ⇒ 值域内的 float 加法精确（365 日 = 31 536 000 ≪ 2^53）。若直接
+   `game_time += delta * 60`，每帧引入一次舍入，长跑后日期会慢慢歪。
+2. **帧率无关**：60 Hz 一帧 1 秒、30 Hz 一帧 2 秒，走的都是"整秒"，1x 的速率不随帧率变。
+3. **为 S1.4b 留好接口**：变速 = 每帧调用 N 次 `_advance_one_tick()`，仍是同一条浮点路径，
+   所以"4x 跑 N 日"与"1x 跑 N 日"可以逐字段相同。
+
+`playtime` 仍然加真实 `delta`（存档卡片显示玩了多少现实时间），和 `game_time` 是两个数。
+
+#### 9.16.4 纯函数历法与唯一性守卫
+
+- 所有日期字段（`game_day / day_of_year / year_of_run / month / day_of_month / hour_of_day /
+  minute_of_day / second_of_day / time_of_day`）都是 `game_time` 的纯函数 ⇒ 存档只带**一个计数器**，
+  读档后每个字段都能重算；`time_parts()` 是唯一聚合出口，避免各处自己拼日期。
+- `DayNight._process()` 不再累加：`auto_cycle` 为真时 `time_of_day = GameState.time_of_day()`，
+  相同则跳过 `apply()`；取不到 `GameState`（`--script` 下的手工夹具）时返回 -1 保持原值。
+- `set_time(t)` 是**手动钉相位**，并顺手关掉 `auto_cycle`。若只赋值而不关跟随，下一帧就被
+  `GameState` 覆盖，取景台 / 战略舞台 / diorama 的 `start_time` 全都白设。
+- 守卫规则 `game_clock_owner`（`_writes_game_time()`）只拦**写入**（`=` / `+=` / `-=` / `*=` / `/=`），
+  `==` 比较与注释不算 —— 否则"读一个全局时钟"会变成违例。用例还做一次实测扫描
+  `_game_time_writers()`，结果必须**恰好**是 `res://scripts/core/game_state.gd`（空集也判失败）。
+
+#### 9.16.5 S1.4a 没做什么
+
+变速与暂停（S1.4b）、v1→v2 存档迁移（S1.4c）、365 日长跑与 `B-` 三张时分板（S1.4d）都不在本批。
+`SNAPSHOT_FIELDS` 仍是 10 项，`day_length` 作为 **v1 遗留字段**保留并由 `restore()` 原样吃下（已无读者），
+迁移由 S1.4c 把它搬进 `visual_day_length`。
+
 ## 10. autoload 上限与顺序
 
 **当前 9 / 上限 10**（S0.4 批次 2 新增 `Debug` 后；`ROADMAP` §3.2 已同步更正）。

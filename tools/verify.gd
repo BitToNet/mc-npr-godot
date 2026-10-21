@@ -122,6 +122,12 @@ const CASES := {
 		"desc": "可复现时钟：确定性模式 t==frame/hz、实时模式随 delta 前进、reset 归零、全局着色器参数被注册",
 		"kind": "pure",
 	},
+	"s1_4_clock": {
+		"desc": "唯一游戏时钟（S1.4a）：历法是 game_time 的纯函数（日/月/年边界逐点）、"
+				+ "1x = 60 游戏秒/现实秒且只走整秒块、DayNight 相位派生不自累加、"
+				+ "set_time 钉相位、全仓只有 game_state.gd 写 game_time（守卫 + 实测扫描）",
+		"kind": "pure",
+	},
 	"s0_6_repro": {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
@@ -390,6 +396,8 @@ const SCENE_CHANGE_TOKENS := [
 	"reload_current_scene", "unload_current_scene",
 ]
 const SCENE_CHANGE_OWNERS := ["res://scripts/core/scene_router.gd"]
+## S1.4a：唯一游戏时钟。只有这个文件可以写 `game_time`（扫描 res://scripts 全仓）。
+const GAME_CLOCK_OWNERS := ["res://scripts/core/game_state.gd"]
 
 ## -----------------------------------------------------------------------------
 ##  S0.3 批次 2（SaveSystem）常量
@@ -668,6 +676,8 @@ func _dispatch(id: String) -> void:
 			await _case_probe_fail()
 		"s0_6_clock":
 			await _case_clock()
+		"s1_4_clock":
+			await _case_game_clock()
 		"s0_6_repro":
 			await _case_repro()
 		"s1_0_scene_arg":
@@ -970,6 +980,11 @@ func _case_guard() -> void:
 			"ext": "gd",
 			"text": "get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n",
 		},
+		# S1.4a：唯一游戏时钟 —— 人造违例落在 _verify_tmp（不是属主）⇒ 必被抓住
+		"game_clock_owner": {
+			"ext": "gd",
+			"text": "game_time += 1.0\n",
+		},
 	}
 	for label in probes.keys():
 		var p: Dictionary = probes[label]
@@ -1011,6 +1026,13 @@ func _case_guard() -> void:
 	ok(_scan_text("res://scripts/world/terrain.gd",
 			"get_tree().change_scene_to_file(\"res://scenes/dev/diorama.tscn\")\n").size() == 1,
 			"非属主文件切场景恰好报 1 条（不多不少）")
+	# S1.4a：唯一游戏时钟的三种正反例
+	ok(_scan_text("res://scripts/world/x.gd", "game_time += 1.0\n").size() == 1,
+			"非属主写 game_time 恰好报 1 条（不多不少）")
+	ok(_scan_text("res://scripts/core/game_state.gd", "game_time += TICK_GAME_SECONDS\n").is_empty(),
+			"属主 game_state.gd 写 game_time 不误报")
+	ok(_scan_text("res://scripts/world/x.gd", "if game_time == 5.0:\n\tpass\n").is_empty(),
+			"只读比较 game_time == 5 不误报")
 
 	section("既有代码基线")
 	var real := _guard_walk()
@@ -1275,6 +1297,132 @@ func _case_clock() -> void:
 	section("现场还原")
 	clock.call("set_deterministic", false)
 	ok(not clock.get("deterministic"), "用例结束后恢复实时模式，不污染后续用例")
+
+
+## --- s1_4_clock --------------------------------------------------------------
+## S1.4 批次 1（S1.4a）：唯一游戏时钟。历法是对 `game_time` 的**纯函数**（日 / 月 / 年
+## 边界逐点核对），1x 下 1 现实秒 = 60 游戏秒，`DayNight` 只读不累加，除 `game_state.gd`
+## 之外全仓没人写 `game_time`（静态守卫 + 实测扫描）。
+func _case_game_clock() -> void:
+	await process_frame
+	var gs := get_root().get_node_or_null("GameState")
+	section("GameState autoload 与历法常量")
+	ok(gs != null, "autoload GameState 节点存在于 root")
+	if gs == null:
+		return
+	var consts: Dictionary = (gs.get_script() as Script).get_script_constant_map()
+	eq(float(consts.get("SECONDS_PER_DAY", 0.0)), 86400.0,
+		"SECONDS_PER_DAY = 86400（24h × 60min × 60s）")
+	eq(float(consts.get("TICK_GAME_SECONDS", 0.0)), 1.0,
+		"TICK_GAME_SECONDS = 1 游戏秒（1 逻辑步）")
+	eq(float(consts.get("GAME_SECONDS_PER_REAL_SECOND", 0.0)), 60.0,
+		"GAME_SECONDS_PER_REAL_SECOND = 60（1 现实秒 = 1 游戏分钟）")
+	eq(int(consts.get("DAYS_PER_YEAR", 0)), 360, "DAYS_PER_YEAR = 360（12 × 30，无闰日）")
+	eq(int(consts.get("DAYS_PER_MONTH", 0)), 30, "DAYS_PER_MONTH = 30")
+
+	section("历法是纯函数：game_time → 年/月/日/时/分/秒（含日、月、年边界）")
+	var table := [
+		# [game_time, 第几天, 年, 月, 日, 时, 分, 秒]
+		[0.0, 1, 1, 1, 1, 0, 0, 0],
+		[3661.0, 1, 1, 1, 1, 1, 1, 1],
+		[86399.0, 1, 1, 1, 1, 23, 59, 59],
+		[86400.0, 2, 1, 1, 2, 0, 0, 0],
+		[86400.0 * 30.0, 31, 1, 2, 1, 0, 0, 0],
+		[86400.0 * 359.0, 360, 1, 12, 30, 0, 0, 0],
+		[86400.0 * 360.0, 361, 2, 1, 1, 0, 0, 0],
+		[86400.0 * 365.0, 366, 2, 1, 6, 0, 0, 0],
+	]
+	for row in table:
+		gs.set("game_time", float(row[0]))
+		var parts: Dictionary = gs.call("time_parts")
+		var got := "d%d %d/%d/%d %02d:%02d:%02d" % [
+			int(parts["day_index"]), int(parts["year"]), int(parts["month"]),
+			int(parts["day"]), int(parts["hour"]), int(parts["minute"]),
+			int(parts["second"]),
+		]
+		var want := "d%d %d/%d/%d %02d:%02d:%02d" % [
+			int(row[1]), int(row[2]), int(row[3]), int(row[4]), int(row[5]),
+			int(row[6]), int(row[7]),
+		]
+		eq(got, want, "t=%s 的历法分解" % str(row[0]))
+	gs.set("game_time", 86400.0 * 2.5)
+	eq(String(gs.call("clock_text")), "第 3 天 12:00",
+		"clock_text 仍是『第 N 天 HH:MM』（§3.5 存档卡片沿用）")
+	eq(String(gs.call("date_text")), "第 1 年 1 月 3 日 12:00", "date_text 给出完整历法")
+	ok(bool(gs.call("is_valid_time", 0.0)) and bool(gs.call("is_valid_time", 1.5)),
+		"is_valid_time 接受有限非负值")
+	ok(not bool(gs.call("is_valid_time", -1.0)) and not bool(gs.call("is_valid_time", NAN)),
+		"is_valid_time 拒绝负值与 NaN（S1.4c 拒读的基础）")
+
+	section("1x 速率：60 现实秒推进 60 游戏分钟（误差 < 1 游戏秒）")
+	var auto_phys := gs.is_physics_processing()
+	gs.set_physics_process(false)
+	gs.call("new_game", 20250929)
+	for i in 3600:
+		gs.call("_physics_process", 1.0 / 60.0)
+	var advanced: float = gs.get("game_time")
+	ok(absf(advanced - 3600.0) < 1.0, "3600 帧（60 现实秒）→ %.3f 游戏秒（期望 3600 ±1）" % advanced)
+	ok(absf(advanced - roundf(advanced)) < 0.000001, "推进量是整秒块（%.3f）" % advanced)
+	near(float(gs.get("playtime")), 60.0, 0.5, "playtime 是 60 现实秒 —— 与游戏时间分开计")
+	eq(int(gs.call("hour_of_day")), 1, "60 游戏分钟 → 第 1 天 01:00")
+
+	section("单调性：逐 tick 严格递增，不回落")
+	var prev := -1.0
+	var mono := true
+	for i in 8:
+		gs.call("_physics_process", 1.0 / 60.0)
+		var now: float = gs.get("game_time")
+		if now <= prev:
+			mono = false
+		prev = now
+	ok(mono, "每次 tick 后 game_time 严格递增（无跳变、无回退）")
+
+	section("DayNight 只读 game_time：相位派生、自己不再累加")
+	var dn_script := load("res://scripts/world/day_night.gd")
+	ok(dn_script != null, "day_night.gd 可加载")
+	if dn_script != null:
+		var dn: Node3D = dn_script.new()
+		dn.name = "DayNightS14Probe"
+		dn.set_process(false)
+		get_root().add_child(dn)
+		gs.set("game_time", 86400.0 * 3.0 + 21600.0)
+		dn.call("set_auto_cycle", true)
+		dn.call("_process", 0.0)
+		near(float(dn.get("time_of_day")), 0.25, 0.0000001,
+			"auto_cycle 打开时相位 = GameState.time_of_day()（第 4 天 06:00 → 0.25）")
+		dn.call("set_time", 0.75)
+		ok(not bool(dn.get("auto_cycle")), "set_time() 关掉 auto_cycle（钉住的相位不被下一帧覆盖）")
+		dn.call("_process", 0.0)
+		near(float(dn.get("time_of_day")), 0.75, 0.0000001, "钉住的 0.75 不被 _process 覆盖")
+		var ka: Dictionary = dn.call("_sample_keys", 0.25)
+		var kb: Dictionary = dn.call("_sample_keys", 0.25)
+		eq(str(ka["sun"]), str(kb["sun"]), "同一相位的采样是纯函数（两次逐位相同）")
+		get_root().remove_child(dn)
+		dn.free()
+
+	section("唯一时钟：全仓只有 game_state.gd 写 game_time；day_night 不再有第二套累加")
+	# 只看**代码行**：注释里可能留着旧写法的说明（"以前是 time_of_day += Clock.dt / day_length"），
+	# 拿它当违例就成了"注释不能提历史"。这与守卫 `_scan_text` 的口径一致。
+	var dn_code := ""
+	for raw in FileAccess.get_file_as_string("res://scripts/world/day_night.gd").split("\n"):
+		dn_code += _strip_comment(String(raw), "gd") + "\n"
+	ok(dn_code.find("Clock.dt") < 0, "day_night.gd 不再从渲染时钟推进相位")
+	ok(dn_code.find("day_length") < 0, "day_night.gd 不再有自己的 day_length")
+	ok(dn_code.find("time_of_day +=") < 0, "day_night.gd 没有相位累加（相位是派生量）")
+	eq(_game_time_writers(), ["res://scripts/core/game_state.gd"],
+		"全仓只有 game_state.gd 写 game_time（唯一游戏时钟）")
+	ok(_scan_text("res://scripts/world/x.gd", "game_time += 1.0\n").size() == 1,
+		"守卫：非属主写 game_time 恰好报 1 条")
+	ok(_scan_text("res://scripts/core/game_state.gd",
+		"game_time += TICK_GAME_SECONDS\n").is_empty(), "守卫：属主写 game_time 不误报")
+	ok(_scan_text("res://scripts/world/x.gd", "if game_time == 5.0:\n\tpass\n").is_empty(),
+		"守卫：只读比较 game_time == 5 不误报")
+
+	section("现场还原")
+	gs.call("new_game", 20250929)
+	gs.set_physics_process(auto_phys)
+	ok(gs.is_physics_processing() == auto_phys, "_physics_process 自动推进已恢复")
+	eq(float(gs.get("game_time")), 0.0, "用例结束时游戏时钟归零，不污染后续用例")
 
 
 ## --- s0_6_repro --------------------------------------------------------------
@@ -2460,31 +2608,29 @@ func _case_state() -> void:
 	var main_src := FileAccess.get_file_as_string("res://scripts/core/main.gd")
 	ok(main_src.contains("var world_seed := 20250929"),
 			"main.gd 的 world_seed 默认值仍是 20250929（两个来源同值，接线才不改变画面）")
-	eq(gs.get("day_length"), 170.0, "GameState.day_length 默认值与 day_night.gd 一致（170 秒/天）")
+	eq(gs.get("day_length"), 170.0,
+			"GameState.day_length 仍是 170（S1.4a 起只是 v1 存档的遗留字段，时钟不再读它）")
 
-	section("逻辑步：60Hz 固定步，前进量恒为 1/60 的整数倍（不掺真实 delta）")
+	section("逻辑步：60Hz 固定步，game_time 只以整秒块前进（不掺真实 delta）")
 	eq(Engine.physics_ticks_per_second, 60, "引擎物理步长 = 60Hz（§3.2 逻辑固定步）")
-	print("    [note] SceneTree.physics_frame 在节点 _physics_process **之前**发射，")
-	print("    [note] 所以 N 次 await 只对应 N-1 次 game_time 推进；下面断言『整数步』而非固定次数。")
+	print("    [note] S1.4a 起 1x 下 1 逻辑步 = 1 游戏秒（1 现实秒 = 1 游戏分钟），")
+	print("    [note] 所以 60 次 await physics_frame 推进约 60 游戏秒，且必然是整数。")
 	await physics_frame
 	var t0: float = gs.get("game_time")
 	for i in 60:
 		await physics_frame
-	var dt: float = float(gs.get("game_time")) - t0
-	var steps := dt * 60.0
-	var steps_int := roundi(steps)
-	ok(absf(steps - float(steps_int)) < 0.000001,
-			"前进量恰好是 %d 个 1/60 秒（整数步 ⇒ 时间只来自固定逻辑步；"
-					% steps_int + "若改用 _process 累加真实 delta，这里会是非整数）")
-	ok(absf(float(steps_int) - 60.0) <= 2.0,
-			"60 次 await physics_frame 推进 %d 步（60±2，含上面的对齐抖动）" % steps_int)
-	ok(gs.get("playtime") > 0.0, "playtime 随 game_time 一起推进")
+	var advanced: float = float(gs.get("game_time")) - t0
+	ok(absf(advanced - roundf(advanced)) < 0.000001,
+			"推进量是整数（%g 游戏秒）—— 只按 TICK_GAME_SECONDS 前进，没有掺真实 delta" % advanced)
+	ok(absf(advanced - 60.0) <= 3.0,
+			"60 次 await physics_frame 推进 %g 游戏秒（60±3，含帧对齐抖动）" % advanced)
+	ok(gs.get("playtime") > 0.0, "playtime 随游戏时间一起推进")
 
 	section("派生量：day / time_of_day / clock_text 自洽")
 	gs.set("game_time", 0.0)
 	eq(gs.call("game_day"), 1, "game_time=0 → 第 1 天")
 	eq(gs.call("time_of_day"), 0.0, "game_time=0 → 午夜")
-	gs.set("game_time", 170.0 * 2.0 + 170.0 * 0.5)
+	gs.set("game_time", 86400.0 * 2.5)
 	eq(gs.call("game_day"), 3, "game_time=2.5 天 → 第 3 天")
 	near(gs.call("time_of_day"), 0.5, 0.000001, "2.5 天处 time_of_day = 0.5（正午）")
 	var clk := String(gs.call("clock_text"))
@@ -2681,7 +2827,9 @@ func _case_roundtrip() -> void:
 	var meta_v: Variant = d.get("meta", {})
 	var meta: Dictionary = meta_v if typeof(meta_v) == TYPE_DICTIONARY else {}
 	eq(int(meta.get("game_day", 0)), 1, "meta.game_day 与 game_time=123.5 自洽（第 1 天）")
-	eq(String(meta.get("clock_text", "")), "第 1 天 17:26", "meta.clock_text 与 game_time 自洽")
+	# S1.4a：`game_time` 是**游戏秒**，123.5 秒 = 2 分 3 秒 ⇒ 00:02（旧口径 123.5/170×24h=17:26）。
+	eq(String(meta.get("clock_text", "")), "第 1 天 00:02",
+			"meta.clock_text 与 game_time 自洽（123.5 游戏秒）")
 	eq(String(meta.get("party_name", "")), "无名军团", "meta.party_name")
 	eq(int(meta.get("party_level", 0)), 1, "meta.party_level")
 	eq(int(meta.get("world_seed", 0)), PROBE_SEED, "meta.world_seed 与 game 段一致")
@@ -4800,7 +4948,52 @@ func _scan_text(path: String, text: String) -> Array:
 			for tok in SCENE_CHANGE_TOKENS:
 				if _contains_token(line, tok):
 					hits.append(_hit(path, i + 1, "scene_change_owner", raw))
+		# S1.4a：唯一游戏时钟 —— 只有 game_state.gd 可以写 `game_time`
+		if ext == "gd" and not GAME_CLOCK_OWNERS.has(path) and _writes_game_time(line):
+			hits.append(_hit(path, i + 1, "game_clock_owner", raw))
 	return hits
+
+
+## `game_time` 是否被这一行**写入**（`=` / `+=` / `-=` / `*=` / `/=`）。只读与比较都不算，
+## 所以守卫不会把 `if game_time == 5` 这类判断当成第二个时钟的入口。
+func _writes_game_time(line: String) -> bool:
+	var idx := line.find("game_time")
+	while idx >= 0:
+		var rest := line.substr(idx + "game_time".length()).lstrip(" \t")
+		if rest.begins_with("+=") or rest.begins_with("-=") \
+			or rest.begins_with("*=") or rest.begins_with("/="):
+			return true
+		if rest.begins_with("=") and not rest.begins_with("=="):
+			return true
+		idx = line.find("game_time", idx + 1)
+	return false
+
+
+## 全部写 `game_time` 的文件。S1.4a 的唯一时钟要求它恰好等于属主清单 —— 
+## 空集也不算通过（"没人写"和"只有一个人写"是两件事）。
+func _game_time_writers() -> Array:
+	var hits: Array = []
+	_collect_game_time_writers("res://scripts", hits)
+	hits.sort()
+	return hits
+
+
+func _collect_game_time_writers(dir_path: String, hits: Array) -> void:
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return
+	for sub in d.get_directories_at(dir_path):
+		_collect_game_time_writers(dir_path.path_join(sub), hits)
+	for fname in d.get_files_at(dir_path):
+		if fname.get_extension().to_lower() != "gd":
+			continue
+		var path := dir_path.path_join(fname)
+		var text := FileAccess.get_file_as_string(path)
+		for raw in text.split("\n"):
+			if _writes_game_time(_strip_comment(String(raw), "gd")):
+				if not hits.has(path):
+					hits.append(path)
+				break
 
 
 func _hit(path: String, line: int, rule: String, snippet: String) -> Dictionary:
