@@ -57,15 +57,19 @@ var party_marker: PartyMarker = null
 ## Added for the S1.3a close-up: LOCAL is 170 m, where a 22 m marker is only ~116 px tall.
 var span_override := 0.0
 ## --route=1 (S1.3b) traces the longest road with TravelGraph and paints the polyline.
+## --march alone also traces it (it needs a road to walk) but paints nothing — that is
+## how the S1.3d clean close-up keeps the ink dots out of the hero shot.
 var with_route := false
-## The polyline drawn by --route=1 (empty otherwise).
+## The polyline --route=1 / --march produced (empty otherwise).
 var route_points := PackedVector2Array()
 ## What the trace measured, for the log line.
 var route_info := {}
 ## The graph that produced `route_points` (kept so the plate can also paint its road cells).
 var route_graph: TravelGraph = null
-## `--march=<秒>` (S1.3c) lets the real party walk the `--route=1` road for that many
-## seconds before the shutter, so "移动积分" also has a plate, not just test numbers.
+## `--march=<秒>` (S1.3c) lets the real party walk the longest road for that many seconds
+## before the shutter, so "移动积分" also has a plate, not just test numbers.  It traces the
+## road itself (`--route=1` not needed); with `--route=1` the polyline is painted too, without
+## it the frame stays clean —— that is how the S1.3d close-up is shot.
 var march_seconds := 0.0
 const StyleDef := preload("res://scripts/core/style.gd")
 
@@ -118,7 +122,7 @@ func build(p_seed: int, p_tier: String) -> void:
 	cam.call("set_tier", int(TIERS[tier_name]))
 	var site := _pick_settlement()
 	var spot := site
-	if with_route:
+	if with_route or march_seconds > 0.0:
 		var route := _trace_route()
 		if route.has("mid"):
 			var mid: Vector2 = route["mid"]
