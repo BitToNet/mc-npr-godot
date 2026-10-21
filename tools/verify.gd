@@ -277,12 +277,20 @@ const CASES := {
 				+ "顶点全部有限且落在 ±1200 m 地图内；两次 build 逐字节一致；换 seed 几何必变；"
 				+ "场景接线后地形 + 舞台 + 相机全部就位且仍是 11 250 三角",
 		"kind": "pure",
-	},	"s1_2_camera": {
+	},
+	"s1_2_camera": {
 		"desc": "战略镜头三档：2600 / 700 / 170 m 垂直跨度，GLOBAL 锁正交等距且焦点锁中心；"
 				+ "600 帧脚本轨迹（右移 → 第 200 帧进区域档 → 第 400 帧转 yaw）逐帧断言无 NaN、"
 				+ "焦点不越界、帧间位移 ≤ 视野×0.35×dt×1.35、相机不低于地形 3 m；同脚本两次轨迹"
 				+ "哈希一致、反向平移不同；场景接线后相机 current、舞台固定正午",
 		"kind": "pure",
+	},
+	"s1_2_perf": {
+		"desc": "战略图分档帧率（C-）：vsync 关闭下三档（2600 / 700 / 170 m）平均帧率均 ≥ 60 fps，"
+				+ "全球档三角面 = 16 920 且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
+				+ "帧率 > 最慢档 × 1.5』证明采样器能分辨地图与空天空；外加 B- 取景工具接线"
+				+ "（--seed= / --tier= 的 build() 真的换了世界与档位）",
+		"kind": "headed",
 	},
 }
 
@@ -687,6 +695,8 @@ func _dispatch(id: String) -> void:
 			await _case_strategic_mesh()
 		"s1_2_camera":
 			await _case_strategic_camera()
+		"s1_2_perf":
+			await _case_strategic_perf()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -6294,6 +6304,92 @@ func _case_strategic_camera() -> void:
 
 ## 固定 240 帧的平移轨迹，返回量化后的轨迹哈希。档位先拨到区域档，否则全球档的
 ## 焦点被钳在中心、两个方向都会得到同一条（空）轨迹。
+## --- s1_2_perf ---------------------------------------------------------------
+## `C-`：三档帧率 ≥ 60 fps + 三角面 ≤ 34 611，并且**反向对照**必须能分辨「地图」与
+## 「空天空」——量不出差别的采样器没有资格当证据。同一用例顺带验 `B-` 取景工具的
+## 两个旋钮（`--seed=` / `--tier=`）真的换了世界，而不是只在日志里写一行。
+func _case_strategic_perf() -> void:
+	await process_frame
+	section("分档帧率（vsync 关闭，逐档 2 × 0.5 s）")
+	var report_path := _opt_out.path_join("perf_map_verify_perf.json")
+	if FileAccess.file_exists(report_path):
+		DirAccess.remove_absolute(report_path)
+	ok(not FileAccess.file_exists(report_path), "旧报告先删掉（旧文件不能冒充证据）")
+	var out: Array = []
+	var code := _exec_godot(PackedStringArray([
+		"--script", "res://tools/perf_map.gd", "--",
+		"--label=verify_perf", "--out=" + _opt_out,
+		"--windows=2", "--window=0.5", "--warmup=30",
+	]), out)
+	eq(code, 0, "perf_map 子进程退出码 = 0（三档都达标才对）")
+	ok(FileAccess.file_exists(report_path), "perf_map 写出了 JSON", report_path)
+	var r := _read_json(report_path)
+	if r.is_empty():
+		ok(false, "报告可解析", report_path)
+		return
+	eq(String(r.get("vsync", "")), "disabled", "采样在 vsync 关闭下进行（否则量的是显示器）")
+	var tiers: Array = r.get("tiers", [])
+	eq(tiers.size(), 3, "三档都采到了")
+	var slowest := INF
+	var global_prims := 0
+	var global_draws := 0
+	for row in tiers:
+		var tier_name := String(row.get("tier", "?"))
+		var fps := float(row.get("fps_mean", 0.0))
+		slowest = minf(slowest, fps)
+		ge(fps, 60.0, "%s 档平均帧率 ≥ 60 fps（实测 %.1f）" % [tier_name, fps])
+		var prims := int(row.get("primitives", 0))
+		if tier_name == "global":
+			global_prims = prims
+			global_draws = int(row.get("draw_calls", 0))
+		le(float(prims), 34611.0, "%s 档三角面 %d 不超 C- 上限 34 611" % [tier_name, prims])
+	eq(global_prims, 16920,
+			"全球档三角面 %d = 陆面 11 250 + 水面 4 470 + 裙边 1 200（与网格统计逐个对上）" % global_prims)
+	le(float(global_draws), 120.0, "全球档绘制调用 %d ≤ 120（分块没有把批次数炸掉）" % global_draws)
+	var empty: Dictionary = r.get("empty", {})
+	var empty_fps := float(empty.get("fps_mean", 0.0))
+	ok(empty_fps > slowest * 1.5,
+			"反向对照：隐藏地图后帧率 > 最慢档 × 1.5（采样器能分辨地图与空天空）",
+			"empty=%.1f vs slowest=%.1f" % [empty_fps, slowest])
+	eq(bool(r.get("pass", false)), true, "工具自评 pass = true")
+	near(float(r.get("slowest_fps", 0.0)), slowest, 0.02, "报告里的最慢档 = 用例自己算的最慢档")
+
+	section("B- 取景工具接线：seed / tier 两个旋钮真的换了世界")
+	var state := get_root().get_node_or_null("GameState")
+	var seed_before := 20250929
+	if state != null:
+		seed_before = int(state.get("world_seed"))
+	var stage := (load("res://scenes/dev/strategic_shots.tscn") as PackedScene).instantiate()
+	get_root().add_child(stage)
+	await process_frame
+	stage.call("build", 20250930, "local")
+	var map: Variant = stage.get("map")
+	ok(map != null, "取景台建出了战略图")
+	if map != null:
+		var session: Variant = map.get("session")
+		eq(int(session.get("world_seed")) if session != null else -1, 20250930,
+				"build(20250930, local) 真的换了 seed")
+		var cam: Variant = map.get("camera")
+		eq(int(cam.get("tier")), 2, "档位切到 LOCAL")
+		near(float(cam.get("size")), 170.0, 0.01, "LOCAL 跨度 170 m")
+		var f: Vector3 = cam.get("focus")
+		ok(is_finite(f.x) and is_finite(f.z) and Vector2(f.x, f.z).length() > 0.0,
+				"LOCAL 取景落在据点而不是地图中心", str(f))
+		var old_map: Variant = map
+		stage.call("build", 20250929, "global")
+		ok(not is_instance_valid(old_map), "重建时旧世界被释放（不是两张地图叠着）")
+		map = stage.get("map")
+		var cam2: Variant = map.get("camera")
+		eq(int(cam2.get("tier")), 0, "切回 GLOBAL 档")
+		near(float(cam2.get("size")), 2600.0, 0.01, "GLOBAL 跨度 2600 m")
+		var f2: Vector3 = cam2.get("focus")
+		eq(f2, Vector3.ZERO, "GLOBAL 焦点锁地图中心")
+	stage.queue_free()
+	await process_frame
+	if state != null:
+		state.set("world_seed", seed_before)
+
+
 func _camera_trace_hash(p_field: HeightField, p_sign: float) -> String:
 	var c := StrategicCamera.new()
 	c.setup(p_field)

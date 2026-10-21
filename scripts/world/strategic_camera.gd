@@ -184,6 +184,30 @@ func cycle_tier(step_count: int) -> void:
 	set_tier(tier + step_count)
 
 
+## Jumps straight to the tier's final framing (`size`, `focus`) instead of easing
+## into it.  Tooling needs this: a screenshot taken 15 frames after `set_tier()`
+## would otherwise catch the zoom half-way, and two "same tier" shots would not be
+## the same picture (S1.2d).
+func snap_to_target() -> void:
+	size = size_target
+	focus = focus_target
+	if tier == Tier.LOCAL:
+		focus.y = _ground(focus.x, focus.z)
+	_apply()
+
+
+## Points the camera at a world position on the XZ plane, clamped to the current
+## tier's legal area and snapped.  Used by the shot tool to frame a settlement
+## instead of wherever the map centre happens to be.
+func focus_on(x: float, z: float) -> void:
+	focus_target = Vector3(x, 0.0, z)
+	var bound := bounds_half()
+	focus_target.x = clampf(focus_target.x, -bound, bound)
+	focus_target.z = clampf(focus_target.z, -bound, bound)
+	focus_target.y = _ground(focus_target.x, focus_target.z) if tier == Tier.LOCAL else 0.0
+	snap_to_target()
+
+
 func toggle_projection() -> void:
 	if tier == Tier.GLOBAL:
 		return
