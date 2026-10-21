@@ -128,6 +128,18 @@ const CASES := {
 				+ "set_time 钉相位、全仓只有 game_state.gd 写 game_time（守卫 + 实测扫描）",
 		"kind": "pure",
 	},
+	"s1_4_speed": {
+		"desc": "变速（S1.4b）：档位只认 1/2/4 且非法值不半改、每 tick 一条 simulation_tick、"
+				+ "4x 走 k 帧与 1x 走 4k 帧逐字段相同（playtime 除外）、"
+				+ "暂停冻住游戏时钟而渲染时钟照常、取证钉时钟可复现",
+		"kind": "pure",
+	},
+	"s1_4_hud": {
+		"desc": "时间条（S1.4b）：战略图建出 TimeBar（#hud 组 / ALWAYS / 层 10）、"
+				+ "四个按钮文案与读数走 GameState.date_text()、点 2x/4x/1x 真的改档、"
+				+ "点暂停真的暂停整棵树并变「继续」",
+		"kind": "pure",
+	},
 	"s0_6_repro": {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
@@ -678,6 +690,10 @@ func _dispatch(id: String) -> void:
 			await _case_clock()
 		"s1_4_clock":
 			await _case_game_clock()
+		"s1_4_speed":
+			await _case_speed()
+		"s1_4_hud":
+			await _case_hud()
 		"s0_6_repro":
 			await _case_repro()
 		"s1_0_scene_arg":
@@ -1424,6 +1440,219 @@ func _case_game_clock() -> void:
 	ok(gs.is_physics_processing() == auto_phys, "_physics_process 自动推进已恢复")
 	eq(float(gs.get("game_time")), 0.0, "用例结束时游戏时钟归零，不污染后续用例")
 
+
+## --- s1_4_speed --------------------------------------------------------------
+## S1.4b：变速只改"每帧几步"，不改"一步多长"。判据是**同样的 tick 数 ⇒ 逐字段相同**，
+## 而不是"看起来差不多"；另外钉死三件容易被做坏的事：非法档位必须被拒且不半改、
+## 暂停必须真的停住游戏时钟而画面照常、`playtime` 不许跟着倍速一起膨胀。
+func _case_speed() -> void:
+	section("速度档位：只认 1/2/4，非法值被拒且当前档位不变")
+	var gs := get_root().get_node_or_null("GameState")
+	ok(gs != null, "GameState autoload 在树里")
+	if gs == null:
+		return
+	var consts: Dictionary = (gs.get_script() as Script).get_script_constant_map()
+	eq(consts.get("SPEED_TIERS"), [1, 2, 4],
+		"SPEED_TIERS 恰好 [1, 2, 4]（没有 0x：暂停走 tree.paused，不另开一条停时间的路）")
+	near(float(consts.get("TICK_REAL_SECONDS", 0.0)), 1.0 / 60.0, 0.000001,
+		"TICK_REAL_SECONDS = 1/60 现实秒（由 TICK_GAME_SECONDS / GAME_SECONDS_PER_REAL_SECOND 推出）")
+	eq(int(gs.get("process_mode")), Node.PROCESS_MODE_INHERIT,
+		"GameState 用默认进程模式：树一暂停就自动停摆，不需要自己记一个 paused 字段")
+	gs.call("new_game", 20250929)
+	eq(int(gs.get("speed")), 1, "新开局回到 1x（档位不跨存档，见 SNAPSHOT_FIELDS 注释）")
+	for bad in [0, 3, -1, 5, 8]:
+		eq(bool(gs.call("set_speed", int(bad))), false, "set_speed(%d) 被拒（不是档位）" % int(bad))
+		eq(int(gs.get("speed")), 1, "被拒之后仍是 1x（拒绝不等于半改）")
+	eq(bool(gs.call("set_speed", 2)), true, "set_speed(2) 成功")
+	eq(int(gs.get("speed")), 2, "档位变为 2x")
+	eq(bool(gs.call("set_speed", 1)), true, "set_speed(1) 成功")
+	eq(int(gs.get("speed")), 1, "档位回到 1x")
+	
+	section("每 tick 一步：simulation_tick 的序号与步长")
+	var ticks: Array = []
+	var on_tick := func(step: int, seconds: float) -> void:
+		ticks.append([step, seconds])
+	gs.connect("simulation_tick", on_tick)
+	var auto_phys := gs.is_physics_processing()
+	gs.set_physics_process(false)
+	for i in 8:
+		gs.call("_advance_one_tick")
+	gs.disconnect("simulation_tick", on_tick)
+	gs.set_physics_process(auto_phys)
+	eq(ticks.size(), 8, "8 次 _advance_one_tick ⇒ 恰好 8 条 simulation_tick")
+	if ticks.size() == 8:
+		var monotone := true
+		var step_len_ok := true
+		var expect := int((ticks[0] as Array)[0])
+		for row in ticks:
+			if int((row as Array)[0]) != expect:
+				monotone = false
+			expect += 1
+			if absf(float((row as Array)[1]) - 1.0 / 60.0) > 0.000001:
+				step_len_ok = false
+		ok(monotone, "step 序号逐次 +1，不跳号")
+		ok(step_len_ok, "每条信号的 seconds 都是 1/60（步长只有一个定义，调用方不必自己写常量）")
+	
+	section("★ 倍速等价性：4x 走 k 帧 == 1x 走 4k 帧（同样 tick 数则逐字段相同）")
+	# 同一个 seed 重开两次，手动驱动 `_physics_process`。dt 恒取 1/60：1x 每次 1 tick、
+	# 4x 每次 4 tick，两条路径喂进 `_tick_residual` 的和完全相同，所以这才是"同一段
+	# 模拟"，而不是"两段看起来像的模拟"。
+	var runs := {}
+	for tier in [1, 4]:
+		gs.call("new_game", 20250929)
+		gs.call("set_speed", int(tier))
+		var frames := 16 / int(tier)
+		for i in frames:
+			gs.call("_physics_process", 1.0 / 60.0)
+		runs[int(tier)] = {
+			"time": float(gs.get("game_time")),
+			"parts": gs.call("time_parts"),
+			"playtime": float(gs.get("playtime")),
+			"snapshot": gs.call("snapshot"),
+		}
+	var slow: Dictionary = runs.get(1, {})
+	var fast: Dictionary = runs.get(4, {})
+	if slow.is_empty() or fast.is_empty():
+		ok(false, "两条路径都跑完了", str(runs.keys()))
+		return
+	eq(float(fast["time"]), float(slow["time"]),
+		"4x 与 1x 走完同样的 tick 数后 game_time 相同（%s）" % str(fast["time"]))
+	eq(fast["parts"], slow["parts"], "历法分解逐字段相同（年/月/日/时/分/秒）")
+	var fast_snap: Dictionary = (fast["snapshot"] as Dictionary).duplicate()
+	var slow_snap: Dictionary = (slow["snapshot"] as Dictionary).duplicate()
+	fast_snap.erase("playtime")
+	slow_snap.erase("playtime")
+	eq(fast_snap, slow_snap, "除 playtime 外的存档快照逐字段相同（这就是倍速等价性的定义）")
+	ok(float(fast["playtime"]) < float(slow["playtime"]),
+		"4x 用更少的现实时间跑完同一段模拟（%.4fs < %.4fs）" % [
+			float(fast["playtime"]), float(slow["playtime"])])
+	
+	section("暂停 = 整棵树：游戏时钟停、渲染时钟照常（S0.6 的裁定不变）")
+	var clock := get_root().get_node_or_null("Clock")
+	ok(clock != null, "Clock autoload 在树里")
+	gs.call("new_game", 20250929)
+	gs.set_physics_process(true)
+	var t0 := float(gs.get("game_time"))
+	gs.call("toggle_pause")
+	eq(bool(gs.call("is_paused")), true, "toggle_pause 把树标记为暂停")
+	eq(get_root().get_tree().paused, true, "暂停状态挂在场景树上，不是 GameState 的私有字段")
+	var c0 := float(clock.get("t")) if clock != null else 0.0
+	for i in 8:
+		await physics_frame
+	eq(float(gs.get("game_time")), t0, "暂停 8 个物理帧后 game_time 一动不动")
+	if clock != null:
+		ok(float(clock.get("t")) > c0, "渲染时钟在暂停期间仍在前进（冻逻辑不是冻画面）")
+	gs.call("toggle_pause")
+	eq(bool(gs.call("is_paused")), false, "再按一次继续")
+	for i in 8:
+		await physics_frame
+	ok(float(gs.get("game_time")) > t0, "继续后游戏时钟重新前进")
+	
+	section("取证钉时钟：pin_time 让 game_time 停住，unpin 恢复")
+	eq(bool(gs.call("pin_time", 43200.0)), true, "pin_time(43200) 生效")
+	eq(bool(gs.call("is_time_pinned")), true, "is_time_pinned() = true")
+	eq(float(gs.get("game_time")), 43200.0, "钉住的时刻就是传入的游戏秒")
+	eq(String(gs.call("date_text")), "第 1 年 1 月 1 日 12:00", "钉住的时刻读出来正好是 12:00")
+	for i in 6:
+		await physics_frame
+	eq(float(gs.get("game_time")), 43200.0, "钉住后物理帧照跑，game_time 不动（截图才可能逐字节可复现）")
+	eq(bool(gs.call("pin_time", INF)), false, "pin_time 拒绝非有限时刻（与存档同一套 is_valid_time 规则）")
+	eq(bool(gs.call("pin_time", -1.0)), true, "pin_time(-1) = 就地钉住当前时刻")
+	eq(float(gs.get("game_time")), 43200.0, "就地钉住不改时刻")
+	gs.call("unpin_time")
+	eq(bool(gs.call("is_time_pinned")), false, "unpin_time 解除钉住")
+	
+	section("现场还原")
+	gs.call("toggle_pause") if bool(gs.call("is_paused")) else null
+	gs.call("new_game", 20250929)
+	gs.set_physics_process(true)
+	eq(float(gs.get("game_time")), 0.0, "用例结束时游戏时钟归零，不污染后续用例")
+
+## --- s1_4_hud ----------------------------------------------------------------
+## S1.4b：时间条是**唯一**的时间 UI —— 四个按钮 + 一个读数，所有动作都交回
+## `GameState`，自己不留第二份状态。用例点按钮（而不是直接调 API），断言的正是
+## "HUD 真的接上线"这件事：按下去 → `GameState.speed` 变 → 读数跟着变。
+func _case_hud() -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	ok(gs != null, "GameState autoload 在树里")
+	if gs == null:
+		return
+	gs.call("new_game", 20250929)
+	ok(bool(gs.call("pin_time", 43200.0)), "把时钟钉在 12:00，读数才是常数")
+	var ps := load(WORLD_SCENE) as PackedScene
+	ok(ps != null, "strategic_map.tscn 可加载")
+	var inst: Node = ps.instantiate()
+	ok(inst != null, "strategic_map.tscn 可实例化")
+	if inst == null:
+		return
+	get_root().add_child(inst)
+	await process_frame
+	var bar: Node = inst.get("time_bar")
+	ok(bar != null, "战略图建出了时间条（time_bar 字段）")
+	if bar == null:
+		inst.queue_free()
+		gs.call("unpin_time")
+		return
+	eq(String(bar.name), "TimeBar", "节点名 TimeBar")
+	ok(bar.is_in_group("hud"), "进了 #hud 组（F1「隐藏全部 UI」自动覆盖它）")
+	eq(int((bar as CanvasLayer).process_mode), Node.PROCESS_MODE_ALWAYS,
+		"时间条 PROCESS_MODE_ALWAYS：暂停时按钮还点得动，否则按一下就再也点不到「继续」")
+	eq(int((bar as CanvasLayer).layer), 10, "层号 10，压在 3D 之上")
+	ok(inst.get_node_or_null("TimeBar") != null, "时间条挂在场景根上（第 7 个子节点）")
+	
+	section("默认状态：1x + 未暂停 + 读数等于 date_text()")
+	bar.call("refresh")
+	var rep: Dictionary = bar.call("report")
+	eq(int(rep.get("speed", 0)), 1, "默认 1x")
+	eq(rep.get("tier_texts"), ["1x", "2x", "4x"], "三个档位按钮的文案")
+	eq(String(rep.get("pause_text", "")), "暂停", "未暂停时暂停按钮写「暂停」")
+	eq(bool(rep.get("always_on", false)), true, "report() 里 process_mode 也是 ALWAYS")
+	contains(String(rep.get("date_text", "")), "第 1 年 1 月 1 日 12:00", "读数用 GameState.date_text()")
+	contains(String(rep.get("date_text", "")), "×1", "读数带当前档位")
+	
+	section("点「2x」：按钮 → GameState → 读数（HUD 不留第二份状态）")
+	var tier2 := _find_button(bar, "Tier2")
+	ok(tier2 != null, "找到 Tier2 按钮")
+	if tier2 != null:
+		tier2.emit_signal("pressed")
+		eq(int(gs.get("speed")), 2, "按钮把 GameState.speed 改成 2")
+		bar.call("refresh")
+		contains(String((bar.call("report") as Dictionary).get("date_text", "")), "×2", "读数跟着变成 ×2")
+		eq(int((bar.call("report") as Dictionary).get("speed", 0)), 2, "report() 的档位也同步")
+	var tier4 := _find_button(bar, "Tier4")
+	if tier4 != null:
+		tier4.emit_signal("pressed")
+		eq(int(gs.get("speed")), 4, "4x 按钮把档位设成 4")
+		_find_button(bar, "Tier1").emit_signal("pressed")
+		eq(int(gs.get("speed")), 1, "回到 1x")
+	
+	section("点「暂停」：整棵树暂停，按钮变「继续」，再点恢复")
+	var pause_btn := _find_button(bar, "Pause")
+	ok(pause_btn != null, "找到暂停按钮")
+	if pause_btn != null:
+		pause_btn.emit_signal("pressed")
+		eq(bool(gs.call("is_paused")), true, "按钮让整棵树暂停（不是只停 GameState）")
+		bar.call("refresh")
+		eq(String((bar.call("report") as Dictionary).get("pause_text", "")), "继续", "按钮文案变「继续」")
+		# 暂停中再点：`PROCESS_MODE_ALWAYS` 保证这条路还能走通。
+		pause_btn.emit_signal("pressed")
+		eq(bool(gs.call("is_paused")), false, "再点一次恢复运行")
+		bar.call("refresh")
+		eq(String((bar.call("report") as Dictionary).get("pause_text", "")), "暂停", "文案回到「暂停」")
+	
+	section("现场还原")
+	gs.call("unpin_time")
+	gs.call("new_game", 20250929)
+	inst.queue_free()
+	await process_frame
+	eq(String(gs.call("date_text")), "第 1 年 1 月 1 日 00:00", "时钟归零，不污染后续用例")
+
+
+## 按节点名找一个按钮（按钮在容器里，路径会因为布局调整而变；名字是稳定的接口）。
+func _find_button(root: Node, button_name: String) -> Button:
+	for n in root.find_children(button_name, "Button", true, false):
+		return n as Button
+	return null
 
 ## --- s0_6_repro --------------------------------------------------------------
 ## 两次**独立进程**的同参数截图必须逐位一致。这是 S0.2 里那条实测 1.62%–5.67%
@@ -2621,9 +2850,9 @@ func _case_state() -> void:
 		await physics_frame
 	var advanced: float = float(gs.get("game_time")) - t0
 	ok(absf(advanced - roundf(advanced)) < 0.000001,
-			"推进量是整数（%g 游戏秒）—— 只按 TICK_GAME_SECONDS 前进，没有掺真实 delta" % advanced)
+			"推进量是整数（%.3f 游戏秒）—— 只按 TICK_GAME_SECONDS 前进，没有掺真实 delta" % advanced)
 	ok(absf(advanced - 60.0) <= 3.0,
-			"60 次 await physics_frame 推进 %g 游戏秒（60±3，含帧对齐抖动）" % advanced)
+			"60 次 await physics_frame 推进 %.3f 游戏秒（60±3，含帧对齐抖动）" % advanced)
 	ok(gs.get("playtime") > 0.0, "playtime 随游戏时间一起推进")
 
 	section("派生量：day / time_of_day / clock_text 自洽")
@@ -3306,12 +3535,16 @@ func _case_router() -> void:
 	# 相机会渲染、舞台三件齐备 —— 而且明确要求「唯一 current 相机」，不比原来弱。
 	# 判据第三次随交付物迁移（S1.3c）：根多了第 6 个子节点 `PartyLayer`。这里同步
 	# 抬到 6，并且**加**三条能力断言（队伍在、棋子贴地、自带行军图），不是简单改数字。
-	ok(String(base_fp).begins_with("StrategicMap:Node3D:6|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
-			"结构指纹形如『根 → 地形 → 块容器』且根有 6 个子节点：%s" % String(base_fp).substr(0, 72))
+	# 判据第四次迁移（S1.4b）：根多了第 7 个子节点 `TimeBar`（时间条）。同样不是只改
+	# 数字 —— 下面加了「时间条是 CanvasLayer 且在 #hud 组」两条能力断言。
+	ok(String(base_fp).begins_with("StrategicMap:Node3D:7|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
+			"结构指纹形如『根 → 地形 → 块容器』且根有 7 个子节点：%s" % String(base_fp).substr(0, 72))
 	contains(base_fp, "StrategicCamera:Node3D:1|Camera3D:Camera3D",
 			"结构指纹里有相机（S1.2c 的交付物）")
 	contains(base_fp, "PartyLayer:Node3D:1|PartyMarker:Node3D:",
 			"结构指纹里有队伍棋子（S1.3c 的交付物）")
+	contains(base_fp, "TimeBar:CanvasLayer",
+			"结构指纹里有时间条（S1.4b 的交付物）")
 	var terr: Node = current_scene.get_node_or_null("StrategicTerrain")
 	ok(terr != null, "世界有 StrategicTerrain")
 	var cam_rig: Node = current_scene.get_node_or_null("StrategicCamera")
@@ -3321,8 +3554,8 @@ func _case_router() -> void:
 	if vp != null:
 		cams = vp.get_camera_3d()
 	ok(cams != null, "视口里有 current 相机（画面不再全黑）")
-	eq(current_scene.get_child_count(), 6,
-			"根 6 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机 + 队伍")
+	eq(current_scene.get_child_count(), 7,
+			"根 7 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机 + 队伍 + 时间条（S1.4b）")
 	ok(current_scene.get_node_or_null("Sun") != null, "世界有 Sun（固定正午）")
 	ok(current_scene.get_node_or_null("WorldEnvironment") != null, "世界有 WorldEnvironment")
 	# S1.3c 第三次迁移的能力断言：队伍在、棋子贴地、自带行军图。
@@ -6353,7 +6586,7 @@ func _case_strategic_mesh() -> void:
 	ne(_terrain_signature(t3), sig, "换 seed 几何必变（反向对照）")
 	ne(int(t3.stats["max_y"]), int(st["max_y"]), "换 seed 最高点不同")
 
-	section("场景接线：地形 + 舞台 + 相机 + 队伍（S1.3c 后根有 6 个子节点）")
+	section("场景接线：地形 + 舞台 + 相机 + 队伍 + 时间条（S1.4b 后根有 7 个子节点）")
 	rng.call("seed_from", 20250929)
 	var ps := load(WORLD_SCENE) as PackedScene
 	ok(ps != null, "strategic_map.tscn 可加载")
@@ -6361,7 +6594,7 @@ func _case_strategic_mesh() -> void:
 	get_root().add_child(inst)
 	await process_frame
 	ok(inst.terrain != null, "场景建出了 StrategicTerrain")
-	eq(inst.get_child_count(), 6, "根 6 个子节点：地形 + 舞台三件 + 相机 + 队伍")
+	eq(inst.get_child_count(), 7, "根 7 个子节点：地形 + 舞台三件 + 相机 + 队伍 + 时间条")
 	ok(inst.get("party") != null, "场景建出了 PartyLayer")
 	eq(String(inst.get_child(0).name), "StrategicTerrain", "第一个子节点仍是地形")
 	var sc: Dictionary = inst.terrain_stats()
@@ -6595,7 +6828,9 @@ func _case_strategic_perf() -> void:
 		le(float(prims), 34611.0, "%s 档三角面 %d 不超 C- 上限 34 611" % [tier_name, prims])
 	# S1.3a 起地图上常驻队伍棋子：556 三角 + 反向外壳描边第二遍 = 1 112。这里量的是
 	# **渲染器面数**（整视口），所以全球档是地形 16 920 + 棋子 1 112 = 18 032；地形网格
-	# 自身的 11 250 仍由 `s1_2_mesh` 单独钉住，两条断言各管一件事。
+	# 自身的 11 250 仍由 `s1_2_mesh` 单独钉住，两条断言各管一件事。S1.4b 起地图上还有
+	# 时间条（HUD）：`perf_map.gd` 采样前隐藏 `#hud` 组，所以这条数字**仍然只数 3D**——
+	# 字体光栅的面数随平台变化，不能混进这条断言。
 	eq(global_prims, 18032,
 			"全球档三角面 %d = 地形 16 920（陆 11 250 + 水 4 470 + 裙边 1 200）+ 棋子 1 112"
 					% global_prims)

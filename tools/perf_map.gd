@@ -79,6 +79,12 @@ func _run() -> void:
 	var ps := load(MAP_SCENE) as PackedScene
 	var map := ps.instantiate() as Node3D
 	get_root().add_child(map)
+	# S1.4b — 时间条是 HUD，不是 3D 预算的一部分：留在这里会让"三角面 = 地形 + 棋子"
+	# 变成"地形 + 棋子 + 字体光栅的面数"，而后者随平台字体变化，钉不住。采样前隐藏
+	# `#hud` 组，量到的就是这张地图本身；HUD 自己的绘制成本由 `s0_4_cost` 的帧率兜底。
+	for hud in get_nodes_in_group("hud"):
+		if hud is CanvasLayer:
+			(hud as CanvasLayer).visible = false
 	var cam: Node3D = map.get("camera") as Node3D
 	if cam == null:
 		printerr("[perf] 战略图没有相机；无法分档采样")
