@@ -9,11 +9,19 @@ extends Node3D
 ## reference product code but never the other way round — so the knobs live here,
 ## at the same layer as the scene override itself.
 ##
-## This file reads exactly two arguments; everything else (`--shots`, `--warmup=`,
+## This file reads four arguments; everything else (`--shots`, `--warmup=`,
 ## `--frames=`, `--out=`) still belongs to `capture.gd`:
 ##   Godot --path . -- --shots --scene=res://scenes/dev/strategic_shots.tscn \
 ##         --seed=20250929 --tier=global --warmup=60 --frames=15 \
 ##         --out=res://.shots/s12d/global_20250929
+##
+## `--party=1` drops the S1.3a party marker on the framed settlement (faction taken
+## from that settlement, so the plate shows a real in-world colour, not a fixture);
+## `--span=<m>` overrides the tier span for a tighter close-up: LOCAL is 170 m, where a 22 m
+## marker is only ~116 px tall and its ink is ~2 px, too small to judge the art.
+##   Godot --path . -- --shot=party_close --scene=res://scenes/dev/strategic_shots.tscn \
+##         --seed=20250929 --tier=local --party=1 --span=55 --warmup=60 --frames=12 \
+##         --out=res://.shots/s13a/party_close
 ##
 ## Framing rule: GLOBAL is the whole plate (map centre, locked by the camera), while
 ## REGION / LOCAL are framed on the settlement nearest the map centre — the centre
@@ -32,6 +40,14 @@ const FALLBACK_SEED := 20250929
 var map: Node3D
 var seed_value := FALLBACK_SEED
 var tier_name := "global"
+## --party=1 plants the close-up subject; kept off by default so the five S1.2d
+## plates stay bit-identical.
+var with_party := false
+## The marker this stage owns (only when with_party).
+var party_marker: PartyMarker = null
+## --span=<m> overrides the tier's vertical span (0 = keep the tier's own size).
+## Added for the S1.3a close-up: LOCAL is 170 m, where a 22 m marker is only ~116 px tall.
+var span_override := 0.0
 
 
 func _ready() -> void:
@@ -40,6 +56,10 @@ func _ready() -> void:
 			seed_value = a.split("=", true, 1)[1].to_int()
 		elif a.begins_with("--tier="):
 			tier_name = a.split("=", true, 1)[1]
+		elif a.begins_with("--party="):
+			with_party = a.split("=", true, 1)[1].to_int() != 0
+		elif a.begins_with("--span="):
+			span_override = a.split("=", true, 1)[1].to_float()
 	if not TIERS.has(tier_name):
 		push_warning("[shots] 未知 --tier='%s'，回退 global" % tier_name)
 		tier_name = "global"
@@ -54,6 +74,7 @@ func build(p_seed: int, p_tier: String) -> void:
 		remove_child(map)
 		map.free()
 		map = null
+	party_marker = null
 	seed_value = p_seed
 	tier_name = p_tier if TIERS.has(p_tier) else "global"
 	var state := get_node_or_null("/root/GameState")
@@ -68,13 +89,73 @@ func build(p_seed: int, p_tier: String) -> void:
 		push_error("[shots] 战略图没有相机，取景失败")
 		return
 	cam.call("set_tier", int(TIERS[tier_name]))
+	var spot := _pick_settlement()
 	if tier_name == "global":
 		cam.call("snap_to_target")
 	else:
-		var spot := _pick_settlement()
 		cam.call("focus_on", spot.x, spot.z)
-	print("[shots] seed=%d tier=%s focus=%s size=%.1f" % [
-			seed_value, tier_name, str(focus_point()), _size()])
+	if span_override > 0.0:
+		cam.set("size_target", span_override)
+		cam.call("snap_to_target")
+	_publish_ink()
+	if with_party:
+		_place_party(spot)
+	print("[shots] seed=%d tier=%s focus=%s size=%.1f party=%s" % [
+			seed_value, tier_name, str(focus_point()), _size(), str(_party_point())])
+
+
+## Plants the S1.3a marker at the framed settlement, facing the map centre (so the
+## banner reads across the camera instead of edge-on).  Returns silently when the
+## world has no session — the plate is then simply the S1.2d plate again.
+func _place_party(spot: Vector3) -> void:
+	var session: Variant = map.get("session") if map != null else null
+	if session == null:
+		push_warning("[shots] --party 需要世界 session，本张图不带棋子")
+		return
+	var field: Variant = session.get("field")
+	var data: Variant = session.get("data")
+	var fac := 0
+	if data != null:
+		for s in Array(data.get("settlements")):
+			if absf(float(s["x"]) - spot.x) < 0.01 and absf(float(s["z"]) - spot.z) < 0.01:
+				fac = int(s["faction"])
+				break
+	var marker := PartyMarker.new()
+	marker.name = "PartyMarker"
+	marker.set_faction(fac)
+	marker.setup(field as HeightField)
+	marker.place_at(spot.x, spot.z)
+	marker.face_towards(-spot)
+	map.add_child(marker)
+	party_marker = marker
+	if OS.get_cmdline_user_args().has("--probe-neg"):
+		var b := marker.get_node_or_null("Body") as MeshInstance3D
+		var om := (b.material_override as ShaderMaterial).next_pass as ShaderMaterial
+		om.set_shader_parameter("width", -6.0)
+	print("[shots] party at %s h=%.2f faction=%d" % [
+			str(marker.position), marker.ground_at(spot.x, spot.z), fac])
+
+
+
+## 反向外壳的线宽以"屏幕像素"为单位，靠 Style.pixel_span（1 px 等于多少世界单位）
+## 换算。战略相机不发布这个值（S1.2 的海岸墨线是几何色带，用不到外壳），所以取景台
+## 按当前跨度与视口高度自己发一次 —— 否则同一枚棋子在 2600 m 档的线宽只有 0.03 px、
+## 在 55 m 档 1.4 px，特写永远看不到描边。
+func _publish_ink() -> void:
+	var style := get_node_or_null("/root/Style")
+	if style == null:
+		return
+	var view_h := float(get_viewport().get_visible_rect().size.y)
+	if view_h <= 0.0:
+		return
+	style.call("set_pixel_span", _size() / view_h)
+
+
+## Where the marker stands (zero when the plate has no party).
+func _party_point() -> Vector3:
+	if party_marker == null:
+		return Vector3.ZERO
+	return party_marker.position
 
 
 ## Deterministic framing subject: the **lowland** settlement nearest the map centre.

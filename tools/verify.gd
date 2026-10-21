@@ -285,6 +285,14 @@ const CASES := {
 				+ "哈希一致、反向平移不同；场景接线后相机 current、舞台固定正午",
 		"kind": "pure",
 	},
+	"s1_3_party": {
+		"desc": "队伍棋子本体（S1.3a）：12 个圆柱/球/旗面零件合成单一 mesh（1 个 draw call、"
+				+ "非索引三角形汤），标称 22 m、脚底落在 y=0；反向外壳描边挂在 next_pass 且 enabled=1，"
+				+ "切线槽写入平滑法线（否则外壳炸成散三角片、描边不可见）；100 个定种子采样点的落点"
+				+ "高度恒等于 height_at（正负偏差都有），配合 min_y=0 才算贴地；四方向朝向含 ±π 回绕、"
+				+ "facing 恒在 (−π, π]；4 个阵营换色不重建几何；两次构建逐字节一致",
+		"kind": "pure",
+	},
 	"s1_2_perf": {
 		"desc": "战略图分档帧率（C-）：vsync 关闭下三档（2600 / 700 / 170 m）平均帧率均 ≥ 60 fps，"
 				+ "全球档三角面 = 16 920 且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
@@ -697,6 +705,8 @@ func _dispatch(id: String) -> void:
 			await _case_strategic_camera()
 		"s1_2_perf":
 			await _case_strategic_perf()
+		"s1_3_party":
+			await _case_party_marker()
 		_:
 			await process_frame
 			ok(false, "用例已在 CASES 注册但未在 _dispatch 中实现", "id=" + id)
@@ -6533,3 +6543,106 @@ func _print_cases() -> void:
 			flags.append("hidden")
 		print("  %-18s [%s]  %s" % [id, ", ".join(PackedStringArray(flags)), m.get("desc", "")])
 	print("[verify] 共 %d 个（--all 会跳过 hidden）" % CASES.size())
+
+## S1.3a：队伍棋子本体。断言分五组 —— 结构预算、描边契约、贴地、朝向、决定论。
+## 贴地是这一批的 A- 项：棋子必须把脚底压在地图任意一点的高度上，所以用 100 个定种子
+## 采样点量**最大**偏差，而不是挑一块平地量一次。描边契约单列一组，因为本批发现
+## `MeshUtil` 的生成器把面法线写进切线槽会让反向外壳炸成散三角片（正常线宽下描边
+## 完全不可见）；`smooth_verts` 就是这条修复的可读证据。
+func _case_party_marker() -> void:
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var s := WorldSession.boot(rng, 20250929)
+	ok(s.ok, "前置：世界建成（棋子要读高度场）")
+
+	section("结构：零件合成单一 mesh、标称 22 m、脚底落在 y=0")
+	var marker := PartyMarker.new()
+	marker.setup(s.field)
+	var mt := marker.metrics()
+	eq(int(mt["surfaces"]), 1, "单一 surface（1 个 draw call）")
+	ok(float(mt["min_y"]) > -0.02 and float(mt["min_y"]) < 0.02,
+			"脚底正好在模型原点平面（min_y=%.4f m）" % float(mt["min_y"]))
+	ok(absf(float(mt["height"]) - PartyMarker.NOMINAL_HEIGHT) < 0.6,
+			"标称高度 22 m（实测 %.2f m）" % float(mt["height"]))
+	ge(float(mt["tris"]), 96.0, "三角数 %d ≥ 96" % int(mt["tris"]))
+	le(float(mt["tris"]), 3000.0, "三角数 %d ≤ 3000（低多边形预算）" % int(mt["tris"]))
+	le(float(mt["verts"]), 9000.0, "顶点数 %d ≤ 9000（单 draw call 上限）" % int(mt["verts"]))
+	var size: Vector3 = mt["size"]
+	ok(float(size.x) < 12.0 and float(size.z) < 12.0,
+			"占地上限：横向 %.2f × %.2f m 塞得进一个聚落广场" % [float(size.x), float(size.z)])
+	ge(float(size.x), 4.0, "横向 %.2f m 不小于底座直径的量级" % float(size.x))
+
+	section("描边契约：反向外壳挂在 next_pass，切线槽写的是平滑法线")
+	ok(bool(mt["outline"]), "next_pass = outline.gdshader 且 enabled=1（描边真的会画）")
+	ge(float(mt["smooth_verts"]), 30.0,
+			"切线槽写入平滑法线：%d 个顶点与面法线不同（否则外壳炸成散片，描边不可见）"
+			% int(mt["smooth_verts"]))
+	le(float(mt["smooth_verts"]), float(mt["verts"]),
+			"平滑顶点数不超过总顶点数")
+
+	# 贴地由两件事共同保证：①模型自己的脚底就在原点平面（上面 min_y≈0 已断言），
+	# ②place_at() 把 position.y 设成 height_at()。所以这里量的是"落点高度恒等于高度场"
+	# 而不是两条独立来源的一致性 —— 说清楚它证的是哪一半，别把恒等式当成实测。
+	section("贴地：100 个定种子采样点，落点高度 ≡ height_at（配合 min_y=0 才算贴地）")
+	var pick := RandomNumberGenerator.new()
+	pick.seed = 20251021
+	var worst := 0.0
+	var worst_at := Vector2.ZERO
+	var above := 0
+	var below := 0
+	for i in 100:
+		var x := pick.randf_range(-1000.0, 1000.0)
+		var z := pick.randf_range(-1000.0, 1000.0)
+		var at := marker.place_at(x, z)
+		var d := at.y - float(s.field.height_at(x, z))
+		if d > 0.0:
+			above += 1
+		else:
+			below += 1
+		if absf(d) > worst:
+			worst = absf(d)
+			worst_at = Vector2(x, z)
+	ok(worst < 0.05, "最大偏差 %.5f m（100 点，最差点 %s）" % [worst, str(worst_at)])
+	near(float(mt["min_y"]), 0.0, 0.0001, "配套前提：模型脚底 min_y = 0（否则落点高度不等于脚底）")
+	eq(above + below, 100, "每个采样点都算过一次")
+	ok(above > 0 and below > 0,
+			"偏差有正有负（%d 高 / %d 低），不是一路向上抬" % [above, below])
+	var here := marker.place_at(120.0, -80.0)
+	near(here.y, float(s.field.height_at(120.0, -80.0)), 0.05,
+			"指定点 (120, -80) 的落点高度")
+	near(here.x, 120.0, 0.0001, "落点 x 不被改写")
+	near(here.z, -80.0, 0.0001, "落点 z 不被改写")
+
+	section("朝向：四方向 + ±π 回绕，facing 落在 (−π, π]")
+	near(marker.face_towards(Vector3(1, 0, 0)), PI * 0.5, 0.0001, "+X → +90°")
+	near(marker.face_towards(Vector3(-1, 0, 0)), -PI * 0.5, 0.0001, "−X → −90°")
+	near(absf(marker.face_towards(Vector3(0, 0, -1))), PI, 0.0001, "−Z → ±180°（回绕点）")
+	near(marker.face_towards(Vector3(0, 0, 1)), 0.0, 0.0001, "+Z → 0°")
+	var diag := marker.face_towards(Vector3(1, 0, -1))
+	near(diag, PI * 0.75, 0.0001, "+X−Z → +135°")
+	ok(marker.facing > -PI - 0.000001 and marker.facing <= PI + 0.000001,
+			"facing 落在 (−π, π]：%.6f" % marker.facing)
+	near(marker.face_to_point(Vector3(0.0, 0.0, 0.0)), marker.facing, 0.0001,
+			"face_to_point 与 face_towards 同源")
+
+	section("阵营：4 个阵营都能换色，且不重建几何（换色只改顶点色）")
+	var keys := PartyMarker.FACTION_KEYS.size()
+	eq(keys, 4, "阵营表 4 项")
+	var v0 := int(mt["verts"])
+	for f in keys:
+		marker.set_faction(f)
+		eq(int(marker.metrics()["faction"]), f, "阵营 %d 生效" % f)
+	eq(int(marker.metrics()["verts"]), v0, "换色不改变顶点数")
+	marker.set_faction(1)
+
+	section("决定论：同参数两次构建完全一致")
+	var twin := PartyMarker.new()
+	twin.setup(s.field)
+	var mt2 := twin.metrics()
+	eq(int(mt2["verts"]), int(mt["verts"]), "顶点数一致")
+	eq(int(mt2["tris"]), int(mt["tris"]), "三角数一致")
+	near(float(mt2["height"]), float(mt["height"]), 0.0001, "高度一致")
+	near(float(mt2["min_y"]), float(mt["min_y"]), 0.0001, "脚底一致")
+	eq(int(mt2["smooth_verts"]), int(mt["smooth_verts"]), "平滑顶点数一致")
+	twin.free()
+	marker.free()
