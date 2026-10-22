@@ -336,10 +336,12 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s1_2_camera": {
-		"desc": "战略镜头三档：2600 / 700 / 170 m 垂直跨度，GLOBAL 锁正交等距且焦点锁中心；"
-				+ "600 帧脚本轨迹（右移 → 第 200 帧进区域档 → 第 400 帧转 yaw）逐帧断言无 NaN、"
-				+ "焦点不越界、帧间位移 ≤ 视野×0.35×dt×1.35、相机不低于地形 3 m；同脚本两次轨迹"
-				+ "哈希一致、反向平移不同；场景接线后相机 current、舞台固定正午",
+		"desc": "战团式跟随镜头（S1.2e）：取证档位 2600 / 700 / 170 m，满视图正交等距且 bounds_half = 0；"
+				+ "焦点跟随跟随点、越界被钳、缩回全图自动回中心、focus_on() 解除跟随；连续缩放 ×1.12/格"
+				+ "且夹在 120–2600 m、满视图强制正交；rotate_view 偏航精确、俯仰夹 −75°…−20°；"
+				+ "600 帧 24 m/s 巡航轨迹误差 ≤ 3 m、无 NaN、不越界、不入地、单帧 ≤ 1 m；"
+				+ "跟随点静止时焦点零位移（无平移反向对照）；同脚本两次轨迹哈希一致、反向巡航不同；"
+				+ "场景接线后相机 current、舞台跟随游戏时钟",
 		"kind": "pure",
 	},
 	"s1_3_path": {
@@ -7213,8 +7215,9 @@ func _terrain_signature(t: StrategicTerrain) -> String:
 ## 的世界"会随用例执行顺序变化（`--all` 里 26 条边 / 8916.9 m，单跑 24 条 /
 ## 7936.7 m，本批就是这么抓到的）。生产侧由 `WorldSession.boot()` 负责同一件事，
 ## 见 `scripts/world/world_session.gd`、`ENGINEERING.md` §9.8.5 与 §5 陷阱 26。
-## S1.2c：战略镜头。四组断言 —— 档位契约、600 帧轨迹（无 NaN / 不越界 / 帧间连续 /
-## 不入地）、决定论（同脚本逐位一致 + 反向对照）、场景接线（相机 current + 固定正午）。
+## S1.2e：战团式跟随镜头。六组断言 —— 取证档位契约、跟随与解除跟随、连续缩放上下限、
+## 旋转钳制、600 帧跟随轨迹（误差 / 无 NaN / 不越界 / 不入地 / 单帧有界）、无平移反向对照、
+## 决定论（同脚本逐位一致 + 反向巡航对照），末尾接场景接线（相机 current + 固定正午）。
 func _case_strategic_camera() -> void:
 	var rng: Node = get_root().get_node("Rng")
 	rng.call("seed_from", 20250929)
@@ -7246,45 +7249,116 @@ func _case_strategic_camera() -> void:
 	eq(String(c0.report()["projection"]), "PERSP", "区域档可切透视")
 	c0.toggle_projection()
 	eq(String(c0.report()["projection"]), "ORTHO", "再切回正交")
-	# 焦点一旦离开中心，切回全球档必须被拉回边界内（否则整图会偏心）
+	# S1.2e：不再有手动平移。焦点只由「跟随点 + 边界钳制」决定：跟随点放到 (300, -200)，
+	# 两秒后必须贴上去（8/s 阻尼 ⇒ 残差 e^-16 ≈ 1e-7，所以 0.5 m 的容差已经算宽）。
 	c0.set_tier(1)
-	for i in 90:
-		c0.step(1.0 / 60.0, Vector2(1, 0))
-	ok(absf(c0.focus.x) > 0.5, "区域档确实能平移（x = %.2f）" % c0.focus.x)
+	c0.set_follow_point(Vector3(300.0, 0.0, -200.0))
+	for i in 120:
+		c0.step(1.0 / 60.0)
+	ok(absf(c0.focus.x - 300.0) < 0.5 and absf(c0.focus.z + 200.0) < 0.5,
+			"区域档焦点跟到跟随点（x = %.2f, z = %.2f）" % [c0.focus.x, c0.focus.z])
+	near(c0.focus.y, 0.0, 0.001, "非近地档焦点 y = 0")
+	# 越界的跟随点被钳到边界，而不是把画面带到空白里
+	c0.set_follow_point(Vector3(9000.0, 0.0, 9000.0))
+	for i in 120:
+		c0.step(1.0 / 60.0)
+	near(c0.focus.x, c0.report()["bounds_half"], 0.01,
+			"跟随点越界时焦点被钳在 ±bounds_half（x = %.2f）" % c0.focus.x)
+	# 缩回全图：边界塌到 0 ⇒ 焦点回中心。这是「全档跟随」成立的关键 —— 不需要给
+	# GLOBAL 写特判，钳制本身就完成了旧契约里的「全球档锁中心」。
 	c0.set_tier(0)
-	near(c0.focus.x, c0.report()["bounds_half"], 0.01, "切回全球档后焦点被钳回中心（x = %.2f）" % c0.focus.x)
+	near(c0.focus.x, 0.0, 0.001, "缩到满视图后焦点回中心（bounds_half = 0 的自然结果）")
+	# 解除跟随（取证台用）之后，跟随点再动也不许带走焦点；重新挂上要能自己回去。
+	c0.set_tier(1)
+	c0.focus_on(123.0, 456.0)
+	eq(bool(c0.report()["follow"]), false, "focus_on() 解除跟随（取景台不会拍到队伍出生点）")
+	near(c0.focus.x, 123.0, 0.01, "focus_on() 落点生效（x = %.1f）" % c0.focus.x)
+	c0.set_follow_point(Vector3(-500.0, 0.0, -500.0))
+	for i in 60:
+		c0.step(1.0 / 60.0)
+	near(c0.focus.x, 123.0, 0.01, "解除跟随后跟随点不再拉动焦点（x = %.1f）" % c0.focus.x)
+	c0.set_follow(true)
+	for i in 120:
+		c0.step(1.0 / 60.0)
+	near(c0.focus.x, -500.0, 0.5, "set_follow(true) 之后焦点回到跟随点（x = %.1f）" % c0.focus.x)
 	c0.free()
 
-	section("600 帧轨迹：右移 → 第 200 帧进区域档 → 第 400 帧转 yaw")
+	section("连续缩放：滚轮 ×1.12/格，跨度夹在 120–2600 m")
+	var cz := StrategicCamera.new()
+	cz.setup(s.field)
+	near(float(cz.report()["min_size"]), 120.0, 0.001, "下限 MIN_SIZE = 120 m（≈ 3.75 个 32 m 地形格）")
+	near(float(cz.report()["max_size"]), 2600.0, 0.001, "上限 MAX_SIZE = 2600 m（整图）")
+	var prev_span := float(cz.report()["size_target"])
+	var strictly_smaller := 0
+	for i in 20:
+		cz.zoom_by(1.0)          # 滚轮向前 = 拉近 = 跨度变小
+		var now := float(cz.report()["size_target"])
+		if now < prev_span:
+			strictly_smaller += 1
+		prev_span = now
+	eq(strictly_smaller, 20, "连滚 20 格每一格跨度都变小（不是整档跳）")
+	near(float(cz.report()["size_target"]), 2600.0 / pow(StrategicCamera.ZOOM_STEP, 20.0),
+			0.01, "20 格后跨度 = 2600 / 1.12^20（≈ %.1f m）"
+			% (2600.0 / pow(StrategicCamera.ZOOM_STEP, 20.0)))
+	for i in 60:
+		cz.zoom_by(1.0)
+	near(float(cz.report()["size_target"]), 120.0, 0.001, "继续拉近夹在下限 120 m，不会穿到 0")
+	cz.zoom_by(-200.0)
+	near(float(cz.report()["size_target"]), 2600.0, 0.001, "反向滚到头夹在上限 2600 m")
+	# 缓动：目标 700 m，120 帧（2 s）后应到 99.99%（6/s 指数）
+	cz.set_tier(1)
+	for i in 120:
+		cz.step(1.0 / 60.0)
+	near(float(cz.report()["size"]), 700.0, 1.0, "跨度以 6/s 缓动到档位值（实测 %.2f m）" % float(cz.report()["size"]))
+	# 整图必须正交：在区域档切成透视后再拉远，投影被强制回正交
+	cz.set_tier(1)
+	cz.toggle_projection()
+	eq(String(cz.report()["projection"]), "PERSP", "区域档可切透视")
+	cz.zoom_by(-20.0)
+	near(float(cz.report()["size_target"]), 2600.0, 0.001, "已拉满整图")
+	eq(String(cz.report()["projection"]), "ORTHO", "满视图强制回正交（整图板不许透视）")
+	cz.free()
+
+	section("旋转：rotate_view 与右键拖动同一接口，俯仰夹 −75°…−20°")
+	var crot := StrategicCamera.new()
+	crot.setup(s.field)
+	crot.set_tier(1)
+	var yaw0 := float(crot.report()["yaw_deg"])
+	crot.rotate_view(0.3, 0.2)
+	near(float(crot.report()["yaw_deg"]), yaw0 + rad_to_deg(0.3), 0.001,
+			"yaw 增量 = 输入弧度（0.3 rad）")
+	crot.rotate_view(0.0, -10.0)
+	near(float(crot.report()["pitch_deg"]), StrategicCamera.PITCH_MIN_DEG, 0.001,
+			"压低夹在 −75°（不会钻到地平线以下）")
+	crot.rotate_view(0.0, 10.0)
+	near(float(crot.report()["pitch_deg"]), StrategicCamera.PITCH_MAX_DEG, 0.001,
+			"抬高压在 −20°（不会翻到头顶）")
+	crot.free()
+
+	section("600 帧跟随轨迹：队伍 24 m/s 巡航，镜头跟得住、不越界、不入地")
 	var cam := StrategicCamera.new()
 	cam.setup(s.field)
+	cam.set_tier(1)
 	var dt := 1.0 / 60.0
 	var bad_nan := 0
 	var bad_bounds := 0
-	var bad_step := 0
 	var bad_ground := 0
+	var max_err := 0.0
 	var max_step := 0.0
+	# 起点先 snap，否则第一帧要补的是"从地图中心到起点"这一大段，单帧位移就没意义了。
+	var start := Vector3(-700.0, 0.0, -700.0)
+	cam.set_follow_point(start)
+	cam.snap_to_target()
 	var prev := cam.focus
-	var tiers_seen := {}
+	var speed := 24.0
 	for i in 600:
-		var move := Vector2.ZERO
-		var zoom := 0
-		var yaw_d := 0.0
-		if i < 200:
-			move = Vector2(1, 0)
-		elif i == 200:
-			zoom = 1
-			move = Vector2(1, 0)
-		elif i < 400:
-			move = Vector2(1, 0)
-		elif i == 400:
-			yaw_d = 0.02
-		else:
-			move = Vector2(0, 1)
-		cam.step(dt, move, yaw_d, 0.0, zoom)
+		var party := start + Vector3(speed * float(i) * dt, 0.0, 0.0)
+		cam.set_follow_point(party)
+		if i == 400:
+			cam.rotate_view(0.02, 0.0)   # 巡航中顺手转一下视角，确认不互相干扰
+		cam.step(dt)
 		var r := cam.report()
 		var f: Vector3 = r["focus"]
-		tiers_seen[int(r["tier"])] = true
 		if is_nan(f.x) or is_nan(f.y) or is_nan(f.z) \
 				or is_inf(f.x) or is_inf(f.y) or is_inf(f.z):
 			bad_nan += 1
@@ -7292,30 +7366,46 @@ func _case_strategic_camera() -> void:
 		var bh := float(r["bounds_half"])
 		if absf(f.x) > bh + 0.01 or absf(f.z) > bh + 0.01:
 			bad_bounds += 1
-		var step_len := (f - prev).length()
-		max_step = maxf(max_step, step_len)
-		var allow := float(r["size"]) * StrategicCamera.PAN_FACTOR * dt * 1.35 + 0.001
-		if step_len > allow:
-			bad_step += 1
+		var err := Vector2(f.x - party.x, f.z - party.z).length()
+		max_err = maxf(max_err, err)
+		max_step = maxf(max_step, (f - prev).length())
 		if float(r["camera_y"]) < float(r["ground_y"]) + StrategicCamera.GROUND_CLEAR - 0.01:
 			bad_ground += 1
 		prev = f
 	eq(bad_nan, 0, "600 帧里没有 NaN / INF")
 	eq(bad_bounds, 0, "焦点始终在 ±bounds_half 内（越界帧数 = 0）")
-	eq(bad_step, 0, "帧间位移 ≤ 视野×0.35×dt×1.35（最大实测 %.4f m）" % max_step)
 	eq(bad_ground, 0, "相机始终比脚下地形高 ≥ 3 m（不入地）")
-	ok(max_step > 0.0, "焦点确实在动（不是卡死）")
-	eq(tiers_seen.size(), 2, "轨迹里经历过 2 个档（GLOBAL → REGION）")
-	eq(int(cam.report()["tier"]), 1, "结束时停在区域档")
-	ok(float(cam.report()["size"]) < 2600.0, "跨度已经向 700 m 收敛（%.1f m）" % float(cam.report()["size"]))
+	ok(max_err <= 3.05,
+			"焦点与队伍的水平误差 ≤ 3 m（实测 %.3f m ≈ v/8 的阻尼稳态，占比 %.2f%% 屏宽）"
+			% [max_err, max_err / 700.0 * 100.0])
+	ok(max_step > 0.0 and max_step < 1.0, "单帧位移有界（最大 %.3f m，跟随不瞬移）" % max_step)
+	near(float(cam.report()["size"]), 700.0, 0.01, "跨度仍停在 700 m（跟随不改缩放）")
+	near(float(cam.report()["yaw_deg"]), 45.0 + rad_to_deg(0.02), 0.001,
+			"第 400 帧的转动保留下来（yaw = %.2f°）" % float(cam.report()["yaw_deg"]))
 	cam.free()
 
-	section("决定论：同脚本两次轨迹逐位一致，反向平移不同")
+	section("无平移：跟随点静止则焦点纹丝不动，动跟随点它才动（反向对照）")
+	var cp := StrategicCamera.new()
+	cp.setup(s.field)
+	cp.set_tier(1)
+	cp.set_follow_point(Vector3(100.0, 0.0, 50.0))
+	cp.snap_to_target()
+	for i in 90:
+		cp.step(1.0 / 60.0)     # 相机侧没有任何"按住方向键"的入口可喂
+	near(cp.focus.x, 100.0, 0.0001, "90 帧后焦点仍钉在跟随点（x = %.4f）" % cp.focus.x)
+	near(cp.focus.z, 50.0, 0.0001, "90 帧后焦点仍钉在跟随点（z = %.4f）" % cp.focus.z)
+	cp.set_follow_point(Vector3(110.0, 0.0, 50.0))
+	for i in 90:
+		cp.step(1.0 / 60.0)
+	near(cp.focus.x, 110.0, 0.5, "改跟随点后焦点才移动（反向对照：x = %.2f）" % cp.focus.x)
+	cp.free()
+
+	section("决定论：同脚本两次轨迹逐位一致，反向巡航不同")
 	var h1 := _camera_trace_hash(s.field, 1.0)
 	var h2 := _camera_trace_hash(s.field, 1.0)
 	eq(h1, h2, "同一输入脚本两次轨迹哈希相同")
 	var h3 := _camera_trace_hash(s.field, -1.0)
-	ne(h1, h3, "反向平移得到不同轨迹（反向对照）")
+	ne(h1, h3, "反向巡航得到不同轨迹（反向对照）")
 
 	section("场景接线：相机 current + 舞台固定正午")
 	rng.call("seed_from", 20250929)
@@ -7353,8 +7443,6 @@ func _case_strategic_camera() -> void:
 	await process_frame
 
 
-## 固定 240 帧的平移轨迹，返回量化后的轨迹哈希。档位先拨到区域档，否则全球档的
-## 焦点被钳在中心、两个方向都会得到同一条（空）轨迹。
 ## --- s1_2_perf ---------------------------------------------------------------
 ## `C-`：三档帧率 ≥ 60 fps + 三角面 ≤ 34 611，并且**反向对照**必须能分辨「地图」与
 ## 「空天空」——量不出差别的采样器没有资格当证据。同一用例顺带验 `B-` 取景工具的
@@ -7449,13 +7537,19 @@ func _case_strategic_perf() -> void:
 		state.set("world_seed", seed_before)
 
 
+## 240 帧「队伍巡航 + 同时转视角」的跟随轨迹，返回量化后的轨迹哈希。`p_sign` 控制
+## 巡航方向；反向对照必须得到不同哈希，否则说明起点或钳制把轨迹压成了一条直线。
 func _camera_trace_hash(p_field: HeightField, p_sign: float) -> String:
 	var c := StrategicCamera.new()
 	c.setup(p_field)
 	c.set_tier(1)
+	c.set_follow_point(Vector3.ZERO)
+	c.snap_to_target()
 	var acc := ""
 	for i in 240:
-		c.step(1.0 / 60.0, Vector2(p_sign, 0.0))
+		var t := float(i) / 60.0
+		c.set_follow_point(Vector3(p_sign * 40.0 * t, 0.0, 0.0))
+		c.step(1.0 / 60.0, 0.004, 0.0)
 		var f := c.focus
 		acc += "%.6f,%.6f,%.6f|" % [f.x, f.y, f.z]
 	c.free()

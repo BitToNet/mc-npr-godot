@@ -42,6 +42,10 @@ extends Node3D
 ## REGION / LOCAL are framed on the settlement nearest the map centre — the centre
 ## itself is often open water, and a "local" plate of blank sea would prove nothing
 ## about the terrain or the outline style.
+##
+## S1.2e: the camera now follows the party, so `build()` **detaches** the follow
+## (`set_follow(false)`) before framing.  With `--march=<s>` the framing lands on the
+## party's final marched position instead (that is the "party on the road" plate).
 
 const MAP_SCENE := "res://scenes/world/strategic_map.tscn"
 
@@ -160,6 +164,10 @@ func build(p_seed: int, p_tier: String) -> void:
 		push_error("[shots] 战略图没有相机，取景失败")
 		return
 	cam.call("set_tier", int(TIERS[tier_name]))
+	# S1.2e — the camera follows the party by default; a plate must not.  Detaching it
+	# here (before any framing) keeps every plate a pure function of `--seed` / `--tier`
+	# / `--span` instead of "wherever the party spawned".
+	cam.call("set_follow", false)
 	var site := _pick_settlement()
 	var spot := site
 	if with_route or march_seconds > 0.0:

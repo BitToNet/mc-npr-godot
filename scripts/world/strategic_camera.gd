@@ -1,24 +1,33 @@
 class_name StrategicCamera
 extends Node3D
-## Three-tier strategic camera (S1.2c).
+## Warband-style strategic camera (S1.2e; supersedes S1.2c's pan + tiered zoom).
 ##
-## GLOBAL / REGION / LOCAL zoom tiers over the 2400 m map.  The tier drives the
-## vertical span (`size`), and the span is *eased* rather than snapped, so a
-## wheel notch never makes the frame jump.  Panning is exponentially damped and
-## the focus point is clamped so the view never leaves the map or leaves a band
-## of empty space beyond it.
+## The camera is **anchored on the player party**: `set_follow_point()` receives the
+## mover's ground position on every logical tick, and the focus eases onto it at
+## `FOLLOW_RATE`.  That is the Mount & Blade campaign-map feel — you orbit your own
+## party, you never lose it, and there is no free pan to lose it with.
 ##
-## Two deliberate simplifications:
+## Zoom is therefore continuous, not tiered: one wheel notch multiplies the vertical
+## span by `ZOOM_STEP` and the span is eased (`ZOOM_RATE`), so 120 m … 2600 m is one
+## smooth range.  `set_tier()` survives only as a **capture/verification preset**
+## (2600 / 700 / 170 m, the three spans the `B-` plates are shot at).
+##
+## The old clamp now does double duty.  `bounds_half()` is
+## `map/2 − size_target/2 − MARGIN`, which is **0 at full zoom-out**, so the follow
+## point collapses onto the map centre there — the whole-map plate stays
+## byte-identical without a `if tier == GLOBAL` special case.
+##
+## Two deliberate simplifications (unchanged from S1.2c):
 ##   * the rig itself stays at the origin and the child `Camera3D` carries the
 ##     whole transform.  That keeps "rig-local == world" true off tree, which is
 ##     how the trajectory case drives it (no `get_tree()` in `--script` mode).
 ##   * the camera is the only thing that knows about the terrain: it raises
-##     itself to `height_at(focus) + GROUND_CLEAR` so it can never end up inside
-##     a hill at the LOCAL tier.
+##     itself to `height_at(cam) + GROUND_CLEAR` so it can never end up inside a
+##     hill at the close tiers.
 ##
-## `step()` is the single integration entry point: `_process` feeds it real
-## input, the case feeds it a scripted 10 s trajectory.  Same code, so what the
-## case proves is what the player gets.
+## `step()` is the single integration entry point: `_process` feeds it real input,
+## the case feeds it a scripted trajectory.  Same code, so what the case proves is
+## what the player gets.
 
 enum Tier { GLOBAL, REGION, LOCAL }
 enum Lens { ORTHO, PERSP }   # Projection collides with Godot's builtin type
@@ -26,13 +35,23 @@ enum Lens { ORTHO, PERSP }   # Projection collides with Godot's builtin type
 const TIER_NAMES := ["GLOBAL", "REGION", "LOCAL"]
 const TIER_SIZE := [2600.0, 700.0, 170.0]
 
+## Continuous zoom range, metres of vertical span.  `MIN_SIZE` is ~3.75 terrain
+## cells (the mesh is 32 m), i.e. as close as the low-poly ground still reads.
+const MIN_SIZE := 120.0
+const MAX_SIZE := 2600.0
+const ZOOM_STEP := 1.12        ## span multiplier per wheel notch
+## Band edges for the *report*: they only label a span, they do not gate behaviour.
+const BAND_GLOBAL_MIN := 2000.0
+const BAND_REGION_MIN := 400.0
+## At or beyond this span the whole map is in frame, so the plate must be ortho.
+const FULL_ORTHO_SIZE := 2300.0
+
 const FOV_DEG := 35.0
 const ISO_YAW_DEG := 45.0
 const ISO_PITCH_DEG := -35.264
 const PITCH_MIN_DEG := -75.0
 const PITCH_MAX_DEG := -20.0
 
-const PAN_FACTOR := 0.35       ## pan speed as a fraction of the view span / s
 const FOLLOW_RATE := 8.0       ## exponential damping for the focus point
 const ZOOM_RATE := 6.0         ## exponential easing for the span (~0.35 s)
 const MARGIN := 40.0           ## metres of map edge kept inside the frame
@@ -40,7 +59,8 @@ const GROUND_CLEAR := 3.0      ## camera never closer than this to the terrain
 const ORTHO_DIST_FACTOR := 1.35
 const MIN_DIST := 320.0
 const ZOOM_STEP_COOLDOWN := 0.18
-const DRAG_GAIN_DIV := 900.0   ## middle-drag metres per pixel = size / this
+const ROTATE_GAIN := 0.006     ## right-drag radians per pixel
+const PITCH_GAIN := 0.004      ## right-drag radians per pixel (vertical)
 
 var field: HeightField
 var tier := Tier.GLOBAL
@@ -52,20 +72,30 @@ var size_target: float = TIER_SIZE[0]
 var yaw := deg_to_rad(ISO_YAW_DEG)
 var pitch := deg_to_rad(ISO_PITCH_DEG)
 
+## True while the camera is anchored on the party.  `focus_on()` turns it off so the
+## capture stage can frame a settlement; `set_follow(true)` resumes it.
+var follow_enabled := true
+## The party's ground position, refreshed by the map on every logical tick.
+var follow_point := Vector3.ZERO
+
 var _camera: Camera3D
 var _wheel := 0.0
 var _cooldown := 0.0
+var _dragging := false
 
 
 func setup(p_field: HeightField) -> void:
 	field = p_field
 	tier = Tier.GLOBAL
 	projection = Lens.ORTHO
-	size = TIER_SIZE[tier]
-	size_target = size
+	size = MAX_SIZE
+	size_target = MAX_SIZE
 	yaw = deg_to_rad(ISO_YAW_DEG)
 	pitch = deg_to_rad(ISO_PITCH_DEG)
-	_snap_focus()
+	follow_enabled = true
+	follow_point = Vector3.ZERO
+	focus_target = Vector3.ZERO
+	_clamp_focus()
 	focus = focus_target
 	_ensure_camera()
 	_apply()
@@ -76,19 +106,12 @@ func _ready() -> void:
 	_apply()
 
 
+## Keyboard orbit only (`Q`/`E` = yaw, `R`/`F` = pitch): panning is gone, so the
+## arrow keys no longer touch the camera, and WASD stays free for S1.6 / S4.5.
 func _process(delta: float) -> void:
 	if field == null:
 		return
 	_cooldown = maxf(_cooldown - delta, 0.0)
-	var move := Vector2.ZERO
-	if Input.is_action_pressed("ui_right"):
-		move.x += 1.0
-	if Input.is_action_pressed("ui_left"):
-		move.x -= 1.0
-	if Input.is_action_pressed("ui_down"):
-		move.y += 1.0
-	if Input.is_action_pressed("ui_up"):
-		move.y -= 1.0
 	var turn := 0.0
 	if Input.is_key_pressed(KEY_Q):
 		turn -= 1.0
@@ -99,66 +122,117 @@ func _process(delta: float) -> void:
 		tilt += 1.0
 	if Input.is_key_pressed(KEY_F):
 		tilt -= 1.0
-	step(delta, move, turn * delta * 0.9, tilt * delta * 0.5, 0)
+	step(delta, turn * delta * 0.9, tilt * delta * 0.5)
+	# The wheel accumulates raw notches; one is spent per cooldown here (not in the
+	# input handler) so a fast spin becomes a steady zoom instead of a burst of
+	# notches that only fire when some unrelated event wakes the handler up.
+	if absf(_wheel) >= 1.0 and _cooldown <= 0.0:
+		var notch := signf(_wheel)
+		_wheel -= notch
+		_cooldown = ZOOM_STEP_COOLDOWN
+		zoom_by(notch)
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if field == null:
 		return
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_wheel += 1.0          # one notch = one tier closer
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_RIGHT:
+			# Right-drag orbits; release ends it even outside the window.
+			_dragging = mb.pressed
+			return
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_wheel += 1.0
+		elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_wheel -= 1.0
-	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
-		# middle-drag pan: one pixel is roughly `size / DRAG_GAIN_DIV` metres, and the
-		# map follows the hand (so the focus moves against the cursor).
-		var k := size / DRAG_GAIN_DIV
-		var d := Vector3(event.relative.x, 0.0, event.relative.y) * k
-		focus_target -= d.rotated(Vector3.UP, yaw)
-		var bound := bounds_half()
-		focus_target.x = clampf(focus_target.x, -bound, bound)
-		focus_target.z = clampf(focus_target.z, -bound, bound)
+	elif event is InputEventMouseMotion and _dragging:
+		var mm := event as InputEventMouseMotion
+		# Drag the world with the hand: right-drag spins the map right (yaw down),
+		# drag-down lowers the camera (pitch toward the horizon).
+		rotate_view(-mm.relative.x * ROTATE_GAIN, mm.relative.y * PITCH_GAIN)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_P:
 			toggle_projection()
 		elif event.keycode == KEY_T:
 			cycle_tier(-1)
-	if absf(_wheel) >= 1.0 and _cooldown <= 0.0:
-		cycle_tier(1 if _wheel > 0.0 else -1)
-		_wheel = 0.0
-		_cooldown = ZOOM_STEP_COOLDOWN
 
 
-## One integration step.  `move` is screen-space (-1..1 per axis), `yaw_delta`
-## and `pitch_delta` are radians, `zoom_steps` moves whole tiers.
-func step(delta: float, move: Vector2, yaw_delta := 0.0, pitch_delta := 0.0,
-		zoom_steps := 0) -> void:
+## One integration step.  `yaw_delta` / `pitch_delta` are radians.  The span eases
+## toward `size_target`; the focus eases toward the follow point (clamped to the
+## current legal area).  There is no pan input, by design.
+func step(delta: float, yaw_delta := 0.0, pitch_delta := 0.0) -> void:
 	if field == null or delta <= 0.0:
 		return
-	if zoom_steps != 0:
-		cycle_tier(zoom_steps)
-	if tier != Tier.GLOBAL:
-		if yaw_delta != 0.0:
-			yaw = wrapf(yaw + yaw_delta, -PI, PI)
-		if pitch_delta != 0.0:
-			pitch = clampf(pitch + pitch_delta, deg_to_rad(PITCH_MIN_DEG),
-					deg_to_rad(PITCH_MAX_DEG))
-	# easing the span is what makes a tier change read as a zoom, not a cut
+	if yaw_delta != 0.0:
+		yaw = wrapf(yaw + yaw_delta, -PI, PI)
+	if pitch_delta != 0.0:
+		pitch = clampf(pitch + pitch_delta, deg_to_rad(PITCH_MIN_DEG),
+				deg_to_rad(PITCH_MAX_DEG))
+	# easing the span is what makes a zoom read as a zoom, not a cut
 	size = lerpf(size, size_target, 1.0 - exp(-delta * ZOOM_RATE))
-	if move.length_squared() > 0.0:
-		var screened := Vector3(move.x, 0.0, move.y)
-		var turned := screened.rotated(Vector3.UP, yaw)
-		focus_target += turned * (size * PAN_FACTOR * delta)
-		var bound := bounds_half()
-		focus_target.x = clampf(focus_target.x, -bound, bound)
-		focus_target.z = clampf(focus_target.z, -bound, bound)
+	tier = _band_of(size_target)
+	if follow_enabled:
+		focus_target.x = follow_point.x
+		focus_target.z = follow_point.z
+		_clamp_focus()
 	if tier == Tier.LOCAL:
 		focus_target.y = _ground(focus_target.x, focus_target.z)
+	else:
+		focus_target.y = 0.0
 	focus = focus.lerp(focus_target, 1.0 - exp(-delta * FOLLOW_RATE))
 	_apply()
 
 
+## Hands the party's ground position to the camera (called from the logical tick).
+func set_follow_point(point: Vector3) -> void:
+	follow_point = point
+	if follow_enabled:
+		focus_target.x = point.x
+		focus_target.z = point.z
+		_clamp_focus()
+
+
+## Anchors (`true`) or releases (`false`) the camera.  Releasing is what lets the
+## capture stage frame a settlement with `focus_on()`; re-anchoring snaps the target
+## back onto the party, and the damping does the rest.
+func set_follow(enabled: bool) -> void:
+	follow_enabled = enabled
+	if enabled:
+		focus_target.x = follow_point.x
+		focus_target.z = follow_point.z
+		_clamp_focus()
+		if tier == Tier.LOCAL:
+			focus_target.y = _ground(focus_target.x, focus_target.z)
+		_apply()
+
+
+## Continuous zoom: `notches` > 0 zooms in (smaller span).  Past `FULL_ORTHO_SIZE`
+## the projection is forced back to ortho — the whole-map plate must stay ortho.
+func zoom_by(notches: float) -> void:
+	if field == null or notches == 0.0:
+		return
+	size_target = clampf(size_target / pow(ZOOM_STEP, notches), MIN_SIZE, MAX_SIZE)
+	tier = _band_of(size_target)
+	if size_target >= FULL_ORTHO_SIZE:
+		projection = Lens.ORTHO
+	_clamp_focus()
+	_apply()
+
+
+## Orbit by hand (right-drag).  Same clamps as the keyboard path.
+func rotate_view(dyaw: float, dpitch: float) -> void:
+	if dyaw != 0.0:
+		yaw = wrapf(yaw + dyaw, -PI, PI)
+	if dpitch != 0.0:
+		pitch = clampf(pitch + dpitch, deg_to_rad(PITCH_MIN_DEG),
+				deg_to_rad(PITCH_MAX_DEG))
+	_apply()
+
+
+## Capture / verification preset.  Not the gameplay zoom any more: the wheel goes
+## through `zoom_by()`.  GLOBAL still resets yaw/pitch to the isometric bearing and
+## clears the projection toggle, which is what keeps the whole-map plate fixed.
 func set_tier(t: int) -> void:
 	tier = clampi(t, 0, Tier.LOCAL)
 	size_target = TIER_SIZE[tier]
@@ -170,13 +244,11 @@ func set_tier(t: int) -> void:
 	# Both the target *and* the current point are clamped: zooming out shrinks the
 	# legal area, and a lagging focus must not be allowed to stay outside it while
 	# the damping catches up.
-	var bound := bounds_half()
-	focus_target.x = clampf(focus_target.x, -bound, bound)
-	focus_target.z = clampf(focus_target.z, -bound, bound)
-	focus.x = clampf(focus.x, -bound, bound)
-	focus.z = clampf(focus.z, -bound, bound)
+	_clamp_focus()
 	if tier == Tier.LOCAL:
 		focus_target.y = _ground(focus_target.x, focus_target.z)
+	else:
+		focus_target.y = 0.0
 	_apply()
 
 
@@ -190,34 +262,46 @@ func cycle_tier(step_count: int) -> void:
 ## the same picture (S1.2d).
 func snap_to_target() -> void:
 	size = size_target
+	tier = _band_of(size_target)
+	if follow_enabled:
+		focus_target.x = follow_point.x
+		focus_target.z = follow_point.z
+		_clamp_focus()
 	focus = focus_target
 	if tier == Tier.LOCAL:
 		focus.y = _ground(focus.x, focus.z)
+		focus_target.y = focus.y
+	else:
+		focus.y = 0.0
+		focus_target.y = 0.0
 	_apply()
 
 
 ## Points the camera at a world position on the XZ plane, clamped to the current
-## tier's legal area and snapped.  Used by the shot tool to frame a settlement
-## instead of wherever the map centre happens to be.
+## legal area and snapped.  Used by the shot tool to frame a settlement instead of
+## wherever the party happens to be — so it **detaches the follow** first.
 func focus_on(x: float, z: float) -> void:
+	follow_enabled = false
+	tier = _band_of(size_target)
 	focus_target = Vector3(x, 0.0, z)
-	var bound := bounds_half()
-	focus_target.x = clampf(focus_target.x, -bound, bound)
-	focus_target.z = clampf(focus_target.z, -bound, bound)
+	_clamp_focus()
 	focus_target.y = _ground(focus_target.x, focus_target.z) if tier == Tier.LOCAL else 0.0
 	snap_to_target()
 
 
 func toggle_projection() -> void:
-	if tier == Tier.GLOBAL:
+	if size_target >= FULL_ORTHO_SIZE:
+		projection = Lens.ORTHO
+		_apply()
 		return
 	projection = Lens.PERSP if projection == Lens.ORTHO else Lens.ORTHO
 	_apply()
 
 
 ## How far the focus point may travel from the map centre while keeping
-## `MARGIN` metres of map inside the frame.  The whole-map tier yields 0, so
-## GLOBAL is locked to the centre instead of drifting into empty space.
+## `MARGIN` metres of map inside the frame.  The whole-map span yields 0, so at full
+## zoom-out the follow point collapses onto the centre instead of drifting into
+## empty space.
 func bounds_half() -> float:
 	if field == null:
 		return 0.0
@@ -302,8 +386,12 @@ func report() -> Dictionary:
 		"projection": "PERSP" if projection == Lens.PERSP else "ORTHO",
 		"size": size,
 		"size_target": size_target,
+		"min_size": MIN_SIZE,
+		"max_size": MAX_SIZE,
 		"focus": focus,
 		"focus_target": focus_target,
+		"follow": follow_enabled,
+		"follow_point": follow_point,
 		"yaw_deg": rad_to_deg(yaw),
 		"pitch_deg": rad_to_deg(pitch),
 		"bounds_half": bounds_half(),
@@ -326,12 +414,25 @@ func _ensure_camera() -> void:
 	add_child(_camera)
 
 
-func _snap_focus() -> void:
-	var bound := 0.0 if field == null else maxf(
-			field.map_size * 0.5 - size_target * 0.5 - MARGIN, 0.0)
-	focus_target = Vector3.ZERO
+## Band label for the report (and for `focus.y` behaviour).  Derived from the span,
+## never the other way round — that is what makes continuous zoom and the capture
+## presets share one truth.
+func _band_of(span: float) -> int:
+	if span >= BAND_GLOBAL_MIN:
+		return Tier.GLOBAL
+	if span >= BAND_REGION_MIN:
+		return Tier.REGION
+	return Tier.LOCAL
+
+
+## Clamps the target *and* the lagging current point, so a zoom-out cannot leave the
+## focus outside the shrunken legal area while the damping catches up.
+func _clamp_focus() -> void:
+	var bound := bounds_half()
 	focus_target.x = clampf(focus_target.x, -bound, bound)
 	focus_target.z = clampf(focus_target.z, -bound, bound)
+	focus.x = clampf(focus.x, -bound, bound)
+	focus.z = clampf(focus.z, -bound, bound)
 
 
 func _ground(x: float, z: float) -> float:
@@ -353,9 +454,8 @@ func _apply() -> void:
 			if projection == Lens.PERSP else Camera3D.PROJECTION_ORTHOGONAL
 	_camera.fov = FOV_DEG
 	_camera.size = size
-	var pr := deg_to_rad(ISO_PITCH_DEG) if tier == Tier.GLOBAL else pitch
-	var yr := deg_to_rad(ISO_YAW_DEG) if tier == Tier.GLOBAL else yaw
-	var offset := Vector3(sin(yr) * cos(pr), -sin(pr), cos(yr) * cos(pr)) * _distance()
+	var offset := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) \
+			* _distance()
 	var cam_pos := focus + offset
 	# the camera lifts itself instead of clipping through a hill
 	cam_pos.y = maxf(cam_pos.y, _ground(cam_pos.x, cam_pos.z) + GROUND_CLEAR)

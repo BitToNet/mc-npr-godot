@@ -192,6 +192,13 @@ func _rebuild_party() -> void:
 		return
 	var spawn := _spawn_party()
 	party.spawn_at(float(spawn["x"]), float(spawn["z"]), int(spawn["faction"]))
+	# S1.2e — the camera is anchored on the party, so the first rendered frame already
+	# looks at it.  At full zoom-out `bounds_half()` is 0, so this snaps to the map
+	# centre and the whole-map plate is byte-identical to S1.2d; the wiring only shows
+	# at closer spans, where the old camera would have framed the wrong patch of land.
+	if camera != null:
+		camera.set_follow_point(party.position)
+		camera.snap_to_target()
 
 
 ## Every settlement marker (S1.5b).  Same rebuild contract as the party: `boot()` may
@@ -240,6 +247,11 @@ func _spawn_party() -> Dictionary:
 func _on_simulation_tick(_step: int, seconds: float) -> void:
 	if party != null:
 		party.step(seconds)
+		# S1.2e — one-way hand-off: the party owns its position, the camera only
+		# reads it.  Doing it on the logical tick (not in `_process`) keeps the
+		# follow independent of the frame rate and dead simple to reason about.
+		if camera != null:
+			camera.set_follow_point(party.position)
 	# 焦点跟着队伍走：提示条与"是否进入范围"都只在这里更新，别处不重复算。
 	_sync_settlement_focus()
 
