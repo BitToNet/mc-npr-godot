@@ -159,6 +159,12 @@ const CASES := {
 				+ "并反向对照 04:00 与 21:00 的环境光色/光向不同",
 		"kind": "pure",
 	},
+	"s1_5_i18n": {
+		"desc": "文案 key 化（S1.5a）：`data/i18n/strings.csv` 是唯一明文表（键升序、无重复、值非空、"
+				+ "LF 无 BOM）、`L10n` 把它注册成引擎翻译（真 `tr()` 可查）、聚落/势力只存 key 且全部可解析、"
+				+ "生成聚落渲染成「村庄 3」、缺 key 回退并只告警一次、`data/**` 里除该 CSV 外零中文明文",
+		"kind": "pure",
+	},
 	"s0_6_repro": {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
@@ -358,8 +364,26 @@ const CASES := {
 ## -----------------------------------------------------------------------------
 ##  规范守卫（§3.1.8 / §5 S0.2）
 ## -----------------------------------------------------------------------------
-const GUARD_SCAN_DIRS := ["res://scenes", "res://scripts", "res://shaders"]
-const GUARD_EXTS := ["gd", "tscn", "tres", "gdshader", "shader"]
+const GUARD_SCAN_DIRS := ["res://scenes", "res://scripts", "res://shaders", "res://data"]
+const GUARD_EXTS := ["gd", "tscn", "tres", "gdshader", "shader", "json"]
+
+## S1.5a：面向玩家的文案一律走 key（`data/i18n/strings.csv` 是**唯一**存明文的地方）。
+## 规则两句话：
+##   ① `res://scripts/ui/` 下**新增**的脚本里不许出现汉字 —— 注释会被剥掉，所以命中的
+##      一定是字面量；`tr("KEY")` / `L10n.text("KEY")` 都不含汉字，不会误报。
+##   ② `res://data/` 下的 JSON 只存 key（锚点表的 `name_key`），汉字一律进 CSV。
+## 既有 6 个 UI 文件是 S0/S1.4 的遗留（明文已经拍进历史板），逐条列在这里；**新增文件
+## 不在名单里就享受不到豁免**，这是"从本步第一行代码起就走 key"的执行方式。
+const I18N_UI_ROOT := "res://scripts/ui/"
+const I18N_LEGACY_UI := [
+	"res://scripts/ui/menu_page.gd",
+	"res://scripts/ui/save_grid.gd",
+	"res://scripts/ui/time_bar.gd",
+	"res://scripts/ui/ui_kit.gd",
+	"res://scripts/ui/ui_panel.gd",
+	"res://scripts/ui/ui_slider.gd",
+]
+const I18N_DATA_ROOT := "res://data/"
 
 ## 裸随机函数：禁止全局 randf()/randi()（含 _range 变体）；
 ## `rng.randf()` 这种成员调用是允许的（§3.2「所有随机走 Rng 服务」）。
@@ -723,6 +747,8 @@ func _dispatch(id: String) -> void:
 			await _case_longrun()
 		"s1_4_light":
 			await _case_light()
+		"s1_5_i18n":
+			await _case_i18n()
 
 		"s0_6_repro":
 			await _case_repro()
@@ -1079,6 +1105,22 @@ func _case_guard() -> void:
 			"属主 game_state.gd 写 game_time 不误报")
 	ok(_scan_text("res://scripts/world/x.gd", "if game_time == 5.0:\n\tpass\n").is_empty(),
 			"只读比较 game_time == 5 不误报")
+	# S1.5a：文案 key 化的正反例（新增 UI / 遗留白名单 / 非 UI 脚本 / data JSON）
+	ok(_scan_text("res://scripts/ui/settlement_panel.gd", "label.text = \"补给\"\n").size() == 1,
+			"新增 UI 脚本里的中文字面量恰好报 1 条（不多不少）")
+	ok(_scan_text("res://scripts/ui/settlement_panel.gd",
+			"label.text = tr(\"UI_SETTLEMENT_SUPPLY\")\n").is_empty(),
+			"tr(\"KEY\") 写法不误报")
+	ok(_scan_text("res://scripts/ui/menu_page.gd", "label.text = \"历史遗留\"\n").is_empty(),
+			"遗留 UI 文件按白名单放行")
+	ok(_scan_text("res://scripts/world/x.gd", "push_warning(\"开发期告警仍用中文\")\n").is_empty(),
+			"非 UI 脚本的中文告警不误报（守卫只管面向玩家的文案）")
+	ok(_scan_text("res://scripts/ui/settlement_panel.gd", "# 注释里写中文不算违例\n").is_empty(),
+			"UI 脚本注释里的中文不误报")
+	ok(_scan_text("res://data/world/anchors.json", "  \"name\": \"北岬堡\"\n").size() == 1,
+			"data JSON 里的明文字段恰好报 1 条")
+	ok(_scan_text("res://data/world/anchors.json", "  \"name_key\": \"SETTLEMENT_X\"\n").is_empty(),
+			"data JSON 里的 key 不误报")
 
 	section("既有代码基线")
 	var real := _guard_walk()
@@ -1974,6 +2016,127 @@ func _case_light() -> void:
 	inst.queue_free()
 	await process_frame
 	_restore_defaults()
+
+## --- s1_5_i18n ---------------------------------------------------------------
+
+## S1.5a：文案 key 化的地基。验四件事：
+##   ① CSV 本身是一份可审的数据（键升序、无重复、值非空、LF 无 BOM）；
+##   ② 它注册成了**引擎的**翻译（`TranslationServer.translate()` 查得到，不是私有字典）；
+##   ③ 世界数据里一个明文名都不剩（聚落/势力只存 key + 编号），且每个 key 都解析得出中文；
+##   ④ 缺 key 时回退成 key 本身、每个 key 只告警一次 —— 回退必须是**看得见**的。
+func _case_i18n() -> void:
+	section("字符串表：键升序、无重复、值非空、LF 无 BOM")
+	var bytes := FileAccess.get_file_as_bytes(L10n.PATH)
+	ok(bytes.size() > 0, "字符串表可读（%d 字节）" % bytes.size())
+	ok(not (bytes.size() >= 3 and bytes[0] == 0xEF and bytes[1] == 0xBB and bytes[2] == 0xBF),
+			"字符串表没有 BOM")
+	var raw := FileAccess.get_file_as_string(L10n.PATH)
+	eq(raw.count("\r"), 0, "字符串表全是 LF（没有 CR）")
+	ok(raw.ends_with("\n") and not raw.ends_with("\n\n"), "字符串表末尾恰好一个换行")
+	var lines: Array = raw.split("\n")
+	if lines.size() > 0 and String(lines[lines.size() - 1]) == "":
+		lines.remove_at(lines.size() - 1)
+	eq(String(lines[0]), "keys,zh_CN", "表头是 `keys,zh_CN`")
+	var keys_seen: Array = []
+	var bad_rows: Array = []
+	for i in range(1, lines.size()):
+		var line := String(lines[i])
+		var cut := line.find(",")
+		if cut <= 0 or cut == line.length() - 1:
+			bad_rows.append(i + 1)
+			continue
+		keys_seen.append(line.substr(0, cut))
+		if line.substr(cut + 1).strip_edges().is_empty():
+			bad_rows.append(i + 1)
+	eq(bad_rows, [], "每一行都是「key,非空文案」（坏行：%s）" % str(bad_rows))
+	eq(keys_seen.size(), 9, "键 9 条")
+	var sorted_keys := keys_seen.duplicate()
+	sorted_keys.sort()
+	eq(keys_seen, sorted_keys, "键按升序排列（人读 diff 时不会因为顺序抖动）")
+	eq(_unique_count(keys_seen), keys_seen.size(), "键没有重复")
+
+	section("加载与注册：键数、语言、真 tr() 可查")
+	ok(L10n.ensure(), "L10n.ensure() 读到了表")
+	eq(Array(L10n.locales()), ["zh_CN"], "当前只有 zh_CN 一列")
+	TranslationServer.set_locale(L10n.DEFAULT_LOCALE)
+	eq(L10n.text("SETTLEMENT_KIND_VILLAGE"), "村庄", "key → 中文")
+	eq(L10n.text("SETTLEMENT_KIND_VILLAGE", 3), "村庄 3", "编号拼在文案后面")
+	eq(L10n.text("SETTLEMENT_FORTRESS_SEAT"), "北岬堡", "锚点名走 key")
+	eq(L10n.text("FACTION_QINGLAN"), "青岚盟", "势力名走 key")
+	eq(TranslationServer.translate("SETTLEMENT_KIND_TOWN"), "城镇",
+			"TranslationServer.translate() 也查得到（说明注册进了引擎，不是私有字典）")
+	ok(L10n.has("SETTLEMENT_VILLAGE_SEAT"), "has() 认得已登记的 key")
+	ok(not L10n.has("SETTLEMENT_KIND_CITY"), "has() 不认没登记的 key（反向对照）")
+
+	section("缺 key：回退成 key 本身，且每个 key 只告警一次")
+	var warned := L10n.warned_count()
+	eq(L10n.text("NOPE_KEY"), "NOPE_KEY", "缺 key 回退成 key 本身（不静默给空串）")
+	eq(L10n.text("NOPE_KEY", 2), "NOPE_KEY 2", "带编号时编号照样保留")
+	eq(L10n.warned_count(), warned + 1, "同一个缺 key 只记一次告警")
+
+	section("世界数据：聚落/势力只存 key，且每个 key 都能解析")
+	var params := GenParams.defaults()
+	params["schema"] = GenParams.SCHEMA
+	var world_seed := 20250929
+	var rng: Node = get_root().get_node_or_null("Rng")
+	ok(rng != null, "Rng autoload 在位")
+	var stream: RandomNumberGenerator = rng.call("stream", "world_gen")
+	var field := HeightField.new(world_seed, params)
+	var regions := WorldRegions.new(field, stream, params)
+	ok(bool(regions.build()["ok"]), "region 划分成功")
+	var anchors := WorldData.load_anchors()
+	eq(PackedStringArray(anchors["warnings"]).size(), 0, "真锚点表零告警（名字字段已全是 key）")
+	var data := WorldData.new(world_seed, params, field, regions, stream, Array(anchors["anchors"]))
+	ok(bool(data.build()["ok"]), "世界构建成功")
+	eq(data.settlements.size(), 20, "20 个聚落")
+	var unresolved: Array = []
+	var anchor_named := 0
+	var generated_named := 0
+	for s in data.settlements:
+		var key := String(s["name_key"])
+		if key.is_empty() or not L10n.has(key) or data.settlement_label(s) == key:
+			unresolved.append(String(s["id"]))
+			continue
+		if bool(s["anchor"]):
+			anchor_named += 1
+		else:
+			generated_named += 1
+	eq(unresolved, [], "每个聚落的 name_key 都解析成了中文（未解析：%s）" % str(unresolved))
+	eq(anchor_named, 3, "3 个锚点各有自己的 key")
+	eq(generated_named, 17, "17 个生成聚落用 kind key + 编号")
+	var village := {}
+	for s in data.settlements:
+		if String(s["kind"]) == "village" and not bool(s["anchor"]):
+			village = s
+			break
+	ok(not village.is_empty(), "找到一个生成的村庄")
+	if not village.is_empty():
+		ge(float(int(village["name_number"])), 1.0, "生成聚落带编号（第 %d 个）" % int(village["name_number"]))
+		eq(data.settlement_label(village), "村庄 %d" % int(village["name_number"]),
+				"渲染成「村庄 N」")
+	eq(data.factions.size(), 3, "3 个势力")
+	for f in data.factions:
+		var fkey := String(f["name_key"])
+		ok(L10n.has(fkey) and data.faction_label(f) != fkey,
+				"势力 `%s` 的 key 解析出中文" % String(f["id"]))
+
+	section("指纹与序列化里没有明文")
+	ok(not _has_cjk(data.fingerprint()), "fingerprint() 里没有汉字（名字只留 key）")
+	var dumped := data.to_dict()
+	var legacy: Array = []
+	for s in Array(dumped["settlements"]):
+		var cell: Dictionary = s
+		if cell.has("name") or not cell.has("name_key"):
+			legacy.append(String(cell["id"]))
+	eq(legacy, [], "to_dict() 的每条聚落都带 name_key、不带 name")
+	var anchor_raw := _read_text_file(WorldData.PATH)
+	ok(not _has_cjk(anchor_raw), "锚点表里没有汉字（明文只在 CSV）")
+
+	section("数据目录里只有这一份明文表")
+	var csvs: Array = []
+	_collect_ext("res://data", "csv", csvs)
+	csvs.sort()
+	eq(csvs, [L10n.PATH], "data/** 下恰好一份 CSV，就是字符串表")
 
 func _case_repro() -> void:
 	await process_frame
@@ -5505,7 +5668,43 @@ func _scan_text(path: String, text: String) -> Array:
 		# S1.4a：唯一游戏时钟 —— 只有 game_state.gd 可以写 `game_time`
 		if ext == "gd" and not GAME_CLOCK_OWNERS.has(path) and _writes_game_time(line):
 			hits.append(_hit(path, i + 1, "game_clock_owner", raw))
+		# S1.5a：面向玩家的文案一律走 key（见 I18N_* 常量上的说明）
+		if _has_cjk(line):
+			if ext == "gd" and path.begins_with(I18N_UI_ROOT) \
+					and not I18N_LEGACY_UI.has(path):
+				hits.append(_hit(path, i + 1, "hardcoded_text", raw))
+			elif ext == "json" and path.begins_with(I18N_DATA_ROOT):
+				hits.append(_hit(path, i + 1, "hardcoded_text", raw))
 	return hits
+
+
+## CJK 统一表意文字（含扩展 A）。只认汉字：全角标点与假名不在本项目文案里，
+## 也不该被当成"漏了 key"的证据。
+func _has_cjk(s: String) -> bool:
+	for i in s.length():
+		var c := s.unicode_at(i)
+		if (c >= 0x4E00 and c <= 0x9FFF) or (c >= 0x3400 and c <= 0x4DBF):
+			return true
+	return false
+## 数组里不同值的个数（`s1_5_i18n` 用来验"键无重复"）。
+func _unique_count(items: Array) -> int:
+	var seen := {}
+	for it in items:
+		seen[String(it)] = true
+	return seen.size()
+
+
+## 递归收集某目录下指定扩展名的文件（`res://` 路径），用于"数据目录里只有一份 CSV"
+## 这类清单断言。守卫里的 `_walk` 走的是内容规则，这里只回答"有哪些文件"。
+func _collect_ext(dir_path: String, ext: String, out: Array) -> void:
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return
+	for sub in d.get_directories_at(dir_path):
+		_collect_ext(dir_path.path_join(sub), ext, out)
+	for fname in d.get_files_at(dir_path):
+		if fname.get_extension().to_lower() == ext:
+			out.append(dir_path.path_join(fname))
 
 
 ## `game_time` 是否被这一行**写入**（`=` / `+=` / `-=` / `*=` / `/=`）。只读与比较都不算，
@@ -6444,8 +6643,10 @@ func _case_world() -> void:
 	section("坏锚点：kind 非法 / 落水 ⇒ 跳过并告警，配额照旧补齐")
 	stream.state = saved_state
 	var broken: Array = [
-		{"id": "bad_kind", "kind": "castle", "name": "错类", "x": 0.0, "z": 0.0},
-		{"id": "bad_water", "kind": "village", "name": "落水", "x": -1190.0, "z": -1190.0},
+		# `name_key` 一并给齐：这两条锚点要验的是 kind / 位置，不是缺 key 的告警。
+		{"id": "bad_kind", "kind": "castle", "name_key": "SETTLEMENT_BAD_KIND", "x": 0.0, "z": 0.0},
+		{"id": "bad_water", "kind": "village", "name_key": "SETTLEMENT_BAD_WATER",
+				"x": -1190.0, "z": -1190.0},
 	]
 	var broken_data := WorldData.new(world_seed, params, field, regions, stream, broken)
 	var broken_built := broken_data.build()
