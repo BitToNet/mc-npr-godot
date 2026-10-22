@@ -147,6 +147,18 @@ const CASES := {
 				+ "缺少 game 段仍报原问题、v2 文件不再重复迁移",
 		"kind": "pure",
 	},
+	"s1_4_longrun": {
+		"desc": "长时间快进（S1.4d）：365 游戏日 = 31 536 000 tick —— 天数逐日 +1、每个日边界都在 00:00、"
+				+ "12 月 × 30 日全程合法、每小时一条 time_advanced（8 761）、game_time 仍是整秒、"
+				+ "步进计数与 playtime 对得上",
+		"kind": "pure",
+	},
+	"s1_4_light": {
+		"desc": "光照联动（S1.4d）：战略层 DayNight 跟随游戏时钟，04:00 / 12:00 / 21:00 的相位、能量、"
+				+ "仰角、光向都对，且「时钟派生」与「手动钉相位」逐项相等（历史板的拍法 == 玩家看到的），"
+				+ "并反向对照 04:00 与 21:00 的环境光色/光向不同",
+		"kind": "pure",
+	},
 	"s0_6_repro": {
 		"desc": "可复现渲染：两个独立进程同参数截图 sha256 相同 + 反向对照（改参数/改帧数）必须不同",
 		"kind": "headed",
@@ -604,6 +616,10 @@ func _run() -> void:
 
 func _run_one(id: String) -> Dictionary:
 	_case_id = id
+	# 每个用例都从"树在跑"开始：窗口用例里有会打开菜单的（菜单是 `paused` 的唯一来源），
+	# 有的只把 UI 藏起来而不解除暂停 —— 暂停会留给后面所有用例，于是在冻结的树里跑，
+	# 静默失真比红灯更难查。S1.4d 的 `s1_2_camera` 就是这么在窗口全量里红了一次。
+	paused = false
 	_section = ""
 	_asserts = []
 	_whitelist_hits = []
@@ -703,6 +719,10 @@ func _dispatch(id: String) -> void:
 			await _case_hud()
 		"s1_4_migrate":
 			await _case_migrate()
+		"s1_4_longrun":
+			await _case_longrun()
+		"s1_4_light":
+			await _case_light()
 
 		"s0_6_repro":
 			await _case_repro()
@@ -1804,6 +1824,155 @@ func _case_migrate() -> void:
 
 	_saves_end()
 	ok(not DirAccess.dir_exists_absolute(SAVES_BAK), "隔离目录已清走（saves.bak 不存在）")
+	_restore_defaults()
+
+## --- s1_4_longrun -------------------------------------------------------------
+## `A-` 长时间快进：365 游戏日（31 536 000 游戏秒）无溢出、无精度漂移，日期单调、
+## 年月日始终合法。
+##
+## 走的是**真路径**：`_process(delta)` → 余量累加器 → 整秒 `_advance_one_tick()`。
+## 一帧喂 60 现实秒（= 1 游戏小时）纯粹是快进 —— tick 仍然恒为 1 游戏秒，与真机
+## 1/60 帧走同一条浮点路径（"4x == 1x" 的等价性就建立在这条路径上）。31.5M 次 tick
+## 在 GDScript 里是重活，所以日历只在**日边界**检查，失败只记数目、不打印 365 行。
+func _case_longrun() -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	var bus := get_root().get_node_or_null("EventBus")
+	if not ok(gs != null and bus != null, "GameState / EventBus 就位"):
+		return
+
+	section("真实帧长先对齐：600 次 _physics_process(1/60) 恰好 600 游戏秒")
+	_restore_defaults()
+	# 物理帧回调关掉，让下面每一行都是本次调用推进的 —— 否则 `await` 期间引擎自己的
+	# `_physics_process` 也会往前走，数字就对不上"点了多少次"。
+	gs.set_physics_process(false)
+	eq(float(gs.get("game_time")), 0.0, "从第 1 天 00:00 起步")
+	for i in 600:
+		gs.call("_physics_process", 1.0 / 60.0)
+	eq(float(gs.get("game_time")), 600.0, "600 个 1/60 帧 = 600 游戏秒（余量不多不少）")
+	eq(String(gs.call("clock_text")), "第 1 天 00:10", "600 秒 = 第 1 天 00:10")
+
+	section("365 游戏日：31 536 000 tick，日历单调、年月日合法")
+	_restore_defaults()
+	var hour_events := [0]
+	var on_hour := func(_d: int, _t: float) -> void:
+		hour_events[0] += 1
+	bus.connect("time_advanced", on_hour)
+	var bad_day := 0
+	var bad_midnight := 0
+	var bad_calendar := 0
+	var last_day := int(gs.call("game_day"))
+	var year2_seen := false
+	for day in range(2, 367):
+		for h in 24:
+			gs.call("_physics_process", 60.0)
+		var d := int(gs.call("game_day"))
+		if d != last_day + 1:
+			bad_day += 1
+		last_day = d
+		if int(gs.call("hour_of_day")) != 0 or int(gs.call("minute_of_day")) != 0:
+			bad_midnight += 1
+		var mon := int(gs.call("month"))
+		var dom := int(gs.call("day_of_month"))
+		var yr := int(gs.call("year_of_run"))
+		if mon < 1 or mon > 12 or dom < 1 or dom > 30 or yr < 1:
+			bad_calendar += 1
+		if d == 361 and yr == 2 and mon == 1 and dom == 1:
+			year2_seen = true
+	bus.disconnect("time_advanced", on_hour)
+
+	eq(bad_day, 0, "天数逐日 +1（365 个日边界，没有跳天/重复）")
+	eq(bad_midnight, 0, "每个日边界都停在 00:00（整秒累加，没有半秒残留）")
+	eq(bad_calendar, 0, "整年 12 月 × 30 日，年月日始终合法")
+	ok(year2_seen, "第 361 天 = 第 2 年 1 月 1 日（360 日/年）")
+	# 365 × 24 个小时边界，再加上收尾那一 tick（正好是第 366 天的 00:00）也会报一次。
+	eq(int(hour_events[0]), 8761, "每小时一条 time_advanced：365 × 24 + 收尾的 00:00 = 8 761")
+	eq(float(gs.get("game_time")), 31536000.0, "365 日 = 31 536 000 游戏秒，一个字不差")
+	eq(float(gs.get("game_time")), float(int(gs.get("game_time"))), "game_time 仍是整秒（浮点没漂）")
+	ok(bool(gs.call("is_valid_time", float(gs.get("game_time")))), "31.5M 秒仍是合法时刻（远在 2^53 内）")
+	eq(int(gs.call("game_day")), 366, "跑完停在 366 天（第 1 天 + 365 天）")
+	eq(int(gs.call("year_of_run")), 2, "第 2 年")
+	eq(int(gs.call("month")), 1, "1 月")
+	eq(int(gs.call("day_of_month")), 6, "6 日")
+	eq(String(gs.call("clock_text")), "第 366 天 00:00", "读数落在当天零点")
+	eq(String(gs.call("date_text")), "第 2 年 1 月 6 日 00:00", "完整日期合法")
+	eq(int(gs.get("_step_index")), 31536000, "步进计数 == tick 数（没有多跑也没有丢帧）")
+	eq(float(gs.get("playtime")), 525600.0, "playtime 记现实秒：8 760 × 60 = 525 600")
+	gs.set_physics_process(true)
+	_restore_defaults()
+
+
+## --- s1_4_light ---------------------------------------------------------------
+## S1.4d：战略层光照**随游戏时间变化**（S1.4 计划里的「与 DayNight 联动」），且"时钟
+## 派生"与"手动钉相位"落到同一组数值 —— 后者是 `capture.gd` 拍历史板的方式，前者是
+## 玩家看到的东西。两者相等，`B-` 三张时分图才既是"玩家看到的"又能逐位复现。
+func _case_light() -> void:
+	var gs := get_root().get_node_or_null("GameState")
+	if not ok(gs != null, "GameState 就位"):
+		return
+	_restore_defaults()
+	var packed := load(WORLD_SCENE) as PackedScene
+	ok(packed != null, "strategic_map.tscn 可加载")
+	var inst: Node = packed.instantiate()
+	get_root().add_child(inst)
+	await process_frame
+	var dn: Node = inst.get("day_night")
+	if not ok(dn != null, "场景有 DayNight"):
+		inst.queue_free()
+		return
+	ok(bool(dn.get("auto_cycle")), "舞台跟随游戏时钟（S1.4d 联动，不再固定正午）")
+
+	section("三个时刻：读数 / 相位 / 光照，且与手动钉相位逐项相等")
+	var tags := ["04:00", "12:00", "21:00"]
+	var times := [14400.0, 43200.0, 75600.0]
+	var phases := [1.0 / 6.0, 0.5, 0.875]
+	var energy: Array = []
+	var amb: Array = []
+	var elev: Array = []
+	var dirs: Array = []
+	for i in 3:
+		var tag: String = tags[i]
+		var t: float = times[i]
+		var ph: float = phases[i]
+		ok(bool(gs.call("pin_time", t)), "%s 可以钉住" % tag)
+		await process_frame
+		await process_frame
+		eq(String(dn.call("clock_string")), tag, "%s：DayNight 读数跟着游戏时钟" % tag)
+		near(float(dn.get("time_of_day")), ph, 0.0001, "%s：相位 = %.4f" % [tag, ph])
+		var e_auto := float(inst.sun.light_energy)
+		var d_auto: Vector3 = -inst.sun.global_transform.basis.z
+		var a_auto := Color(dn.get("environment").ambient_light_color)
+		var el_auto := float(dn.call("sun_elevation_deg"))
+		# 手动钉同一相位（历史板走的就是这条路）必须落到同一个太阳
+		dn.call("set_auto_cycle", false)
+		dn.call("set_time", ph)
+		near(float(inst.sun.light_energy), e_auto, 0.000001, "%s：时钟派生 == 手动钉住（能量）" % tag)
+		var d_pin: Vector3 = -inst.sun.global_transform.basis.z
+		near(d_pin.x, d_auto.x, 0.0001, "%s：光向 x 一致" % tag)
+		near(d_pin.y, d_auto.y, 0.0001, "%s：光向 y 一致" % tag)
+		near(d_pin.z, d_auto.z, 0.0001, "%s：光向 z 一致" % tag)
+		dn.call("set_auto_cycle", true)
+		energy.append(e_auto)
+		amb.append(a_auto)
+		elev.append(el_auto)
+		dirs.append(d_auto)
+	gs.call("unpin_time")
+
+	section("关键帧语义：正午全天最亮，04:00 / 21:00 是夜光且方位相反")
+	ok(float(energy[1]) > 1.2, "12:00 太阳能量 %.2f（KEYS 正午 1.28）" % float(energy[1]))
+	ok(float(energy[0]) < 0.7 and float(energy[2]) < 0.7,
+			"04:00 / 21:00 是月光档（%.2f / %.2f）" % [float(energy[0]), float(energy[2])])
+	near(float(elev[1]), 74.0, 0.5, "正午仰角顶到上限 74°（全天最高）")
+	# 夜里 `sun_elevation_deg()` 报的是**月光**仰角：太阳落到地平线以下后光翻到对侧、
+	# 弧高按 0.85 压扁，所以是正数且比正午低 —— 这正是「夜不黑、但不假装是白天」。
+	ok(float(elev[1]) > float(elev[0]) and float(elev[1]) > float(elev[2]),
+			"正午的仰角高于两个夜间时刻（%.1f > %.1f / %.1f）" % [float(elev[1]), float(elev[0]), float(elev[2])])
+	near(float(elev[0]), 23.6, 0.3, "04:00 月光仰角 23.6°（太阳几何 −25°，压扁 0.85 后翻正）")
+	near(float(elev[2]), 34.7, 0.3, "21:00 月光仰角 34.7°（同一支压扁的月光弧）")
+	ne(Color(amb[0]).to_html(), Color(amb[2]).to_html(), "04:00 与 21:00 的环境光色不同（不是同一张图）")
+	var dx := absf(float(dirs[0].x) - float(dirs[2].x))
+	ok(dx > 0.05, "04:00 与 21:00 的光向不同（方位翻转，dx = %.3f）" % dx)
+	inst.queue_free()
+	await process_frame
 	_restore_defaults()
 
 func _case_repro() -> void:
@@ -4645,6 +4814,10 @@ func _restore_defaults() -> void:
 	var ss := get_root().get_node_or_null("SaveSystem")
 	if gs != null:
 		gs.call("new_game", 20250929)
+		# 长跑用例会自己关掉物理帧回调（否则 `await` 期间引擎也会推进时钟，数字就对不上
+		# "点了多少次"）。它正常收尾时会开回来，但断言一红就跳过了收尾 —— 所以这里兜底，
+		# 与上面 `paused = false` 同一个理由：全局事实必须由"下一个用例"重置，不能指望上一个。
+		gs.set_physics_process(true)
 	if rng != null:
 		rng.call("seed_from", 20250929)
 	if ss != null:
@@ -6927,8 +7100,22 @@ func _case_strategic_camera() -> void:
 	ok(inst.environment_owner != null and inst.environment_owner.environment != null,
 			"WorldEnvironment 挂了 Environment（天空与雾）")
 	ok(inst.day_night != null, "场景有 DayNight")
-	eq(bool(inst.day_night.auto_cycle), false, "DayNight 自动循环关闭（截图可复现）")
-	near(float(inst.day_night.time_of_day), 0.5, 0.0001, "固定在正午 0.5")
+	# S1.4d：舞台改为**跟随唯一游戏时钟**（计划里的「战略层光照随游戏时间变化」）。
+	# 可复现不再靠"关掉自动循环"，而靠 `pin_time()`：`capture.gd` 与
+	# `strategic_shots.gd` 都钉在 12:00（= 旧的 STAGE_TIME），历史板逐位不变。
+	var gs_light := get_root().get_node_or_null("GameState")
+	ok(bool(inst.day_night.get("auto_cycle")), "DayNight 跟随游戏时钟（S1.4d 光照联动）")
+	# `process_frame` 在节点的 `_process` **之前**发信号，窗口模式的帧排布又比 headless 松，
+	# 所以给一个有界帧数让它收敛。判据没有放宽：仍然是"相位 == 时钟相位"，只是不在
+	# 某一帧的固定位置上取样（那样测的是调度顺序，不是光照联动）。
+	var want := float(gs_light.call("time_of_day"))
+	for i in 12:
+		if is_equal_approx(float(inst.day_night.get("time_of_day")), want):
+			break
+		await process_frame
+	near(float(inst.day_night.time_of_day), want, 0.0001,
+			"帧内收敛后相位 == GameState.time_of_day()（树暂停=%s，节点在跑=%s）"
+			% [str(paused), str(inst.day_night.is_processing())])
 	inst.queue_free()
 	await process_frame
 

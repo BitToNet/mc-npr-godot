@@ -76,6 +76,11 @@ func _run() -> void:
 	var state := get_root().get_node_or_null("GameState")
 	if state != null:
 		state.set("world_seed", _seed)
+		# S1.4d — 战略层现在跟随游戏时钟（`auto_cycle` 打开），每秒换一次相位。探针量的是
+		# "这张地图画一帧多少钱"，把 1 Hz 的换相位夹进来会让数字与 S1.2d 的历史值不同口径，
+		# 而且它只让"空天空"那档（本来最快、最敏感）掉得更多，反向对照的 1.5 倍判据就飘了。
+		# 钉住时钟 = 量稳态场景，与历史数字同一条尺子。
+		state.call("pin_time", 43200.0)
 	var ps := load(MAP_SCENE) as PackedScene
 	var map := ps.instantiate() as Node3D
 	get_root().add_child(map)
