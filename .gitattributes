@@ -1,0 +1,4 @@
+# 唯一明文表（data/i18n/strings.csv）必须是 LF：`s1_5_i18n` 直接断言"LF、无 BOM、末尾
+# 恰好一个换行"。本机 `core.autocrlf=true`，签出时会把 CSV 改写成 CRLF ⇒ 新克隆一落地
+# 用例就红。这里按路径钉死行尾，不靠每个人的全局配置。
+data/i18n/*.csv text eol=lf
