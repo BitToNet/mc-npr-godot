@@ -39,10 +39,12 @@ const KIND_FORTRESS := "fortress"
 ## Order matters: villages are placed first, so the 12 cheap points fill the map
 ## before the 4 towns and 4 fortresses claim the good remaining spots.
 const KINDS := [KIND_VILLAGE, KIND_TOWN, KIND_FORTRESS]
-const KIND_LABELS := {
-	KIND_VILLAGE: "村庄",
-	KIND_TOWN: "城镇",
-	KIND_FORTRESS: "要塞",
+## 显示名一律走 key（S1.5a）：明文只允许出现在 `data/i18n/strings.csv`。
+## 这三条是"生成聚落"的标签，`name_number` 拼在后面（"村庄 3"）。
+const KIND_KEYS := {
+	KIND_VILLAGE: "SETTLEMENT_KIND_VILLAGE",
+	KIND_TOWN: "SETTLEMENT_KIND_TOWN",
+	KIND_FORTRESS: "SETTLEMENT_KIND_FORTRESS",
 }
 ## Parameter-table keys per kind (`villages` / `towns` / `fortresses` — plural in
 ## the table, singular in the code).
@@ -68,7 +70,7 @@ const MAP_MARGIN := 80.0
 const PARTY_RING_MIN := 40.0
 const PARTY_RING_MAX := 200.0
 ## Faction colour slots; the renderer (S1.2) maps these onto `Style.PALETTE`.
-const FACTION_NAMES := ["青岚盟", "赤砂部", "白霜庭"]
+const FACTION_KEYS := ["FACTION_QINGLAN", "FACTION_CHISHA", "FACTION_BAISHUANG"]
 
 var world_seed: int
 var params: Dictionary
@@ -145,14 +147,25 @@ func fingerprint() -> String:
 	var parts := PackedStringArray()
 	parts.append("seed=%d" % world_seed)
 	for s in settlements:
-		parts.append("s:%s|%s|%.3f|%.3f|%d|%s" % [String(s["id"]), String(s["kind"]),
-				float(s["x"]), float(s["z"]), int(s["faction"]), String(s["name"])])
+		parts.append("s:%s|%s|%.3f|%.3f|%d|%s|%d" % [String(s["id"]), String(s["kind"]),
+				float(s["x"]), float(s["z"]), int(s["faction"]), String(s["name_key"]),
+				int(s["name_number"])])
 	for r in roads:
 		parts.append("r:%s|%s|%.3f" % [String(r["a"]), String(r["b"]), float(r["length"])])
 	for p in parties:
 		parts.append("p:%s|%d|%.3f|%.3f" % [String(p["id"]), int(p["faction"]),
 				float(p["x"]), float(p["z"])])
 	return "\n".join(parts)
+
+
+## 显示名（S1.5a）：数据层只存 key，把 key 变成字是 UI 的事，但这里是唯一知道
+## "聚落名 = key + 编号"这条契约的地方，所以在数据层给出一个显式入口。
+func settlement_label(s: Dictionary) -> String:
+	return L10n.text(String(s["name_key"]), int(s.get("name_number", 0)))
+
+
+func faction_label(f: Dictionary) -> String:
+	return L10n.text(String(f["name_key"]))
 
 
 # --- serialisation + macro indicators (S1.1d) -------------------------------
@@ -255,7 +268,8 @@ func to_dict() -> Dictionary:
 		out["settlements"].append({
 			"id": String(s["id"]),
 			"kind": String(s["kind"]),
-			"name": String(s["name"]),
+			"name_key": String(s["name_key"]),
+			"name_number": int(s["name_number"]),
 			"x": float(s["x"]),
 			"z": float(s["z"]),
 			"region": int(s["region"]),
@@ -271,7 +285,7 @@ func to_dict() -> Dictionary:
 	for f in _sorted_by(factions, "id"):
 		out["factions"].append({
 			"id": String(f["id"]),
-			"name": String(f["name"]),
+			"name_key": String(f["name_key"]),
 			"color_index": int(f["color_index"]),
 			"capital": String(f["capital"]),
 		})
@@ -339,7 +353,11 @@ func _place_anchors() -> void:
 		var anchor: Dictionary = entry
 		var id := String(anchor.get("id", ""))
 		var kind := String(anchor.get("kind", ""))
-		var name := String(anchor.get("name", id))
+		var name_key := String(anchor.get("name_key", ""))
+		if name_key.is_empty():
+			# 数据表只存 key（S1.5a）。缺 key 时按 id 生成一个，告警一次，别静默显示空名。
+			name_key = "SETTLEMENT_" + id.to_upper()
+			warnings.append("锚点 `%s` 缺少 `name_key`：按 id 回退为 `%s`" % [id, name_key])
 		if id.is_empty():
 			warnings.append("锚点缺少 `id`：跳过（无法作为稳定标识）")
 			continue
@@ -369,7 +387,8 @@ func _place_anchors() -> void:
 		settlements.append({
 			"id": id,
 			"kind": kind,
-			"name": name,
+			"name_key": name_key,
+			"name_number": 0,
 			"x": x,
 			"z": z,
 			"region": regions.region_at(x, z),
@@ -386,14 +405,13 @@ func _place_generated() -> void:
 	for kind in KINDS:
 		var want := int(quotas.get(kind, 0))
 		for i in range(want):
-			var label := String(KIND_LABELS[kind])
-			if _try_place(kind, "%s %d" % [label, i + 1]):
+			if _try_place(kind, String(KIND_KEYS[kind]), i + 1):
 				continue
 			warnings.append("`%s` 第 %d 个在 %d 次内找不到落点（间距 %.0f m / 坡度上限 %.2f）：按实际数量降级"
 					% [kind, i + 1, MAX_PLACE_TRIES, spacing(), slope_limit()])
 
 
-func _try_place(kind: String, name: String) -> bool:
+func _try_place(kind: String, name_key: String, name_number: int) -> bool:
 	var limit := half_size() - MAP_MARGIN
 	for _attempt in range(MAX_PLACE_TRIES):
 		var x := stream.randf_range(-limit, limit)
@@ -405,7 +423,8 @@ func _try_place(kind: String, name: String) -> bool:
 		settlements.append({
 			"id": "%s_%d" % [kind, _next_serial(kind)],
 			"kind": kind,
-			"name": name,
+			"name_key": name_key,
+			"name_number": name_number,
 			"x": x,
 			"z": z,
 			"region": regions.region_at(x, z),
@@ -501,7 +520,7 @@ func _assign_factions() -> void:
 	for i in range(picked.size()):
 		factions.append({
 			"id": "faction_%d" % i,
-			"name": String(FACTION_NAMES[i % FACTION_NAMES.size()]),
+			"name_key": String(FACTION_KEYS[i % FACTION_KEYS.size()]),
 			"color_index": i,
 			"capital": String(picked[i]["id"]),
 		})
@@ -768,7 +787,7 @@ static func load_anchors(path: String = PATH) -> Dictionary:
 		anchors.append({
 			"id": id,
 			"kind": kind,
-			"name": String(anchor.get("name", id)),
+			"name_key": String(anchor.get("name_key", "")),
 			"x": x,
 			"z": z,
 		})

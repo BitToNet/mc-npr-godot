@@ -3,21 +3,21 @@
     {
       "id": "fortress_seat",
       "kind": "fortress",
-      "name": "北岬堡",
+      "name_key": "SETTLEMENT_FORTRESS_SEAT",
       "x": -780,
       "z": 564
     },
     {
       "id": "town_seat",
       "kind": "town",
-      "name": "云顶城",
+      "name_key": "SETTLEMENT_TOWN_SEAT",
       "x": 308,
       "z": 308
     },
     {
       "id": "village_seat",
       "kind": "village",
-      "name": "东风村",
+      "name_key": "SETTLEMENT_VILLAGE_SEAT",
       "x": 628,
       "z": -76
     }

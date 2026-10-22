@@ -9,6 +9,9 @@ export_presets.cfg
 
 # Imported translations (generated from CSV)
 *.translation
+# 本项目不走编辑器导入：data/i18n/strings.csv 由 scripts/core/l10n.gd 在运行时读取，
+# *.csv.import 与 *.translation 都是编辑器顺手生成的派生物，不入库。
+*.csv.import
 
 # Mono / C# build artifacts
 .mono/
