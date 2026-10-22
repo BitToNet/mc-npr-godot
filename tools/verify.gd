@@ -39,6 +39,11 @@ extends SceneTree
 
 const REPORT_DIR := "res://.verify"
 
+## `Style` 的常量/静态函数（S1.5b 起用例要查势力色槽）。**preload 脚本而不是引用
+## autoload 标识符**：`--script` 模式编译期没有 `Style` 这个名字（同 `party_marker.gd`
+## 文件头记的坑）。
+const StyleDef := preload("res://scripts/core/style.gd")
+
 ## 产品主场景路径（S1.0d 起）＝ 路由 `world` 的目标：战略图（S1.2b 起有地形，仍无相机）。
 ##
 ## 为什么在这里留一个字面量而不是从 `SceneRouter` 读：本文件要能**独立**发现
@@ -163,6 +168,15 @@ const CASES := {
 		"desc": "文案 key 化（S1.5a）：`data/i18n/strings.csv` 是唯一明文表（键升序、无重复、值非空、"
 				+ "LF 无 BOM）、`L10n` 把它注册成引擎翻译（真 `tr()` 可查）、聚落/势力只存 key 且全部可解析、"
 				+ "生成聚落渲染成「村庄 3」、缺 key 回退并只告警一次、`data/**` 里除该 CSV 外零中文明文",
+		"kind": "pure",
+	},
+	"s1_5_markers": {
+		"desc": "聚落标记与进入范围（S1.5b）：20 枚棋子一枚聚落一枚（12 村 / 4 镇 / 4 要塞、名字唯一）、"
+				+ "三型轮廓可区分（高度层级单调、三型面数两两不同、只用圆柱/圆锥/球、无方块）、每枚单一 surface 且"
+				+ "描边挂在 next_pass、基座 min_y=0 且落点 y ≡ height_at；势力色出自 `Style.FACTION_TINT_KEYS`"
+				+ "（与玩家棋子同一张表，换势力变颜色不变几何）；90 m 边界 ±0.1 m 分别可/不可交互、焦点最近者胜；"
+				+ "范围内按 Enter 弹灰底「未开放」并 2 秒后自动收回、范围外不给假反馈；Enter 只绑两个键且不抢相机键；"
+				+ "单遍 7 320 三角、同 seed 两次建层逐字一致、换 seed 必变",
 		"kind": "pure",
 	},
 	"s0_6_repro": {
@@ -337,7 +351,7 @@ const CASES := {
 		"kind": "pure",
 	},
 	"s1_3_move": {
-		"desc": "移动积分与点击移动（S1.3c）：场景根长到 6 个子节点、队伍落在 parties[0] 且脚底贴地；"
+		"desc": "移动积分与点击移动（S1.3c）：场景根长到 9 个子节点、队伍落在 parties[0] 且脚底贴地；"
 				+ "24 m/s / 300°/s / 6 m / ±12° 这四组数值从参数表生效；屏幕点拾取回地面误差 ≤ 1 m；"
 				+ "60 s × 3600 帧轨迹逐帧断言（贴地 ≤ 0.02 m、位移 ≡ 速度 × dt ≤ 1 mm、帧间转角 ≤ 300°/s×dt、"
 				+ "零 NaN、零帧进水、俯仰不超 12° 且确实随地形起伏）；到达后 1 s 静止、改令不回弹、"
@@ -354,7 +368,7 @@ const CASES := {
 	},
 	"s1_2_perf": {
 		"desc": "战略图分档帧率（C-）：vsync 关闭下三档（2600 / 700 / 170 m）平均帧率均 ≥ 60 fps，"
-				+ "全球档三角面 = 18 032（地形 16 920 + 棋子 1 112）且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
+				+ "全球档三角面 = 32 672（地形 16 920 + 队伍 1 112 + 20 枚聚落 14 640）且不超 34 611 上限、绘制调用 ≤ 120；反向对照『隐藏地图后"
 				+ "帧率 > 最慢档 × 1.5』证明采样器能分辨地图与空天空；外加 B- 取景工具接线"
 				+ "（--seed= / --tier= 的 build() 真的换了世界与档位）",
 		"kind": "headed",
@@ -749,6 +763,8 @@ func _dispatch(id: String) -> void:
 			await _case_light()
 		"s1_5_i18n":
 			await _case_i18n()
+		"s1_5_markers":
+			await _case_markers()
 
 		"s0_6_repro":
 			await _case_repro()
@@ -1670,7 +1686,7 @@ func _case_hud() -> void:
 	eq(int((bar as CanvasLayer).process_mode), Node.PROCESS_MODE_ALWAYS,
 		"时间条 PROCESS_MODE_ALWAYS：暂停时按钮还点得动，否则按一下就再也点不到「继续」")
 	eq(int((bar as CanvasLayer).layer), 10, "层号 10，压在 3D 之上")
-	ok(inst.get_node_or_null("TimeBar") != null, "时间条挂在场景根上（第 7 个子节点）")
+	ok(inst.get_node_or_null("TimeBar") != null, "时间条挂在场景根上（第 8 个子节点）")
 	
 	section("默认状态：1x + 未暂停 + 读数等于 date_text()")
 	bar.call("refresh")
@@ -2049,7 +2065,7 @@ func _case_i18n() -> void:
 		if line.substr(cut + 1).strip_edges().is_empty():
 			bad_rows.append(i + 1)
 	eq(bad_rows, [], "每一行都是「key,非空文案」（坏行：%s）" % str(bad_rows))
-	eq(keys_seen.size(), 9, "键 9 条")
+	eq(keys_seen.size(), 13, "键 13 条（S1.5a 的 9 条 + S1.5b 的 4 条提示条文案）")
 	var sorted_keys := keys_seen.duplicate()
 	sorted_keys.sort()
 	eq(keys_seen, sorted_keys, "键按升序排列（人读 diff 时不会因为顺序抖动）")
@@ -4017,12 +4033,17 @@ func _case_router() -> void:
 	# 抬到 6，并且**加**三条能力断言（队伍在、棋子贴地、自带行军图），不是简单改数字。
 	# 判据第四次迁移（S1.4b）：根多了第 7 个子节点 `TimeBar`（时间条）。同样不是只改
 	# 数字 —— 下面加了「时间条是 CanvasLayer 且在 #hud 组」两条能力断言。
-	ok(String(base_fp).begins_with("StrategicMap:Node3D:7|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
-			"结构指纹形如『根 → 地形 → 块容器』且根有 7 个子节点：%s" % String(base_fp).substr(0, 72))
+	# 判据第五次迁移（S1.5b）：根多了第 8 个子节点 `SettlementLayer`（20 枚聚落标记）与第 9 个
+	# `SettlementPrompt`（底部提示条）。下面同样**加**了能力断言（20 枚、贴地、势力色出自同一张表、
+	# 提示条在 #hud 组），不是简单改数字。
+	ok(String(base_fp).begins_with("StrategicMap:Node3D:9|StrategicTerrain:Node3D:1|Chunks:Node3D:"),
+			"结构指纹形如『根 → 地形 → 块容器』且根有 9 个子节点：%s" % String(base_fp).substr(0, 72))
 	contains(base_fp, "StrategicCamera:Node3D:1|Camera3D:Camera3D",
 			"结构指纹里有相机（S1.2c 的交付物）")
 	contains(base_fp, "PartyLayer:Node3D:1|PartyMarker:Node3D:",
 			"结构指纹里有队伍棋子（S1.3c 的交付物）")
+	contains(base_fp, "SettlementLayer:Node3D:20|S_",
+			"结构指纹里有聚落层与它下面的 20 枚棋子（S1.5b 的交付物）")
 	contains(base_fp, "TimeBar:CanvasLayer",
 			"结构指纹里有时间条（S1.4b 的交付物）")
 	var terr: Node = current_scene.get_node_or_null("StrategicTerrain")
@@ -4034,8 +4055,10 @@ func _case_router() -> void:
 	if vp != null:
 		cams = vp.get_camera_3d()
 	ok(cams != null, "视口里有 current 相机（画面不再全黑）")
-	eq(current_scene.get_child_count(), 7,
-			"根 7 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机 + 队伍 + 时间条（S1.4b）")
+	contains(base_fp, "SettlementPrompt:CanvasLayer",
+			"结构指纹里有聚落提示条（S1.5b 的交付物）")
+	eq(current_scene.get_child_count(), 9,
+			"根 9 个子节点：地形 + WorldEnvironment + Sun + DayNight + 相机 + 队伍 + 聚落 + 时间条 + 提示条")
 	ok(current_scene.get_node_or_null("Sun") != null, "世界有 Sun（固定正午）")
 	ok(current_scene.get_node_or_null("WorldEnvironment") != null, "世界有 WorldEnvironment")
 	# S1.3c 第三次迁移的能力断言：队伍在、棋子贴地、自带行军图。
@@ -4053,6 +4076,14 @@ func _case_router() -> void:
 		near(float(party_marker.position.y),
 				float(wsession.field.height_at(float(pw.get("x", 0.0)), float(pw.get("z", 0.0)))),
 				0.001, "队伍脚底贴地（与 height_at 一致）")
+	# S1.5b 的能力断言（第五次迁移的配套）：聚落层在、20 枚棋子全贴地、提示条进了 #hud。
+	var settle_layer: Node = current_scene.get_node_or_null("SettlementLayer")
+	ok(settle_layer != null, "世界有 SettlementLayer（S1.5b 的交付物）")
+	var srep: Dictionary = current_scene.call("settlement_report")
+	eq(int(srep.get("count", 0)), 20, "聚落层建出 20 枚棋子（与世界数据一致）")
+	eq(Array(srep.get("ungrounded", [])), [], "每枚棋子的基座底面都贴地（min_y = 0）")
+	eq(String((srep.get("prompt", {}) as Dictionary).get("group", "")), "hud",
+			"聚落提示条在 #hud 组（F1 能把它一起隐藏）")
 	var chunk_n := 0
 	var mesh_n := 0
 	if terr != null:
@@ -7108,7 +7139,7 @@ func _case_strategic_mesh() -> void:
 	ne(_terrain_signature(t3), sig, "换 seed 几何必变（反向对照）")
 	ne(int(t3.stats["max_y"]), int(st["max_y"]), "换 seed 最高点不同")
 
-	section("场景接线：地形 + 舞台 + 相机 + 队伍 + 时间条（S1.4b 后根有 7 个子节点）")
+	section("场景接线：地形 + 舞台 + 相机 + 队伍 + 聚落 + 时间条 + 提示条（S1.5b 后根有 9 个子节点）")
 	rng.call("seed_from", 20250929)
 	var ps := load(WORLD_SCENE) as PackedScene
 	ok(ps != null, "strategic_map.tscn 可加载")
@@ -7116,8 +7147,9 @@ func _case_strategic_mesh() -> void:
 	get_root().add_child(inst)
 	await process_frame
 	ok(inst.terrain != null, "场景建出了 StrategicTerrain")
-	eq(inst.get_child_count(), 7, "根 7 个子节点：地形 + 舞台三件 + 相机 + 队伍 + 时间条")
+	eq(inst.get_child_count(), 9, "根 9 个子节点：地形 + 舞台三件 + 相机 + 队伍 + 聚落 + 时间条 + 提示条")
 	ok(inst.get("party") != null, "场景建出了 PartyLayer")
+	ok(inst.get("settlements") != null, "场景建出了 SettlementLayer")
 	eq(String(inst.get_child(0).name), "StrategicTerrain", "第一个子节点仍是地形")
 	var sc: Dictionary = inst.terrain_stats()
 	eq(int(sc.get("land_tris", 0)), 11250, "场景里的地形也是 11 250 三角")
@@ -7363,13 +7395,15 @@ func _case_strategic_perf() -> void:
 			global_draws = int(row.get("draw_calls", 0))
 		le(float(prims), 34611.0, "%s 档三角面 %d 不超 C- 上限 34 611" % [tier_name, prims])
 	# S1.3a 起地图上常驻队伍棋子：556 三角 + 反向外壳描边第二遍 = 1 112。这里量的是
-	# **渲染器面数**（整视口），所以全球档是地形 16 920 + 棋子 1 112 = 18 032；地形网格
-	# 自身的 11 250 仍由 `s1_2_mesh` 单独钉住，两条断言各管一件事。S1.4b 起地图上还有
-	# 时间条（HUD）：`perf_map.gd` 采样前隐藏 `#hud` 组，所以这条数字**仍然只数 3D**——
-	# 字体光栅的面数随平台变化，不能混进这条断言。
-	eq(global_prims, 18032,
-			"全球档三角面 %d = 地形 16 920（陆 11 250 + 水 4 470 + 裙边 1 200）+ 棋子 1 112"
-					% global_prims)
+	# **渲染器面数**（整视口），所以全球档是 地形 16 920 + 队伍棋子 1 112 + 聚落棋子 14 640
+	# = 32 672；地形网格自身的 11 250 仍由 `s1_2_mesh` 单独钉住，两条断言各管一件事。
+	# S1.5b 起地图上还有 20 枚聚落标记：7 320 三角 × 2（描边）= 14 640，按 12 村 / 4 镇 /
+	# 4 要塞的固定配比算出来，每种棋子的面数由 `s1_5_markers` 各自钉住（改外形要两处一起改，
+	# 否则这条数字会先炸 —— 这正是想要的：整视口面数不许在没人注意的时候漂移）。
+	# S1.4b 起地图上还有时间条（HUD）：`perf_map.gd` 采样前隐藏 `#hud` 组，所以这条数字
+	# **仍然只数 3D** —— 字体光栅的面数随平台变化，不能混进这条断言。
+	eq(global_prims, 32672,
+			"全球档三角面 %d = 地形 16 920 + 队伍 1 112 + 20 枚聚落 14 640" % global_prims)
 	le(float(global_draws), 120.0, "全球档绘制调用 %d ≤ 120（分块没有把批次数炸掉）" % global_draws)
 	var empty: Dictionary = r.get("empty", {})
 	var empty_fps := float(empty.get("fps_mean", 0.0))
@@ -7641,8 +7675,8 @@ func _case_party_marker() -> void:
 			"face_to_point 与 face_towards 同源")
 
 	section("阵营：4 个阵营都能换色，且不重建几何（换色只改顶点色）")
-	var keys := PartyMarker.FACTION_KEYS.size()
-	eq(keys, 4, "阵营表 4 项")
+	var keys := StyleDef.FACTION_TINT_KEYS.size()
+	eq(keys, 4, "阵营表 4 项（与聚落标记共用 `Style.FACTION_TINT_KEYS`）")
 	var v0 := int(mt["verts"])
 	for f in keys:
 		marker.set_faction(f)
@@ -7661,6 +7695,272 @@ func _case_party_marker() -> void:
 	eq(int(mt2["smooth_verts"]), int(mt["smooth_verts"]), "平滑顶点数一致")
 	twin.free()
 	marker.free()
+
+
+## S1.5b：聚落标记、势力归属色、进入范围可交互、未开放反馈。
+##
+## 断言的骨气在于**每一条都指向一个能坏的地方**：
+##   ① 20 枚棋子是不是真的建出来了（不是"循环跑过了"）；
+##   ② 三型轮廓是否**可区分**（高度层级 + 面积层级），而不是同一个模子换颜色；
+##   ③ 势力色是否出自与玩家棋子**同一张表**（两处各写一份键序就会漂移）；
+##   ④ 贴地是不是真的贴（`min_y = 0` 与 `position.y = height_at` 两条合起来才算）；
+##   ⑤ 90 m 边界的两侧是否分别可交互 / 不可交互（±0.1 m，不是"大概"）；
+##   ⑥ 「未开放」是不是**看得见**（灰底 + 明确文案 + 2 秒后自己收回去）。
+## 三角预算那一条与 `s1_2_perf` 的整视口面数互为对账：这里钉"一枚多少"，那里钉"一共多少"。
+func _case_markers() -> void:
+	var rng: Node = get_root().get_node("Rng")
+	rng.call("seed_from", 20250929)
+	var s := WorldSession.boot(rng, 20250929)
+	ok(s.ok, "前置：世界建成（20 个聚落 + 高度场）")
+	eq(s.data.settlements.size(), 20, "前置：世界有 20 个聚落")
+
+	section("建层：20 枚棋子，一枚聚落一枚棋子，名字唯一")
+	var layer := SettlementLayer.new()
+	ok(layer.setup(s.field, s.data), "SettlementLayer.setup() 建齐了棋子")
+	eq(layer.markers.size(), 20, "20 枚棋子")
+	var names := {}
+	var id_ok := 0
+	for m in layer.markers:
+		names[String(m.name)] = true
+		if layer.marker_for(m.settlement_id) == m:
+			id_ok += 1
+	eq(names.size(), 20, "节点名互不相同（否则 add_child 会改名，指纹就跟着抖）")
+	eq(id_ok, 20, "按 id 都能找回到自己（编号与棋子一一对应）")
+
+	section("三型轮廓：村庄 < 城镇 < 要塞，且都只用圆润多面体")
+	var by_kind := {"village": [], "town": [], "fortress": []}
+	for m in layer.markers:
+		var k := String(m.kind)
+		ok(by_kind.has(k), "种类 %s 在已知三型里" % k)
+		if by_kind.has(k):
+			(by_kind[k] as Array).append(m)
+	eq((by_kind["village"] as Array).size(), 12, "12 个村庄（与 gen_params 的配比一致）")
+	eq((by_kind["town"] as Array).size(), 4, "4 个城镇")
+	eq((by_kind["fortress"] as Array).size(), 4, "4 个要塞")
+	var h := {}
+	var avg_tris := {}
+	for k in ["village", "town", "fortress"]:
+		var tallest := 0.0
+		var total := 0
+		for m in by_kind[k]:
+			var mt: Dictionary = m.metrics()
+			tallest = maxf(tallest, float((mt["size"] as Vector3).y))
+			total += int(mt["tris"])
+			# 造型守卫：只用这三类生成器（+ 旗鳍），一个方块都没有。
+			var gens: Array = mt["generators"]
+			for g in gens:
+				ok(["tapered_cylinder", "cone", "blob", "fin"].has(String(g)),
+						"%s 的零件生成器 `%s` 属圆润多面体（无方块）" % [String(m.settlement_id), String(g)])
+			le(float((mt["size"] as Vector3).y), float(mt["height"]),
+					"%s 的实测高度不超过该型的标称高度 %.1f m" % [k, float(mt["height"])])
+			le(float(mt["tris"]), 600.0, "%s 的三角数 %d ≤ 600" % [k, int(mt["tris"])])
+			ge(float(mt["tris"]), 120.0, "%s 的三角数 %d ≥ 120（不是空壳）" % [k, int(mt["tris"])])
+			eq(int(mt["surfaces"]), 1, "%s 单一 surface" % k)
+		h[k] = tallest
+		avg_tris[k] = float(total) / float((by_kind[k] as Array).size())
+	ok(float(h["village"]) < float(h["town"]) and float(h["town"]) < float(h["fortress"]),
+			"高度层级可读：村庄 %.1f < 城镇 %.1f < 要塞 %.1f m"
+					% [float(h["village"]), float(h["town"]), float(h["fortress"])])
+	# 面数**不跟高度同向**（要塞是"瘦高"：三角集中在塔身与垛口，城镇摊得更开），所以这里
+	# 不断言大小关系，只断言三型两两不同 —— 证明不是同一个模子换颜色。
+	ne(float(avg_tris["village"]), float(avg_tris["town"]),
+			"村庄与城镇不是同一个模子（%.0f vs %.0f 三角/枚）"
+					% [float(avg_tris["village"]), float(avg_tris["town"])])
+	ne(float(avg_tris["town"]), float(avg_tris["fortress"]),
+			"城镇与要塞不是同一个模子（%.0f vs %.0f 三角/枚）"
+					% [float(avg_tris["town"]), float(avg_tris["fortress"])])
+	ne(float(avg_tris["village"]), float(avg_tris["fortress"]),
+			"村庄与要塞不是同一个模子（%.0f vs %.0f 三角/枚）"
+					% [float(avg_tris["village"]), float(avg_tris["fortress"])])
+
+	section("描边：每枚都挂了反向外壳，切线槽写的是平滑法线")
+	for m in layer.markers:
+		var mt: Dictionary = m.metrics()
+		ok(bool(mt["outline"]), "%s 的 next_pass = outline.gdshader 且 enabled=1" % k_name(mt))
+		ge(float(mt["smooth_verts"]), 8.0,
+				"%s 有 %d 个顶点的切线 ≠ 面法线（外壳连得成一张皮）"
+						% [k_name(mt), int(mt["smooth_verts"])])
+
+	section("贴地：基座底面 min_y = 0，落点 y ≡ height_at")
+	var worst := 0.0
+	var worst_id := ""
+	var ungrounded: Array = []
+	for m in layer.markers:
+		var mt: Dictionary = m.metrics()
+		if absf(float(mt["min_y"])) > 1e-4:
+			ungrounded.append(String(mt["id"]))
+		var d := absf(float(m.position.y) - float(s.field.height_at(float(m.position.x), float(m.position.z))))
+		if d > worst:
+			worst = d
+			worst_id = String(mt["id"])
+	eq(ungrounded, [], "每枚棋子的 min_y 都 ≈ 0（基座底面就在原点平面）")
+	ok(worst < 0.0001, "落点 y 与 height_at 最大偏差 %.7f m（%s）" % [worst, worst_id])
+	eq(Array(layer.report()["ungrounded"]), [], "report() 自报没有悬空棋子")
+
+	section("势力色：与玩家棋子同一张表（`Style.FACTION_TINT_KEYS`）")
+	eq(StyleDef.FACTION_TINT_KEYS.size(), 4, "色槽 4 项")
+	var seen_keys := {}
+	var seen_factions := {}
+	for m in layer.markers:
+		var f := int(m.faction)
+		seen_factions[f] = true
+		eq(String(m.faction_key()), StyleDef.faction_tint_key(f),
+				"%s 的色槽取自 `Style.faction_tint_key(%d)`" % [String(m.settlement_id), f])
+		eq(m.faction_tint(), StyleDef.faction_tint(f), "顶点色 = `Style.faction_tint(%d)`" % f)
+		seen_keys[String(m.faction_key())] = true
+	ge(float(seen_factions.size()), 2.0, "至少两个势力在图上（%d 个）" % seen_factions.size())
+	eq(seen_keys.size(), seen_factions.size(), "不同势力 = 不同色槽（没有两势力撞色）")
+	eq(StyleDef.faction_tint_key(-1), "plinth", "未归属（-1）落到最后一槽（与旧行为等价）")
+	# A- 的第二条：势力变了，颜色必须跟着变，但几何不能重建。
+	var probe: SettlementMarker = layer.markers[0]
+	var tris_before := int(probe.metrics()["tris"])
+	var tint_before := probe.faction_tint()
+	probe.set_faction((int(probe.faction) + 1) % 4)
+	ne(probe.faction_tint(), tint_before, "换势力 → 颜色变了")
+	eq(int(probe.metrics()["tris"]), tris_before, "换势力不重建几何（三角数不变）")
+	probe.set_faction(int((s.data.settlements[0] as Dictionary)["faction"]))
+	eq(probe.faction_tint(), tint_before, "换回来 → 颜色回到原样（不是单向漂移）")
+
+	section("交互范围：90 m 边界两侧")
+	ok(SettlementLayer.INTERACT_RADIUS > 0.0, "交互半径 %.1f m" % SettlementLayer.INTERACT_RADIUS)
+	# 挑一个"离最近邻居最远"的聚落：边界测试点旁边不能有另一枚棋子更近，否则测的是别人。
+	var target: Dictionary = {}
+	var away := Vector2.ZERO
+	var best_gap := -1.0
+	for cand in s.data.settlements:
+		var near_d := INF
+		var near_at := Vector2.ZERO
+		for other in s.data.settlements:
+			if String(other["id"]) == String(cand["id"]):
+				continue
+			var dd := Vector2(float(cand["x"]) - float(other["x"]),
+					float(cand["z"]) - float(other["z"])).length()
+			if dd < near_d:
+				near_d = dd
+				near_at = Vector2(float(other["x"]), float(other["z"]))
+		if near_d > best_gap:
+			best_gap = near_d
+			target = cand
+			away = (Vector2(float(cand["x"]), float(cand["z"])) - near_at).normalized()
+	ok(not target.is_empty(), "找到一个最孤立的聚落：%s（最近邻居 %.1f m）"
+			% [String(target.get("id", "")), best_gap])
+	ok(best_gap > SettlementLayer.INTERACT_RADIUS,
+			"最近邻居 %.1f m > 交互半径 %.1f m（边界两侧不会撞上另一枚棋子）"
+					% [best_gap, SettlementLayer.INTERACT_RADIUS])
+	var tx := float(target["x"])
+	var tz := float(target["z"])
+	var at_door := layer.focus_at(tx, tz)
+	eq(String(at_door.get("id", "")), String(target["id"]), "站在聚落上，焦点就是它")
+	near(float(at_door.get("distance", -1.0)), 0.0, 0.001, "距离 0")
+	ok(bool(at_door.get("in_range", false)), "站在聚落上 → 进入范围")
+	var inside := layer.focus_at(tx + away.x * (SettlementLayer.INTERACT_RADIUS - 0.1),
+			tz + away.y * (SettlementLayer.INTERACT_RADIUS - 0.1))
+	ok(bool(inside.get("in_range", false)), "半径内 0.1 m → 可交互")
+	var outside := layer.focus_at(tx + away.x * (SettlementLayer.INTERACT_RADIUS + 0.1),
+			tz + away.y * (SettlementLayer.INTERACT_RADIUS + 0.1))
+	ok(not bool(outside.get("in_range", false)), "半径外 0.1 m → 不可交互")
+	eq(String(outside.get("id", "")), String(target["id"]),
+			"半径外仍然报最近的聚落（提示条不说谎：它只是不能进）")
+	# 焦点永远唯一：最近的那个说了算。用最孤立的那枚做反向对照 —— 往它的邻居方向
+	# 站 1 m（此时它仍是最近的 1 m，邻居至少 409 m），焦点必须还是它；站到邻居脚下
+	# 焦点就必须换人。两点都断言，才证明"最近者胜"不是"永远选第一枚"。
+	var toward := -away
+	var near_target := layer.focus_at(tx + toward.x, tz + toward.y)
+	eq(String(near_target.get("id", "")), String(target["id"]),
+			"站在目标旁边 1 m → 焦点仍是它（最近者胜）")
+	var other_focus := layer.focus_at(float(target["x"]) + toward.x * best_gap * 1.01,
+			float(target["z"]) + toward.y * best_gap * 1.01)
+	ne(String(other_focus.get("id", "")), String(target["id"]),
+			"越过邻居站定 → 焦点换人（不是永远选第一枚）")
+
+	section("未开放：按 Enter 是看得见的灰底，而不是没反应")
+	var prompt = load("res://scripts/ui/settlement_prompt.gd").new()
+	get_root().add_child(prompt)
+	await process_frame
+	# 关掉引擎驱动的 `_process`：停留时长要由用例自己数帧，否则断言会随机器快慢漂。
+	prompt.set_process(false)
+	prompt.call("refresh", at_door)
+	ok(bool(prompt.get("visible")), "范围内 → 提示条出现")
+	var rep: Dictionary = prompt.call("report")
+	contains(String(rep["main"]), L10n.text("UI_SETTLEMENT_ENTER"), "提示条写着「进入」")
+	contains(String(rep["main"]), String(at_door.get("label", "")), "提示条写着聚落名")
+	eq(String(rep["sub"]), L10n.text("UI_SETTLEMENT_KEY_HINT"), "右边写着按键")
+	eq(String(rep["group"]), "hud", "在 #hud 组（F1 能一起隐藏）")
+	var pressed: Dictionary = prompt.call("press")
+	ok(bool(pressed.get("ok", false)), "范围内按 Enter 有回应")
+	eq(String(pressed.get("reason", "")), "locked", "回应是「未开放」，不是「打开面板」")
+	ok(bool(pressed.get("shown", false)), "「未开放」是**显示出来**的")
+	var locked_rep: Dictionary = prompt.call("report")
+	eq(String(locked_rep["main"]), L10n.text("UI_SETTLEMENT_LOCKED"), "标题就是「未开放」")
+	ok(not String(locked_rep["sub"]).is_empty(), "还有一句说明：%s" % String(locked_rep["sub"]))
+	ne(String(locked_rep["sub"]), "UI_SETTLEMENT_LOCKED_DETAIL", "说明是解析后的文案，不是 key 本身")
+	ok(bool(locked_rep["locked"]), "自报 locked = true")
+	var panel: PanelContainer = prompt.get("_panel")
+	var sb := panel.get_theme_stylebox("panel") as StyleBoxFlat
+	ok(sb != null and sb.bg_color.is_equal_approx(UiKit.GREY),
+			"「未开放」是灰底（D- 判据：一眼可辨）")
+	# 停留 120 帧后自己收回成「进入」，不是永久卡在灰底。
+	for i in 121:
+		prompt.call("_process", 0.016)
+	var after_rep: Dictionary = prompt.call("report")
+	ok(not bool(after_rep["locked"]), "2 秒后「未开放」自动收回")
+	eq(String(after_rep["main"]), "%s %s" % [L10n.text("UI_SETTLEMENT_ENTER"),
+			String(at_door.get("label", ""))], "收回后重新显示「进入」")
+	# 范围外：同一个键不给假反馈，提示条也不出现。
+	prompt.call("refresh", outside)
+	ok(not bool(prompt.get("visible")), "范围外 → 提示条收起")
+	var far_press: Dictionary = prompt.call("press")
+	ok(not bool(far_press.get("ok", false)), "范围外按 Enter 没有反馈（本来就不该有）")
+	eq(String(far_press.get("reason", "")), "no_range", "原因写清楚是「不在范围」")
+	var far_rep: Dictionary = prompt.call("report")
+	eq(String(far_rep["main"]), "", "范围外不残留上一次的文案")
+	prompt.queue_free()
+
+	section("输入绑定：Enter / 小键盘 Enter，且没抢相机的键")
+	InputSetup.ensure()
+	ok(InputMap.has_action("settlement_interact"), "动作 `settlement_interact` 已注册")
+	var enter_events: Array = []
+	for ev in InputMap.action_get_events("settlement_interact"):
+		var k := ev as InputEventKey
+		if k != null:
+			enter_events.append(int(k.physical_keycode))
+	ok(enter_events.has(KEY_ENTER), "主键盘 Enter 绑上了")
+	ok(enter_events.has(KEY_KP_ENTER), "小键盘 Enter 也绑上了")
+	eq(enter_events.size(), 2, "只有这两个键（不顺手多绑）")
+	for taken in ["orbit_left", "orbit_right", "regen", "cycle_camera", "toggle_cycle"]:
+		var keys: Array = []
+		for ev in InputMap.action_get_events(taken):
+			var k2 := ev as InputEventKey
+			if k2 != null:
+				keys.append(int(k2.physical_keycode))
+		ok(not keys.has(KEY_ENTER) and not keys.has(KEY_KP_ENTER),
+				"`%s` 没被 Enter 占用（一边转镜头一边弹面板是灾难）" % taken)
+
+	section("预算与决定论")
+	var total_tris := int(layer.report()["tris"])
+	eq(total_tris, 7320, "20 枚棋子单遍合计 7 320 三角（描边第二遍 → 14 640 面）")
+	# 预算上限 8 000：16 920（地形）+ 1 112（队伍）+ 2 × 8 000 = 34 032 < 34 611。
+	# 这条是**给下一批留的门**：想在聚落上继续加零件，先看这里还剩多少。
+	le(float(total_tris), 8000.0, "单遍三角数 %d ≤ 8 000（留出后续批次的整视口预算）" % total_tris)
+	var sig := layer.signature()
+	var twin_layer := SettlementLayer.new()
+	twin_layer.setup(s.field, s.data)
+	eq(twin_layer.signature(), sig, "同一世界两次建层 → 签名逐字相同（含落点与面数）")
+	rng.call("seed_from", 20250930)
+	var s2 := WorldSession.boot(rng, 20250930)
+	ok(s2.ok, "换 seed 的世界也建成了")
+	var other := SettlementLayer.new()
+	other.setup(s2.field, s2.data)
+	ne(other.signature(), sig, "换 seed → 签名必变（反向对照：签名不是常量）")
+	twin_layer.free()
+	other.free()
+	layer.free()
+	rng.call("seed_from", 20250929)
+
+
+## 用例断言里的短名字：`村庄/城镇/要塞` 比 `village/town/fortress` 好读。
+func k_name(mt: Dictionary) -> String:
+	return "%s(%s)" % [String(mt["id"]), String(mt["kind"])]
 ## S1.3b：行军图与确定性 A*。断言分六组 —— 表契约、图结构、寻路合法性、决定论、
 ## 道路提速、预算。`A-` 的两条（寻路确定性 / 沿路提速符合参数）分别落在第 4、5 组。
 ## 这里量的是**成本比**而不是"米每秒"：移动积分要到 b3 才有，现在把速度系数钉死，
