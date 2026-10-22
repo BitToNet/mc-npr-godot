@@ -102,7 +102,12 @@ func _process(_delta: float) -> void:
 	if not auto_cycle:
 		return
 	var phase := _clock_phase()
-	if phase < 0.0 or is_equal_approx(phase, time_of_day):
+	# S1.4d — one sky update per **in-game minute**.  At 1x the sun turns 1/1440 of the
+	# way per real second, so re-running `apply()` every frame would do 60× the work to
+	# move the light by less than a pixel (and inject churn into `s1_2_perf`'s
+	# ms/frame).  A capture pins the clock to a whole second, so it still lands on the
+	# exact keyframe; the bucket is only a "did the sky visibly change" gate.
+	if phase < 0.0 or _sky_minute(phase) == _sky_minute(time_of_day):
 		return
 	time_of_day = phase
 	apply()
@@ -131,6 +136,11 @@ func set_time(t: float) -> void:
 func set_auto_cycle(on: bool) -> void:
 	auto_cycle = on
 	cycle_changed.emit(on)
+
+
+## Quantised phase used as the "did the sky change" gate: one bucket per in-game minute.
+func _sky_minute(p: float) -> int:
+	return int(p * 1440.0)
 
 
 func clock_string() -> String:

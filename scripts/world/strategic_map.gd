@@ -137,8 +137,14 @@ func _rebuild_stage() -> void:
 		day_night.name = "DayNight"
 		add_child(day_night)
 	day_night.setup(sun, environment_owner)
-	day_night.set_auto_cycle(false)
+	# S1.4d — the stage **follows the one game clock** (S1.4 计划：战略层光照随游戏时间
+	# 变化).  `STAGE_TIME` is kept as the *initial* frame only, so the very first rendered
+	# frame is lit even before `GameState` has ticked; from the first `_process` on the
+	# phase is read from `GameState.time_of_day()`.  Captures pin the clock to noon
+	# (`--game-time=43200`, the same instant `STAGE_TIME` used to hard-code) ⇒ every
+	# existing plate stays bit-identical.
 	day_night.set_time(STAGE_TIME)
+	day_night.set_auto_cycle(true)
 
 
 ## The camera reads the height field directly so it can refuse to enter a hill.
