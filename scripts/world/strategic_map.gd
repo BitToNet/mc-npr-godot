@@ -15,11 +15,13 @@ extends Node3D
 ## cannot inherit a half-drawn `world_gen` stream; see
 ## `docs/ENGINEERING.md` §9.8.5 / §9.9).
 ##
-## INPUT SCOPE (S1.3c).  This node owns **click-to-move only**: left click → screen
-## pick → `order_to()`.  Keyboard walking is deliberately *not* implemented in this
-## batch — the interactive keys are already taken by the camera (arrows pan, Q/E
-## yaw, R/F pitch, P projection, T tier), and a second scheme has to be designed
-## together with unit selection, which is a later batch.  See ROADMAP §6 S1.3c.
+## INPUT SCOPE (S1.3c, extended by S1.5b).  This node owns **click-to-move** (left
+## click → screen pick → `order_to()`) and, since S1.5b, the **settlement interact
+## key** (`settlement_interact` = Enter / keypad Enter) which only fires inside the
+## layer's interact radius.  Keyboard walking is deliberately *not* implemented — the
+## interactive keys are already taken by the camera (arrows pan, Q/E yaw, R/F pitch, P
+## projection, T tier), and a second scheme has to be designed together with unit
+## selection, which is a later batch.  See ROADMAP §6 S1.3c.
 ##
 ## TIME DRIVES THE PARTY (S1.4b).  The party integrates on `GameState.simulation_tick`,
 ## not on `_process(delta)`: a tick is a fixed 1/60 s slice of **game** time, and a
@@ -44,8 +46,16 @@ const FALLBACK_SEED := 20250929
 ## `ui_panel.gd`'s sibling `save_grid.gd`.
 const TIME_BAR_SCRIPT := preload("res://scripts/ui/time_bar.gd")
 
+## The bottom-centre settlement prompt (S1.5b).  Same wiring rule as `TIME_BAR_SCRIPT`.
+const SETTLEMENT_PROMPT_SCRIPT := preload("res://scripts/ui/settlement_prompt.gd")
+
 ## Fixed noon, so every screenshot of this scene is reproducible (S1.2c).
 const STAGE_TIME := 0.5
+
+## The action that opens the focused settlement (S1.5b).  Defined once in
+## `InputSetup.BINDINGS` (`Enter` / keypad `Enter`); this constant is only the name, so
+## a rename cannot leave the scene listening to a dead action.
+const INTERACT_ACTION := "settlement_interact"
 
 ## The world owned by this scene.  `null` until `_ready()` runs, and stays `null`
 ## with `boot_error` set if the build failed — so "not booted yet" and "booted but
@@ -57,9 +67,15 @@ var terrain: StrategicTerrain
 var camera: StrategicCamera
 ## The player party (S1.3c).  `null` when the world failed to build.
 var party: PartyMover
+## Every settlement of the world (S1.5b): 20 markers + proximity.  `null` when the
+## world failed to build.
+var settlements: SettlementLayer
 ## The time bar (S1.4b): pause / 1x / 2x / 4x + the current date.  `null` only when
 ## the scene was never added to the tree.
 var time_bar: CanvasLayer
+## The settlement prompt (S1.5b): bottom strip that shows "enter <settlement>" in
+## range and an explicit "not open yet" after Enter.  `null` until `_ready()`.
+var settlement_prompt: CanvasLayer
 ## The stage nodes, kept as fields so the case can assert what is on screen.
 var sun: DirectionalLight3D
 var environment_owner: WorldEnvironment
@@ -69,6 +85,9 @@ var boot_error := ""
 ## Why the party could not be built (empty in the normal case).  Kept separate from
 ## `boot_error`: a lost travel graph must not blank the whole strategic map.
 var party_error := ""
+## Why the settlement markers could not be built (empty in the normal case).  Same
+## contract as `party_error`: a failed layer must not blank the map.
+var settlement_error := ""
 ## Last rejected click ("clicked the sky" / "clicked into water" as a reason).
 var last_pick_error := ""
 
@@ -108,6 +127,8 @@ func boot() -> void:
 	_rebuild_stage()
 	_rebuild_camera()
 	_rebuild_party()
+	_rebuild_settlements()
+	_sync_settlement_focus()
 
 
 ## Applies the generated world to the visible mesh.  Kept separate from `boot()`
@@ -173,6 +194,33 @@ func _rebuild_party() -> void:
 	party.spawn_at(float(spawn["x"]), float(spawn["z"]), int(spawn["faction"]))
 
 
+## Every settlement marker (S1.5b).  Same rebuild contract as the party: `boot()` may
+## reseed the world and the markers must follow **that** world, not the previous one.
+## 20 nodes, one mesh each — the layer is a `Node3D` child, exactly like `PartyLayer`,
+## so the scene root stays a flat list of named stages.
+func _rebuild_settlements() -> void:
+	settlement_error = ""
+	if settlements == null:
+		settlements = SettlementLayer.new()
+		settlements.name = "SettlementLayer"
+		add_child(settlements)
+	if not settlements.setup(session.field, session.data):
+		settlement_error = "聚落标记建不齐（%d 枚）" % settlements.markers.size()
+		push_warning(settlement_error)
+
+
+## The party's ground position decides the focused settlement.  Called on every logical
+## tick (the party only moves inside one) and once after each rebuild, so the prompt is
+## correct on the very first frame instead of one tick later.
+func _sync_settlement_focus() -> void:
+	if settlements == null or party == null:
+		return
+	var p: Vector3 = party.position
+	settlements.focus_at(p.x, p.z)
+	if settlement_prompt != null:
+		settlement_prompt.call("refresh", settlements.focus)
+
+
 ## Where the player party starts.  `WorldData` already decided that in S1.1c
 ## (`parties[0]`), so the scene does not invent a second answer; the map centre is
 ## only a fallback for a world without parties.
@@ -192,22 +240,38 @@ func _spawn_party() -> Dictionary:
 func _on_simulation_tick(_step: int, seconds: float) -> void:
 	if party != null:
 		party.step(seconds)
+	# 焦点跟着队伍走：提示条与"是否进入范围"都只在这里更新，别处不重复算。
+	_sync_settlement_focus()
 
 
-## The time bar (S1.4b).  Built once per scene instance — `boot()` may run twice (a
-## world rebuild must not stack two HUDs, or F1 would have to hide both).
+## The time bar (S1.4b) and the settlement prompt (S1.5b).  Built once per scene
+## instance — `boot()` may run twice (a world rebuild must not stack two HUDs, or F1
+## would have to hide both).
 func _rebuild_hud() -> void:
-	if time_bar != null:
-		return
-	time_bar = TIME_BAR_SCRIPT.new() as CanvasLayer
-	time_bar.name = "TimeBar"
-	add_child(time_bar)
+	if time_bar == null:
+		time_bar = TIME_BAR_SCRIPT.new() as CanvasLayer
+		time_bar.name = "TimeBar"
+		add_child(time_bar)
+	if settlement_prompt == null:
+		settlement_prompt = SETTLEMENT_PROMPT_SCRIPT.new() as CanvasLayer
+		settlement_prompt.name = "SettlementPrompt"
+		add_child(settlement_prompt)
+		# HUD 比世界晚建一帧：先把当前焦点灌进去，第一个渲染帧就是对的。
+		_sync_settlement_focus()
 
 
-## Click-to-move.  A rejected pick never cancels the current march: clicking the
-## sky or a lake should be a no-op with a reason, not a "stop" the player did not
-## ask for.
+## Click-to-move + the settlement interact key (S1.5b).  A rejected pick never cancels
+## the current march: clicking the sky or a lake should be a no-op with a reason, not a
+## "stop" the player did not ask for.
+##
+## 菜单开着时（`paused`）整段不接管输入：那时 Enter 是"按当前按钮"，不是"进城"。
 func _unhandled_input(event: InputEvent) -> void:
+	var tree := get_tree()
+	if tree != null and tree.paused:
+		return
+	if InputMap.has_action(INTERACT_ACTION) and event.is_action_pressed(INTERACT_ACTION):
+		interact_settlement()
+		return
 	if party == null or camera == null:
 		return
 	var mb := event as InputEventMouseButton
@@ -220,6 +284,23 @@ func _unhandled_input(event: InputEvent) -> void:
 	last_pick_error = ""
 	var point: Vector3 = pick["point"]
 	party.order_to(point.x, point.z)
+
+
+## Enter inside range.  The settlement panel itself is S1.5c's; this batch must still
+## **answer** — 灰底「未开放」+ 一句说明。按键毫无反应和"坏了"在玩家眼里没有区别，
+## 所以"未开放"的反馈是这一步的验收项（ROADMAP S1.5 `D-`），不是装饰。
+func interact_settlement() -> Dictionary:
+	if settlements == null:
+		return {"ok": false, "reason": "no_world", "id": "", "shown": false, "in_range": false}
+	_sync_settlement_focus()
+	var in_range := bool(settlements.focus.get("in_range", false))
+	if settlement_prompt == null:
+		return {"ok": false, "reason": "no_prompt", "id": String(settlements.focus.get("id", "")),
+				"shown": false, "in_range": in_range}
+	var out: Dictionary = settlement_prompt.call("press")
+	out["in_range"] = in_range
+	out["distance"] = float(settlements.focus.get("distance", INF))
+	return out
 
 
 ## The generated world's macro indicators (empty before `_ready()` / after a
@@ -253,4 +334,17 @@ func party_report() -> Dictionary:
 	out["graph_ok"] = party.graph != null and party.graph.built
 	out["error"] = party_error
 	out["pick_error"] = last_pick_error
+	return out
+
+
+## What the settlement layer is (empty before `_ready()` / after a failed boot).
+## `prompt` is the bottom strip's own self-report, so a case can prove that "未开放"
+## is **visible** rather than merely "the key was handled".
+func settlement_report() -> Dictionary:
+	if settlements == null:
+		return {}
+	var out := settlements.report()
+	out["error"] = settlement_error
+	if settlement_prompt != null:
+		out["prompt"] = settlement_prompt.call("report")
 	return out

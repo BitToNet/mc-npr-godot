@@ -51,6 +51,23 @@ const PALETTE := {
 
 const INK := Color("13101b")
 
+## 势力色槽（S1.5b）。**玩家棋子与聚落标记共用这一张表**：两个渲染者各写一份键序，
+## 迟早会出现"同一势力两种颜色"。键序是契约（`faction % size`），改序等于改所有截图。
+const FACTION_TINT_KEYS := ["cloth", "water_deep", "cloth_alt", "plinth"]
+
+## 势力 → 调色板键。负值（未归属，`WorldData` 用 `-1` 表示）落到最后一槽，与
+## GDScript 的负下标落在同一个元素上 —— 这条兜底是**旧行为的等价迁移**，不是新语义。
+static func faction_tint_key(p_faction: int) -> String:
+	var n := FACTION_TINT_KEYS.size()
+	var i := p_faction
+	if i < 0:
+		i = -1
+	return String(FACTION_TINT_KEYS[i % n])
+
+## 势力 → 顶点色。与 `lit()` 走同一条路径（先查调色板，再转线性）。
+static func faction_tint(p_faction: int) -> Color:
+	return (PALETTE.get(faction_tint_key(p_faction), Color.WHITE) as Color).srgb_to_linear()
+
 var toon_shader: Shader
 var outline_shader: Shader
 var water_shader: Shader

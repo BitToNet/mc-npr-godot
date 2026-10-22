@@ -32,8 +32,9 @@ const POLE_BOTTOM := 1.9
 ## 只取常量，不碰 autoload 实例（理由见文件头）。
 const StyleDef := preload("res://scripts/core/style.gd")
 
-## 势力主色（`Style.PALETTE` 键）。按 faction 取模，确定性、无随机。
-const FACTION_KEYS := ["cloth", "water_deep", "cloth_alt", "plinth"]
+## 势力主色不再由本文件定义：S1.5b 起统一到 `Style.FACTION_TINT_KEYS`
+## （聚落标记用同一张表，两处各写一份键序迟早出现"同一势力两种颜色"）。
+## 键序与旧常量逐字相同，所以本棋子的像素不变。
 
 ## 贴地用的高度场；为 `null` 时地面按 0 处理（用例里总会给）。
 var field: HeightField = null
@@ -151,7 +152,7 @@ func _build() -> void:
 	_material = _make_material()
 	var plinth := _tint("plinth")
 	var lip := _tint("plinth_lip")
-	var coat := _tint(String(FACTION_KEYS[faction % FACTION_KEYS.size()]))
+	var coat := _tint(StyleDef.faction_tint_key(faction))
 	var cream := _tint("cream")
 	var skin := _tint("skin")
 	var pole := _tint("hair")
@@ -196,15 +197,16 @@ func _build() -> void:
 	parts.append(_part(MeshUtil.blob(0.44, 4, 8, Vector3.ONE, 0.0, head_rng, cream),
 			Vector3(0.0, POLE_BOTTOM + POLE_HEIGHT + 0.10, -1.15)))
 	# 旗面：一面微拱的薄布，双面各一层（描边材质不开 cull_disabled，所以不能靠单面）。
-	var flag_tint := _tint(String(FACTION_KEYS[faction % FACTION_KEYS.size()]))
+	var flag_tint := _tint(StyleDef.faction_tint_key(faction))
 	parts.append(_part(_banner_mesh(flag_tint), Vector3(0.12, BANNER_BOTTOM, -1.15)))
 
 	_mesh = MeshUtil.combine(parts)
 	# 描边必须靠**连续**的外壳。MeshUtil 的生成器把"面法线"同时写进法线和切线槽，于是
 	# 反向外壳沿各自的面法线炸开成散三角片，正常线宽下几乎看不见（本批实测：把线宽拉到
-	# 120 才看到几道洋红碎屑）。_with_smooth_tangents() 按面积加权重算平滑法线、只写进
+	# 120 才看到几道洋红碎屑）。`MeshUtil.smooth_tangents()` 按面积加权重算平滑法线、只写进
 	# 切线槽 —— 着色仍用平面法线（保持面着色），外壳才是一张连续的皮。
-	_mesh = _with_smooth_tangents(_mesh)
+	# S1.5b 起这段算法住在 `mesh_util.gd`（聚落标记是第二个使用者），本文件只是调用方。
+	_mesh = MeshUtil.smooth_tangents(_mesh)
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.name = "Body"
 	_mesh_instance.mesh = _mesh
@@ -266,46 +268,6 @@ static func _style_node() -> Node:
 
 ## 计算局部平滑法线（面积加权）并写进切线槽。方向直接取网格自带的面法线，保证与着色
 ## 一致；顶点位置按 1e-4 量化后共享，合起来的零件之间才不会被当成两层皮。
-static func _with_smooth_tangents(mesh: ArrayMesh) -> ArrayMesh:
-	var src := mesh.surface_get_arrays(0)
-	var verts: PackedVector3Array = src[Mesh.ARRAY_VERTEX]
-	var normals: PackedVector3Array = src[Mesh.ARRAY_NORMAL]
-	var colors: PackedColorArray = src[Mesh.ARRAY_COLOR]
-	var smooth := {}
-	var faces := verts.size() / 3
-	for f in faces:
-		var i0 := f * 3
-		var face_n: Vector3 = normals[i0]
-		var cross := (verts[i0 + 1] - verts[i0]).cross(verts[i0 + 2] - verts[i0])
-		var area := cross.length() * 0.5
-		for k in 3:
-			var key := _vkey(verts[i0 + k])
-			smooth[key] = (smooth.get(key, Vector3.ZERO) as Vector3) + face_n * area
-	var tangents := PackedFloat32Array()
-	tangents.resize(verts.size() * 4)
-	for i in verts.size():
-		var sn: Vector3 = smooth.get(_vkey(verts[i]), normals[i])
-		sn = sn.normalized() if sn.length_squared() > 0.000001 else normals[i]
-		tangents[i * 4] = sn.x
-		tangents[i * 4 + 1] = sn.y
-		tangents[i * 4 + 2] = sn.z
-		tangents[i * 4 + 3] = 1.0
-	var out := ArrayMesh.new()
-	var arr := []
-	arr.resize(Mesh.ARRAY_MAX)
-	arr[Mesh.ARRAY_VERTEX] = verts
-	arr[Mesh.ARRAY_NORMAL] = normals
-	arr[Mesh.ARRAY_TANGENT] = tangents
-	arr[Mesh.ARRAY_COLOR] = colors
-	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	return out
-
-
-## 位置量化键：同一位置的重复顶点必须落进同一个桶，否则外壳会沿接缝裂开。
-static func _vkey(p: Vector3) -> String:
-	return "%d_%d_%d" % [roundi(p.x * 10000.0), roundi(p.y * 10000.0), roundi(p.z * 10000.0)]
-
-
 static func _part(mesh: ArrayMesh, at: Vector3) -> Dictionary:
 	return {"mesh": mesh, "xform": Transform3D(Basis.IDENTITY, at)}
 

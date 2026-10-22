@@ -18,6 +18,10 @@ const BINDINGS := {
 	"toggle_outline": [KEY_O],
 	"cycle_camera": [KEY_C],
 	"toggle_cycle": [KEY_T],
+	# S1.5b：进入聚落（范围内才有效）。**不能用 E** —— `orbit_right` 已经占着它，
+	# 一边转镜头一边弹面板是玩家最不想要的那种"顺手"。Enter 的语义天然是"确定/进入"，
+	# 主键盘与小键盘各绑一个；相机只用 Q/E/R/F 与 P/T，没有冲突。
+	"settlement_interact": [KEY_ENTER, KEY_KP_ENTER],
 }
 
 ## 调试热键（ROADMAP §5 S0.4）。**只存在于 Debug 构建**，见 `ensure_debug_hotkeys()`。

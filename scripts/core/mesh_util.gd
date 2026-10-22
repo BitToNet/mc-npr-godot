@@ -310,6 +310,54 @@ static func transform_mesh(mesh: ArrayMesh, xform: Transform3D) -> ArrayMesh:
 	return out
 
 
+## 反向外壳必须靠**连续**的皮。本文件所有生成器把"面法线"同时写进法线与切线槽，
+## 于是外壳沿各自的面法线膨开、炸成散三角片（正常线宽下几乎看不见）。本函数按面积加权
+## 重算平滑法线、**只写进切线槽**：着色仍用平面法线（保持面着色），外壳得到一张连续的皮。
+##
+## 首次实现于 S1.3a 的 `party_marker.gd`；S1.5b 出现第二个使用者（聚落标记）时上提到
+## 这里，两边共用同一份实现 —— 两份拷贝只要有一处被改，描边就会"一边有、一边没有"。
+static func smooth_tangents(mesh: ArrayMesh) -> ArrayMesh:
+	if mesh == null or mesh.get_surface_count() == 0:
+		return mesh
+	var src := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = src[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = src[Mesh.ARRAY_NORMAL]
+	var colors: PackedColorArray = src[Mesh.ARRAY_COLOR]
+	var smooth := {}
+	var faces := verts.size() / 3
+	for f in faces:
+		var i0 := f * 3
+		var face_n: Vector3 = normals[i0]
+		var cross := (verts[i0 + 1] - verts[i0]).cross(verts[i0 + 2] - verts[i0])
+		var area := cross.length() * 0.5
+		for k in 3:
+			var key := _vkey(verts[i0 + k])
+			smooth[key] = (smooth.get(key, Vector3.ZERO) as Vector3) + face_n * area
+	var tangents := PackedFloat32Array()
+	tangents.resize(verts.size() * 4)
+	for i in verts.size():
+		var sn: Vector3 = smooth.get(_vkey(verts[i]), normals[i])
+		sn = sn.normalized() if sn.length_squared() > 0.000001 else normals[i]
+		tangents[i * 4] = sn.x
+		tangents[i * 4 + 1] = sn.y
+		tangents[i * 4 + 2] = sn.z
+		tangents[i * 4 + 3] = 1.0
+	var out := ArrayMesh.new()
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = normals
+	arr[Mesh.ARRAY_TANGENT] = tangents
+	arr[Mesh.ARRAY_COLOR] = colors
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return out
+
+
+## 位置量化键：同一位置的重复顶点必须落进同一个桶，否则外壳会沿接缝裂开。
+static func _vkey(p: Vector3) -> String:
+	return "%d_%d_%d" % [roundi(p.x * 10000.0), roundi(p.y * 10000.0), roundi(p.z * 10000.0)]
+
+
 ## Merges several meshes into one, each with its own local transform.
 ## `items` entries: { "mesh": ArrayMesh, "xform": Transform3D }
 static func combine(items: Array) -> ArrayMesh:
