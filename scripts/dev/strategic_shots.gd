@@ -9,8 +9,9 @@ extends Node3D
 ## reference product code but never the other way round — so the knobs live here,
 ## at the same layer as the scene override itself.
 ##
-## This file reads five arguments; everything else (`--shots`, `--warmup=`,
-## `--frames=`, `--out=`) still belongs to `capture.gd`:
+## This file reads six arguments (`--seed` / `--tier` / `--party` / `--span` /
+## `--route` / `--march`, plus `--hud` and `--game-time` from S1.4); everything else
+## (`--shots`, `--warmup=`, `--frames=`, `--out=`) still belongs to `capture.gd`:
 ##   Godot --path . -- --shots --scene=res://scenes/dev/strategic_shots.tscn \
 ##         --seed=20250929 --tier=global --warmup=60 --frames=15 \
 ##         --out=res://.shots/s12d/global_20250929
@@ -30,6 +31,12 @@ extends Node3D
 ##   Godot --path . -- --shot=route_region --scene=res://scenes/dev/strategic_shots.tscn \
 ##         --seed=20250929 --tier=region --route=1 --warmup=60 --frames=12 \
 ##         --out=res://.shots/s13b/route_region
+##
+## `--hud=1` keeps the time bar on the plate; `--game-time=<游戏秒>` pins the clock
+## (default `43200` = 第 1 天 12:00) so both the sun and the bar's text are frozen:
+##   Godot --path . -- --shot=noon_1200 --scene=res://scenes/dev/strategic_shots.tscn \
+##         --seed=20250929 --tier=global --route=1 --march=12 --hud=1 --game-time=43200 \
+##         --warmup=60 --frames=12 --out=res://.shots/s14d/noon_1200
 ##
 ## Framing rule: GLOBAL is the whole plate (map centre, locked by the camera), while
 ## REGION / LOCAL are framed on the settlement nearest the map centre — the centre
@@ -73,6 +80,12 @@ var route_graph: TravelGraph = null
 var march_seconds := 0.0
 ## S1.4b — keep the time bar on the plate (`--hud=1`) or hide it (default).
 var show_hud := false
+## S1.4d — pin the game clock before the shutter (`--game-time=<游戏秒>`, default 第 1 天
+## 12:00).  The strategic stage now *follows* the clock, so an unpinned shot would be a
+## different picture on every run; pinning also freezes the time bar's text, which is
+## why `--hud=1` became possible without giving up "two runs agree to the byte".
+const DEFAULT_GAME_TIME := 43200.0
+var game_time_sec := DEFAULT_GAME_TIME
 
 const StyleDef := preload("res://scripts/core/style.gd")
 
@@ -93,10 +106,26 @@ func _ready() -> void:
 			march_seconds = a.split("=", true, 1)[1].to_float()
 		elif a.begins_with("--hud="):
 			show_hud = a.split("=", true, 1)[1].to_int() != 0
+		elif a.begins_with("--game-time="):
+			game_time_sec = a.split("=", true, 1)[1].to_float()
 	if not TIERS.has(tier_name):
 		push_warning("[shots] 未知 --tier='%s'，回退 global" % tier_name)
 		tier_name = "global"
+	_pin_clock()
 	build(seed_value, tier_name)
+
+
+## Freezes `GameState.game_time` at `game_time_sec` for this whole capture.  The map is
+## built **after** this, so `DayNight`'s first `_process` already reads the pinned phase
+## (lighting is a pure function of the clock since S1.4d).
+func _pin_clock() -> void:
+	var state := get_node_or_null("/root/GameState")
+	if state == null:
+		return
+	if not bool(state.call("pin_time", game_time_sec)):
+		push_warning("[shots] --game-time=%s 不是合法时刻，回退 %.0f" % [game_time_sec, DEFAULT_GAME_TIME])
+		game_time_sec = DEFAULT_GAME_TIME
+		state.call("pin_time", game_time_sec)
 
 
 ## (Re)builds the world for `p_seed` and applies `p_tier`, snapped (no easing), so
