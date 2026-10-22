@@ -18,7 +18,7 @@
 |---|---|---|
 | `scenes/` | 场景文件 | `world/strategic_map.tscn`（**主场景**，S1.0d：`run/main_scene` 与路由 `world` 同时指它；S1.2a 起根节点挂 `strategic_map.gd`、只持有 `WorldSession`（`_ready()` 里建世界），S1.2b 起再挂**一个** `StrategicTerrain` 地形子树（36 陆块 + 水块 + 外缘裙边），S1.2c 起再挂**固定正午舞台**（`WorldEnvironment` + `Sun` + `DayNight`，自动循环关闭）与 `StrategicCamera` 三档镜头；根共 **5** 个子节点）、`dev/diorama.tscn`（**回归夹具**，不再是主场景；S1.0a 由 `scenes/main.tscn` 换路径而来，**内容逐字节不变**；S0.3 批次 4 挂载 `MenuLayer`，**默认隐藏**；只能用 `--scene=` 或 `tools/` 进入）、`battle/battle_stub.tscn`（战斗**占位靶子**，S0.3 批次 3；M2 用真战斗场景替换）、`dev/art_samples.tscn`（S0.5 教材夹具，产品码不得引用） |
 | `scripts/core/` | 与玩法无关的基础设施与服务 | `main.gd`（编排/autoload 宿主）、`style.gd`（美术中枢，autoload `Style`）、`capture.gd`（截图，autoload `Capture`）、`render_clock.gd`（时间，autoload `Clock`）、`rng.gd`（随机，autoload `Rng`，S0.3 批次 1）、`event_bus.gd`（全局事实信号，autoload `EventBus`，S0.3 批次 1）、`game_state.gd`（本局状态与存档字段，autoload `GameState`，S0.3 批次 1）、`save_system.gd`（存档服务，autoload `SaveSystem`，S0.3 批次 2）、`scene_router.gd`（场景路由，autoload `SceneRouter`，S0.3 批次 3；**唯一允许切场景的文件**）、`debug_layer.gd`（调试叠加层，autoload `Debug`，S0.4 批次 2；**默认隐藏**、`PROCESS_MODE_ALWAYS`、整层 `MOUSE_FILTER_IGNORE`）、`mesh_util.gd`（低模几何库）、`canon.gd`（**规范化序列化**，`class_name Canon`，S1.1a；见 §9）、`input_setup.gd`（输入映射；`F1`/`F3` 与唯一闸门 `ensure_debug_hotkeys()` 在此）、`camera_rig.gd`（正交等距相机） |
-| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b）、`world_data.gd`（**聚落/道路/势力/队伍**，`class_name WorldData`，S1.1c；见 §9.7）、`world_session.gd`（**世界入口 / 组合根**，`class_name WorldSession`，S1.2a；先重置子流再按固定顺序建世界，见 §9.9）、`strategic_map.gd`（`scenes/world/strategic_map.tscn` 的根脚本，S1.2a；无 `class_name`）、`strategic_terrain.gd`（**战略尺度地形网格**，`class_name StrategicTerrain`，S1.2b；32 m × 75×75 = 11 250 三角、6×6 分块、水面 + 外缘墨色裙边，见 §9.10）、`strategic_camera.gd`（**战略三档镜头**，`class_name StrategicCamera`，S1.2c；GLOBAL / REGION / LOCAL = 2600 / 700 / 170 m、边界钳制、防穿地、阻尼，见 §9.11） |
+| `scripts/world/` | 世界生成与自然元素 | `terrain.gd`、`water.gd`、`scatter.gd`（植被散布/MultiMesh）、`clouds.gd`、`day_night.gd`、`gen_params.gd`（**世界生成参数表加载与钳制**，`class_name GenParams`，S1.1a；表在 `data/world/gen_params.json`）、`height_field.gd`（**战略尺度高度/生物群系场**，`class_name HeightField`，S1.1b；见 §9.6）、`regions.gd`（**Voronoi region 划分**，`class_name WorldRegions`，S1.1b）、`world_data.gd`（**聚落/道路/势力/队伍**，`class_name WorldData`，S1.1c；见 §9.7）、`world_session.gd`（**世界入口 / 组合根**，`class_name WorldSession`，S1.2a；先重置子流再按固定顺序建世界，见 §9.9）、`strategic_map.gd`（`scenes/world/strategic_map.tscn` 的根脚本，S1.2a；无 `class_name`）、`strategic_terrain.gd`（**战略尺度地形网格**，`class_name StrategicTerrain`，S1.2b；32 m × 75×75 = 11 250 三角、6×6 分块、水面 + 外缘墨色裙边，见 §9.10）、`strategic_camera.gd`（**战团式跟随镜头**，`class_name StrategicCamera`，S1.2e；队伍跟随 + 边界钳制、连续缩放 120–2600 m、右键拖动旋转、防穿地、阻尼，见 §9.11；`set_tier()` 仅作取证档位 2600 / 700 / 170 m） |
 | `scripts/actors/` | 可动实体 | `player.gd`（演示角色） |
 | `scripts/ui/` | 界面 | `ui_kit.gd`（**公共控件工厂**，S0.4 批次 1：stylebox / 阴影偏移 / 标签构造，`ui_panel` / `menu_page` / `save_grid` 三处共用；`PAPER` 等常量在此）、`ui_panel.gd`（调试面板，S0.3 批次 4 起显式 `PROCESS_MODE_ALWAYS`，`group=hud`）、`ui_slider.gd`（方形滑块）、`menu_page.gd`（游戏内菜单页：主页 / 宫格 / **调试页** / 覆盖确认，S0.3 批次 4 + S0.4 批次 3）、`save_grid.gd`（3×3 存档宫格组件，S0.3 批次 4） |
 | `scripts/battle/` | 战斗（M2 主体） | `battle_stub.gd`（战斗**占位靶子**，S0.3 批次 3；纯函数、无 `Rng`/时钟/`_process`，M2 替换） |
@@ -403,7 +403,7 @@ S1.1c 新增 `WorldData`，S1.2a 新增 `WorldSession`，S1.2b 新增 `Strategic
 | `GenParams` | `scripts/world/gen_params.gd` | 世界生成参数表加载与钳制（S1.1a） |
 | `WorldSession` | `scripts/world/world_session.gd` | 世界入口 / 组合根：先 seed_from(seed)，再按固定顺序建世界（S1.2a，§9.9） |
 | `StrategicTerrain` | `scripts/world/strategic_terrain.gd` | 战略尺度地形网格：32 m × 75×75 = 11 250 三角、6×6 分块、水面 + 外缘墨色裙边（S1.2b，§9.10） |
-| `StrategicCamera` | `scripts/world/strategic_camera.gd` | 战略三档镜头：2600 / 700 / 170 m、GLOBAL 锁正交等距、边界钳制 + 阻尼 + 防穿地（S1.2c，§9.11） |
+| `StrategicCamera` | `scripts/world/strategic_camera.gd` | 战团式跟随镜头：队伍跟随 + 边界钳制、连续缩放 120–2600 m、右键拖动与 `Q`/`E`/`R`/`F` 旋转、阻尼 + 防穿地；取证档位 2600 / 700 / 170 m（S1.2e，§9.11） |
 | `PartyMarker` | `scripts/world/party_marker.gd` | 队伍棋子：12 个零件合成单一 mesh（556 三角）、标称 22 m、脚底 `y=0`、反向外壳描边（S1.3a，§9.12） |
 | `TravelGraph` | `scripts/world/travel_graph.gd` | 行军图：32 m × 75×75 可走格 + 道路格成本折扣 + 确定性 A\*（S1.3b，§9.13） |
 | `PartyMover` | `scripts/world/party_mover.gd` | 队伍移动：沿折线按弧长积分 + 转向限速 + 贴地俯仰 + 点击下令（S1.3c，§9.14） |
@@ -844,7 +844,7 @@ S1.1d 就是这么抓到 26 条边 vs 24 条边的（§9.8.5、§5 陷阱 26）�
 
 **要解决的问题**：`HeightField` 是 2400 m 尺度的场，`terrain.gd` 是 63 m 的岛屿回归夹具。两者不能共用
 一个网格模块 —— 格距相差 50 倍，色带阈值、描边策略、水面做法全都要另算。`StrategicTerrain` 是前者
-的网格化，只做"把场变成可看的三角面"，不做镜头（§9.11，S1.2c）。
+的网格化，只做"把场变成可看的三角面"，不做镜头（§9.11，S1.2e）。
 
 #### 9.10.1 为什么格距是"派生"的
 
@@ -906,34 +906,48 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 
 ---
 
-### 9.11 战略三档镜头（S1.2c）
+### 9.11 战团式跟随镜头（S1.2e，取代 S1.2c 的平移 + 整档缩放）
 
-#### 9.11.1 三档契约
+#### 9.11.1 为什么改：向《骑马与砍杀：战团》对齐
 
-| 档 | 垂直跨度 `size` | 投影 | 焦点范围 `bounds_half` | 备注 |
-|---|---|---|---|---|
-| GLOBAL 全球 | 2600 m | 固定正交 | 0（锁中心） | yaw 45° / pitch −35.264° 不可改，整图 |
-| REGION 区域 | 700 m | 正交 ⇄ 透视（`P`） | 810 m | 看路网 / 行军 |
-| LOCAL 近地 | 170 m | 默认透视 | 1075 m | 接 S1.3 棋子，焦点跟随地形高度 |
+S1.2c 的三档镜头本质是"自由观景相机"：方向键 / 中键平移 + 滚轮整档。战团的战役地图不是这样 ——
+**队伍永远在画面中心**，玩家只能用右键拖动绕它转、用滚轮连续拉近拉远，没有"把镜头开走"这回事。
+用户 2026-10-22 裁定按战团改：全档跟随 + 边界钳制、连续缩放、只保留 `Q`/`E`/`R`/`F` + 右键拖动。
+S1.2c 的平移与 S1.3d 的 `D-`「点击移动不挪相机焦点」因此被**取代**（台账标注，不静默删除）。
 
-`bounds_half = 1200 − size_target / 2 − 40`（`MARGIN`）。用 **`size_target`** 而不是正在缓动的
-`size`：否则缩放过程中边界会跟着抖。
+#### 9.11.2 契约
 
-#### 9.11.2 钳制、阻尼与防穿地
+| 项 | 规则 |
+|---|---|
+| 焦点 | **跟随队伍**：`simulation_tick` 里 `camera.set_follow_point(party.position)`，焦点以 8/s 指数逼近期望值 |
+| 边界 | `bounds_half = 1200 − size_target/2 − 40`（`MARGIN`）；跟随点越界即被钳，画面不会跟到空白里 |
+| 满视图 | 2600 m 时 `bounds_half` **恰好为 0** ⇒ 焦点自然塌到地图中心。旧契约的"全球档锁中心"不需要特判，是钳制的推论 |
+| 缩放 | 连续：一格滚轮 ×1.12（`ZOOM_STEP`），夹在 **120 m … 2600 m**；`size` 以 6/s 缓动追上目标 |
+| 旋转 | 右键拖动（yaw `0.006 rad/px`、pitch `0.004 rad/px`）与 `Q`/`E`/`R`/`F` 走**同一个** `rotate_view()`；pitch 钳 −75°…−20° |
+| 平移 | **没有**。方向键 / 中键拖动已删除，`WASD` 留给 S1.6 / S4.5 |
+| 解除跟随 | `focus_on(x, z)` 隐式 `set_follow(false)`，`set_follow(true)` 重新挂回。取证台必须先解除，否则每张 REGION / LOCAL 板拍到的都是队伍出生点 |
+| 投影 | 默认正交；`P` 在 `size_target < 2300` 时可切透视，拉远过 2300 强制回正交（整图板不许透视） |
+| 取证档位 | `set_tier(0/1/2)` = 2600 / 700 / 170 m 仍保留，但**降级为取景预设**（`B-` 拍图与用例固定机位），玩家缩放走 `zoom_by()` |
 
-- 平移：`WASD` / 方向键；速度 = `size × 0.35 / s`；焦点目标先钳边界，再以 8/s 指数逼近期望值。
-  中键拖动：1 px ≈ `size / 900` m，地图跟手。
-- 缩放：滚轮 = 整档，`size` 以 6/s 指数缓动（≈0.35 s 到九成），换档**不瞬跳**。
-- 旋转：`Q`/`E` 调 yaw、`R`/`F` 调 pitch（钳 −75°…−20°）；GLOBAL 档两轴都锁死。
+`report()` 增出 `follow` / `follow_point` / `min_size` / `max_size`；`tier` 由 `_band_of(size_target)`
+反推（≥ 2000 → GLOBAL、≥ 400 → REGION、其余 LOCAL），只用于报告与 `focus.y` 是否贴地。
+
+#### 9.11.3 钳制、阻尼与防穿地
+
+- 跟随：焦点目标先钳边界，再以 8/s 指数逼近期望值；`step()` 每帧按跨度重算 `tier`，`focus.y` 只在
+  LOCAL 贴地形高度，其他档恒为 0（否则整图会被某座山的海拔抬歪）。
+- 缩放：滚轮累到 `_wheel`，每 0.18 s（`ZOOM_STEP_COOLDOWN`）消费一格；`size` 以 6/s 缓动（≈0.35 s 到
+  九成），所以连续滚轮读起来是一条平滑推拉，而不是跳档。
+- 旋转：`Q`/`E` 与右键拖动共用 `rotate_view()`；pitch 钳 −75°…−20°，满视图自动回正交。
 - 防穿地：相机世界 y 被抬到 `height_at(cam) + 3 m` 以上（`GROUND_CLEAR`），再让相机看向焦点 ——
   抬机不抬焦点，取景不跑。
-- 切档时**当前焦点也被钳一次**（不只是目标）：缩回全球档时合法区域瞬间收缩到 0，滞后的焦点
-  不允许留在外面。
+- 缩放时**当前焦点也被钳一次**（不只是目标）：拉远时合法区域瞬间收缩，滞后的焦点不允许留在外面。
 
-#### 9.11.3 决定论与「离树可用」
+#### 9.11.4 决定论与「离树可用」
 
-`StrategicCamera.step(delta, move, yaw_delta, pitch_delta, zoom_steps)` 是唯一的积分入口：
-`_process` 喂真实输入，用例喂脚本轨迹 —— 证明的就是玩家拿到的那套。
+`StrategicCamera.step(delta, yaw_delta, pitch_delta)` 是唯一的积分入口：`_process` 喂真实输入，
+用例喂脚本轨迹 —— 证明的就是玩家拿到的那套。跟随点从外面灌进来（`set_follow_point()`），
+相机自己不读 `PartyMover`，所以"队伍推一步 → 相机读一次"的方向是单向的、可在用例里完全复现。
 
 节点结构：rig 常驻原点、**只有子 `Camera3D` 带变换**，于是「rig 局部 == 世界」，用例可以完全
 离树驱动；相机 y 读 `_camera.position.y` 而不是 `global_position`（§5 陷阱 32）。
@@ -941,48 +955,59 @@ step  = field.map_size / float(cells)                        # 75 格 ⇒ 32.0 m
 舞台：`WorldEnvironment` + `Sun` + `DayNight`，`set_auto_cycle(false)` + `set_time(0.5)` ⇒ 每一张
 截图都是同一个正午。日/夜玩法仍属 S1.7，本步只借它的天空与太阳。
 
-#### 9.11.4 实测（seed 20250929）
+#### 9.11.5 实测（seed 20250929，2026-10-22）
 
 | 项 | 实测 |
 |---|---|
-| 全球档 | 跨度 2600 m、正交、yaw 45.000°、pitch −35.264°、焦点锁 0 |
+| 取证档位 | GLOBAL 2600 m 正交 / REGION 700 m / LOCAL 170 m；`bounds_half` = 0 / 810 / 1075 m |
 | 相机高度（全球档） | **2026.5 m**（正交距离 3510 m × sin 35.264°） |
-| `far` | 12 000 m（覆盖整图 + 山高） |
-| 区域 / 近地档跨度 | 700 m / 170 m（缓动 1 s 后实测 700.0 m） |
-| 600 帧轨迹 | 无 NaN/INF、越界 0 帧、防穿地 0 帧；最大帧间位移 **7.45 m**（仍在 `size×0.35×dt×1.35` 内） |
-| 轨迹决定论 | 同脚本两次哈希相同；反向平移哈希不同 |
+| 连续缩放 | 20 格后 2600 / 1.12²⁰ = **269.5 m**；继续拉近夹 120 m、拉远夹 2600 m；缓动 2 s 后 700.01 m |
+| 跟随（区域档） | 跟随点 (300, −200) → 2 s 后焦点 (300.00, −200.00)；跟随点 (9000, 9000) → 焦点钳在 **810.00 m** |
+| 满视图回归 | `set_tier(0)` 后焦点回 (0, 0)：不需要 GLOBAL 特判，`bounds_half = 0` 的自然结果 |
+| 600 帧跟随轨迹 | 24 m/s 巡航：误差 **2.805 m**（0.40% 屏宽，≈ v/8 阻尼稳态）、单帧位移 0.400 m、NaN/越界/入地各 0 帧 |
+| 无平移反向对照 | 跟随点静止 90 帧 → 焦点位移 **0.0000 m**；改跟随点才动 |
+| 轨迹决定论 | 同脚本两次哈希相同；反向巡航哈希不同 |
 | 场景根子节点 | **5**：`StrategicTerrain` + `WorldEnvironment` + `Sun` + `DayNight` + `StrategicCamera` |
-| `s1_2_camera` | **37 断言 / 242 ms**；用例输出 `ERROR:` 行 0 |
+| `s1_2_camera` | **58 断言**（单跑 329 ms、全量 `--all` 中 583 ms）；用例输出 `ERROR:` 行 0 |
+| `s1_2_perf`（headed） | GLOBAL **1119.8 fps** / 32 672 三角 / 101 draws；REGION **1029.6** / 17 916；LOCAL **1135.3** / 5 886 |
 
-#### 9.11.5 已知边界
-
-1. **`B-` 三档截图已在批 4 拍完**（工具与实测见 §9.11.6）：本节的数值判据与像素验收因此都到位；拍图暴露的三条**内容级**限制记在 §9.11.7，不涉及镜头参数。
-2. 只做**垂直**净空：相机抬高避免钻山，但没有沿视线 raycast 推近，所以近地档理论上仍可能被
-   焦点与相机之间的独立山峰挡住（战略尺度下未观察到）。
-3. 滚轮是整档、没有连续变焦；中键拖动的 1 px 增益是常数，未做「缩得越小拖得越慢」的细调。
-4. GLOBAL 档故意锁 yaw / pitch：整图截图必须逐位可复现，转动会让 `B-` 基线漂移。
-5. `s0_3_router` 的世界基线**第二次**迁移（S1.2b 的「根 → 地形」→ 现在的「根 → 地形 + 舞台 + 相机、
-   且视口里恰有一个 current 相机」）。两次都是能力等价替换，不是删断言。
-
-#### 9.11.6 取证工具（批 4：`B-` 相册 + `C-` 帧率）
+#### 9.11.6 取证工具（`B-` 相册 + `C-` 帧率）
 
 | 工具 | 位置 | 它能证明什么（以及不证明什么） |
 |---|---|---|
-| 三档取景台 | `scripts/dev/strategic_shots.gd` / `scenes/dev/strategic_shots.tscn` | 只读 `--seed=` 与 `--tier=global/region/local`，`build()` 公开；`capture.gd` 的其余批次参数（`--shots` / `--warmup=` / `--frames=` / `--out=`）照旧。**只证明“能拍出这一档该拍到的范围”**，不是“美术挑过的机位” |
-| 取景主体 | 同上 `_pick_settlement()` | 「低地（≤ 40 m）优先 → 海拔 → 距中心距离」选**真实聚落**，确定性。第一版按“最近聚落”选，seed 20250929 选中 92 m 的高原村庄，局部图拍成全白/青平面 —— 取证工具选错主体，图就没有证据力 |
+| 取景台 | `scripts/dev/strategic_shots.gd` / `scenes/dev/strategic_shots.tscn` | 只读 `--seed=` / `--tier=` / `--span=` / `--party=` / `--route=` / `--march=`，`build()` 公开；`capture.gd` 的其余批次参数（`--shot=` / `--shots` / `--warmup=` / `--frames=` / `--out=`）照旧。**S1.2e 起 `build()` 先 `set_follow(false)`**：不解除跟随，REGION / LOCAL 板拍到的就是队伍出生点而不是要拍的聚落 |
+| 取景主体 | 同上 `_pick_settlement()` | 「低地（≤ 40 m）优先 → 海拔 → 距中心距离」选**真实聚落**，确定性。第一版按"最近聚落"选，seed 20250929 选中 92 m 的高原村庄，局部图拍成全白/青平面 —— 取证工具选错主体，图就没有证据力 |
 | 落位接口 | `StrategicCamera.snap_to_target()` / `focus_on(x, z)` | 截图必须落到档位终值：`step()` 的缩放缓动 6/s，抓帧会抓到变焦中途，同档两次不是同一张图 |
-| 行军取证 | scripts/dev/strategic_shots.gd 的 --march=<秒>（配 --route=1） | 真队伍沿那条路走 N 秒再拍；**拍前必须 stop() 冻结** —— 场景根的 _process 会继续推着它走，两次拍图位置不同，图就不能当证据 |
-| 帧率探针 | `tools/perf_map.gd` | 逐档 2 × 0.5 s、**强关 vsync**（否则量的是显示器刷新率）、按档读 primitives / draw calls；**反向对照**再量一次“隐藏地图的空天空”，两者分不开就自评 `pass=false` |
-| 基线重定 | **S0.4 六张历史板 + S1.3d 四张相册的哈希保持有效**：`strategic_shots.gd` 默认隐藏 `#hud`，时间条不入画。时间条入画后的重定基线**一次性放到 S1.4d**（用户 2026-10-21 裁定），届时旧值在本节保留、新哈希另记，不许悄悄覆盖 |
-| 用例 | `s1_2_perf`（`kind="headed"`） | 26 断言：三档 ≥ 60 fps、全球档 prims == 16 920 且 ≤ 34 611、draws ≤ 120、空天空 > 最慢档 × 1.5、`build()` 的 seed / tier 与重建时旧世界释放；headless 自动 SKIP |
+| 行军取证 | `--route=1` + `--march=<秒>` | 真队伍沿那条路走 N 秒再拍（走完 `cam.focus_on(party)`），**拍前必须 stop() 冻结** —— 场景根的 `_process` 会继续推着它走，两次拍图位置不同，图就不能当证据 |
+| 帧率探针 | `tools/perf_map.gd` | 逐档 2 × 0.5 s、**强关 vsync**、按档读 primitives / draw calls；**反向对照**再量一次"隐藏地图的空天空"，两者分不开就自评 `pass=false` |
+| 基线纪律 | `B-` 基线只在**本轮代码**里 A/B 对照 | S1.2e 的零回归用「同一台机器、同一条命令、HEAD 与分支各拍一次」证明（下表），不靠"和三天前的 PNG 长得像" |
 
-实测（2026-10-21，1600×900）：GLOBAL **994.8 fps** / 16 920 三角 / 59 draws；REGION **960.0** / 10 764 / 29；LOCAL **1034.0** / 5 238 / 11；空天空 **1 510** fps。`B-` 五张 plate 两轮独立进程逐位相同、五张两两不同。
+**S1.2e 零回归（2026-10-22 实测，1600×900）**
 
-#### 9.11.7 拍图暴露的三条内容级限制（批 4 登记，不改已验收档位）
+| 板 | 命令要点 | HEAD 代码 | S1.2e 分支 | 结论 |
+|---|---|---|---|---|
+| GLOBAL 整图 | `--tier=global --warmup=60 --frames=15` | `07240f720fe30d03…` | `07240f720fe30d03…` | **0 差异像素**（`img_diff --channel=0 --tol=0`） |
+| REGION 行军 | `--tier=region --route=1 --march=12` | `79a6674375eee1a3…` | `79a6674375eee1a3…` | **0 差异像素** |
+| LOCAL 行军 | `--tier=local --route=1 --march=12` | — | `a6919b38edb7d203…` | 与 S1.3d 记录的 `album_local` 哈希逐位相同 |
 
-1. **海岸阶梯**：32 m 格距在 GLOBAL / REGION 上可见台阶。压到 16 m 会到 ~45 000 三角、超 `C-` 上限 34 611 —— 这是 S1.2b 已验收的格距取舍，不是镜头问题。
-2. **高原长相**：seed 20250929 的岛内部是一整块松石青高原，雪帽整格同色、读起来像“白色剪纸”（整格同色 + 32 m 面片 ⇒ 看不出立体）。属 S1.1 世界长相。
-3. **LOCAL 内容空**：170 m ≈ 5.3 格，纯地形阶段只有大色块，要等 S1.3 的据点与角色落位才有内容。
+**一条独立欠账（不归因于 S1.2e）**：文档里 S1.5b 记的 GLOBAL 板 `0968775925db7b68…` 今天在 **HEAD
+上自己**就复现不出来，重拍得到 `07240f72…`；两者差 71 px / 0.0049%（落在 `village_3` 那枚棋子的
+边缘，`img_diff` 在 0.1% 门禁内 PASS）。差异原因未查明（基线拍摄于 12:10，早于 `3dbb96e` 的行尾
+提交，中间只有文档与属性改动）。**在查清之前不拿旧哈希当回归判据**，改为上面的同日 A/B。
+
+#### 9.11.7 已知边界
+
+1. **没有"暂停时转镜头"**：树一 `paused`，相机 `_process` 也停。战团允许暂停中环绕观察，这条
+   记在台账 S1.2e 的欠账里，留给"战术暂停"那一步一起做（要动 `process_mode` 与输入闸门）。
+2. 只做**垂直**净空：相机抬高避免钻山，但没有沿视线 raycast 推近，所以近地档理论上仍可能被
+   焦点与相机之间的独立山峰挡住（战略尺度下未观察到）。
+3. GLOBAL 的整图板靠 `set_tier(0)` 这个**取景预设**固定 yaw 45° / pitch −35.264° / 正交；玩家在
+   满视图下仍可右键转动（战团也允许），只是取证台不走那条路。
+4. **海岸阶梯 / 高原长相**（S1.2b、S1.1 的内容取舍，与镜头无关）：32 m 格距在 GLOBAL / REGION 上
+   可见台阶；压到 16 m 会到 ~45 000 三角、超 `C-` 上限 34 611。seed 20250929 的岛内部是一整块
+   松石青高原，雪帽整格同色、读起来像"白色剪纸"。
+5. `s0_3_router` 的世界基线已两次迁移（S1.2b「根 → 地形」→ S1.2c「根 → 地形 + 舞台 + 相机」），
+   两次都是能力等价替换，不是删断言；S1.2e 没有再动节点结构。
 
 ---
 
